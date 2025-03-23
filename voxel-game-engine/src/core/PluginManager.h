@@ -14,7 +14,7 @@ public:
     std::vector<std::string> getPlugins() const;
 
 private:
-    std::vector<std::string> loadedPlugins;
+    std::vector<std::string> plugins;
 };
 
 #endif // PLUGINMANAGER_H
