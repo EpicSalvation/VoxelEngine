@@ -1,0 +1,3 @@
+[submodule "voxel-game-engine/external/googletest"]
+	path = voxel-game-engine/external/googletest
+	url = https://github.com/google/googletest.git
