@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <vector>
 #include <filesystem>
+#include "plugin_api.h"
 
 PluginManager::PluginManager()
 {
@@ -10,20 +11,23 @@ PluginManager::PluginManager()
     std::string extension = ".so";
 #ifdef _WIN32
     extension = ".dll";
+#elif defined(__APPLE__)
+    extension = ".dylib";
 #endif
 
     // Check working directory for a plugins foloder
     std::filesystem::path pluginsPath = std::filesystem::current_path() / "plugins";
 
     // Load all DLLs or SOs in the plugins folder
+    bool pluginsSuccessfullyLoaded = true;
     if (std::filesystem::exists(pluginsPath) && std::filesystem::is_directory(pluginsPath))
     {
         std::cout << "Plugins folder found." << std::endl;
         for (const auto &entry : std::filesystem::directory_iterator(pluginsPath))
         {
-            if (entry.path().extension() == ".so" || entry.path().extension() == ".dll")
+            if (entry.path().extension() == extension)
             {
-                loadPlugin(entry.path().string());
+                pluginsSuccessfullyLoaded &= loadPlugin(entry.path().string());
             }
         }
     }
@@ -31,6 +35,15 @@ PluginManager::PluginManager()
     {
         std::cout << "Plugins folder not found." << std::endl;
         return;
+    }
+
+    if (pluginsSuccessfullyLoaded)
+    {
+        std::cout << "All plugins loaded successfully." << std::endl;
+    }
+    else
+    {
+        std::cerr << "Some plugins failed to load." << std::endl;
     }
 }
 
@@ -51,8 +64,8 @@ bool PluginManager::loadPlugin(const std::string &pluginPath)
         return false;
     }
 
-    Plugin *(*create)();
-    create = (Plugin * (*)()) dlsym(handle, "create");
+    IPlugin *(*create)();
+    create = (IPlugin * (*)()) dlsym(handle, "create");
     const char *dlsym_error = dlerror();
     if (dlsym_error)
     {
@@ -61,21 +74,21 @@ bool PluginManager::loadPlugin(const std::string &pluginPath)
         return false;
     }
 
-    Plugin *plugin = create();
+    IPlugin *plugin = create();
     plugins.push_back(plugin);
     return true;
 }
 
-void PluginManager::unloadPlugin(Plugin *plugin)
+void PluginManager::unloadPlugin(IPlugin* pluginPtr)
 {
-    if (plugin)
+    if (pluginPtr)
     {
-        plugin->cleanup();
-        delete plugin;
-    }
+        pluginPtr->cleanup();
+        delete pluginPtr;
+    }   
 }
 
-std::vector<Plugin *> PluginManager::getPlugins() const
+std::vector<IPlugin *> PluginManager::getPlugins() const
 {
     return plugins;
 }

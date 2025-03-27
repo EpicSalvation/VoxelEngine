@@ -8,6 +8,7 @@ public:
     virtual void initialize() = 0;
     virtual void update() = 0;
     virtual void shutdown() = 0;
+    virtual void cleanup() {};
 };
 
 #endif // PLUGIN_API_H

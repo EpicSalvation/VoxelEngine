@@ -3,18 +3,19 @@
 
 #include <vector>
 #include <string>
+#include "plugin_api.h"
 
 class PluginManager {
 public:
     PluginManager();
     ~PluginManager();
 
-    void loadPlugin(const std::string& pluginName);
-    void unloadPlugin(const std::string& pluginName);
-    std::vector<std::string> getPlugins() const;
+    bool loadPlugin(const std::string& pluginPath);
+    void unloadPlugin(IPlugin* pluginPtr);
+    std::vector<IPlugin *> getPlugins() const;
 
 private:
-    std::vector<std::string> plugins;
+    std::vector<IPlugin *> plugins;
 };
 
 #endif // PLUGINMANAGER_H
