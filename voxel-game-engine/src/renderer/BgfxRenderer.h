@@ -1,7 +1,7 @@
 #ifndef BGFX_RENDERER_H
 #define BGFX_RENDERER_H
 
-#include "renderer/Renderer.h"
+#include "Renderer.h"
 #include "../world/World.h"
 #include <bgfx/bgfx.h>
 #include <bx/math.h>

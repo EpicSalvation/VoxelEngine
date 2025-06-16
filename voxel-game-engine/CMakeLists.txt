@@ -1,10 +1,20 @@
-project(voxel-game-engine)
-
 cmake_minimum_required(VERSION 3.10)
 
-set(CMAKE_CXX_STANDARD 17)
+project(voxel-game-engine)
 
-include_directories(include)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
+
+include_directories(include 
+                    third_party/bgfx/include 
+                    third_party/bx/include 
+                    third_party/bimg/include
+)
+
+# target_compile_definitions(BgfxInitTest PRIVATE 
+#     $<$<CONFIG:Debug>:BX_CONFIG_DEBUG=1>
+#     $<$<CONFIG:Release>:BX_CONFIG_DEBUG=0>
+# )
 
 file(GLOB_RECURSE SOURCES
     src/core/*.cpp
@@ -29,3 +39,7 @@ target_include_directories(voxel-game-engine-tests PRIVATE include)
 target_link_libraries(voxel-game-engine-tests gtest gtest_main)
 # Add a test target
 add_test(NAME AllTests COMMAND voxel-game-engine-tests)
+add_executable(BgfxInitTest tests/BgfxInitTest.cpp)
+target_include_directories(BgfxInitTest PRIVATE third_party/bgfx/include)
+target_link_directories(BgfxInitTest PRIVATE third_party/bgfx/.build/osx-arm64/bin)
+target_link_libraries(BgfxInitTest PRIVATE bgfxRelease)
