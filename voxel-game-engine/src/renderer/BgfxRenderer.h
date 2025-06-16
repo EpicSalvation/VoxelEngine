@@ -1,26 +1,48 @@
-// Renderer using BGFX as the backend
 #ifndef BGFX_RENDERER_H
 #define BGFX_RENDERER_H
 
 #include "renderer/Renderer.h"
-// #include <bgfx/bgfx.h>
-// #include <bgfx/platform.h>
+#include "../world/World.h"
+#include <bgfx/bgfx.h>
+#include <bx/math.h>
+#include <vector>
 
-// class BgfxRenderer : public Renderer
-// {
-// private:
-//     /* data */
-// public:
-//     BgfxRenderer : public Renderer(/* args */);
-//     ~BgfxRenderer : public Renderer();
-// };
+struct VoxelVertex
+{
+    float x, y, z;
+    uint32_t abgr;
+    static bgfx::VertexLayout layout;
+    static void initLayout();
+};
 
-// BgfxRenderer : public Renderer::BgfxRenderer : public Renderer(/* args */)
-// {
-// }
+class BgfxRenderer : public Renderer
+{
+public:
+    BgfxRenderer();
+    ~BgfxRenderer() override;
 
-// BgfxRenderer : public Renderer::~BgfxRenderer : public Renderer()
-// {
-// }
+    void initialize() override;
+    void render() override;
+    void drawVoxel(int x, int y, int z) override;
+    void setViewport(int width, int height) override;
+    void setCameraPosition(float x, float y, float z) override;
+    void setCameraRotation(float pitch, float yaw, float roll) override;
+    void cleanup() override;
+    void shutdown() override;
+
+    // Placeholder for future world rendering
+    void renderWorld(const World &world);
+
+private:
+    std::vector<bx::Vec3> voxelPositions;
+    bgfx::ProgramHandle program;
+    bgfx::VertexBufferHandle vbo;
+    bgfx::IndexBufferHandle ibo;
+    bx::Vec3 cameraPos;
+    bx::Vec3 cameraRot;
+    uint32_t viewWidth;
+    uint32_t viewHeight;
+    bool initialized;
+};
 
 #endif // BGFX_RENDERER_H
