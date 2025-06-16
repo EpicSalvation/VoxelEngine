@@ -30,8 +30,23 @@ add_executable(voxel-game-engine ${SOURCES})
 # target_link_libraries(voxel-game-engine <your_dependencies>)
 
 # Add Google Test
-add_subdirectory(external/googletest)
+include(FetchContent)
+
+# First, try to use local clone if present
+set(gtest_SOURCE_DIR "${CMAKE_SOURCE_DIR}/external/googletest")
+if(EXISTS "${gtest_SOURCE_DIR}/CMakeLists.txt")
+  message(STATUS "Using local GoogleTest from ${gtest_SOURCE_DIR}")
+  add_subdirectory(${gtest_SOURCE_DIR} external/googletest_build)
+else()
+  FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/heads/main.zip
+  )
+  FetchContent_MakeAvailable(googletest)
+endif()
+
 enable_testing()
+
 # Add a test executable
 file(GLOB_RECURSE TEST_SOURCES tests/*.cpp)
 add_executable(voxel-game-engine-tests ${TEST_SOURCES} ${SOURCES})
