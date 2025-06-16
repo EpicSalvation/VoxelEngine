@@ -1,4 +1,4 @@
-#include "renderer/BgfxRenderer.h"
+#include "BgfxRenderer.h"
 #include <bgfx/platform.h>
 #include <iostream>
 
