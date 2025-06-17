@@ -1,6 +1,10 @@
 #ifndef ENGINE_H
 #define ENGINE_H
 
+#ifndef BX_CONFIG_DEBUG
+#define BX_CONFIG_DEBUG 0
+#endif // BX_CONFIG_DEBUG
+
 #include <thread>
 #include <atomic>
 #include <chrono>

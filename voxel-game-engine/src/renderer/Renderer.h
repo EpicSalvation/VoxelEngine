@@ -1,6 +1,11 @@
 #ifndef RENDERER_H
 #define RENDERER_H
 
+#ifndef BX_CONFIG_DEBUG
+#define BX_CONFIG_DEBUG 0
+#endif // BX_CONFIG_DEBUG
+
+
 class Renderer {
 public:
     virtual ~Renderer() = default;
