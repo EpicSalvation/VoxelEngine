@@ -274,7 +274,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] `WorldCoord` type defined with `toLocalFloat()` conversion; raw float/double banned from world-space paths by convention
 - [x] `LayerConfig` parser and validator with full startup error reporting
 - [x] Single-layer project config working end-to-end (define one terminal layer, engine starts without errors)
-- [ ] CMake build clean on target platforms *(CMakeLists.txt rebuilt: bgfx.cmake replaces broken raw-repo approach; GLM and yaml-cpp added; broken test references removed — pending first verified build)*
+- [x] CMake build clean on target platforms *(verified building clean on Linux/GCC, macOS/Clang, and Windows/MSVC via CI; bgfx.cmake pinned to release v1.143.9257-544, C++20 required by bx, `CMAKE_POLICY_VERSION_MINIMUM` set for older deps, Wayland dev packages added to the Linux CI job)*
 
 **M2 — Basic Rendering**
 - [ ] Renderer reads a terminal-layer voxel grid and produces a visible window
