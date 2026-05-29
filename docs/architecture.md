@@ -26,7 +26,7 @@ If you are an AI agent: read this document before modifying any subsystem. The c
 
 ## 1. Coordinate System
 
-**Files:** `src/world/WorldCoord.h`
+**Files:** `include/WorldCoord.h`
 
 ### The Problem
 

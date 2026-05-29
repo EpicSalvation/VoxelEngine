@@ -38,6 +38,18 @@ struct RegisteredChunkLifecycleHook {
     void*            user_data;
 };
 
+struct RegisteredImporter {
+    std::string extension;
+    ImporterFn  fn;
+    void*       user_data;
+};
+
+struct RegisteredExporter {
+    std::string extension;
+    ExporterFn  fn;
+    void*       user_data;
+};
+
 // Loads plugins from disk and maintains the callback registries that engine
 // subsystems query to invoke registered behavior.
 //
@@ -67,6 +79,8 @@ public:
     const std::vector<RegisteredStructuralEventHook>& structuralEventHooks() const { return structuralEventHooks_; }
     const std::vector<RegisteredChunkLifecycleHook>&  chunkCreatedHooks()    const { return chunkCreatedHooks_; }
     const std::vector<RegisteredChunkLifecycleHook>&  chunkEvictedHooks()    const { return chunkEvictedHooks_; }
+    const std::vector<RegisteredImporter>&            importers()            const { return importers_; }
+    const std::vector<RegisteredExporter>&            exporters()            const { return exporters_; }
 
 private:
     PluginContext buildContext();
@@ -78,6 +92,8 @@ private:
     std::vector<RegisteredStructuralEventHook> structuralEventHooks_;
     std::vector<RegisteredChunkLifecycleHook>  chunkCreatedHooks_;
     std::vector<RegisteredChunkLifecycleHook>  chunkEvictedHooks_;
+    std::vector<RegisteredImporter>            importers_;
+    std::vector<RegisteredExporter>            exporters_;
 
-    std::vector<void*> handles_;  // dlopen handles retained for dlclose on destruction
+    std::vector<void*> handles_;  // platform dynamic-library handles, closed on destruction
 };

@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux (GCC)
+            cmake_args: -DCMAKE_BUILD_TYPE=Release
+          - os: macos-latest
+            name: macOS (Clang)
+            cmake_args: -DCMAKE_BUILD_TYPE=Release
+          - os: windows-latest
+            name: Windows (MSVC)
+            cmake_args: -DCMAKE_BUILD_TYPE=Release
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache build directory
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libglu1-mesa-dev
+
+      - name: Configure
+        run: cmake -B build -DFETCHCONTENT_UPDATES_DISCONNECTED=ON ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure

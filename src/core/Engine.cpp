@@ -35,9 +35,8 @@ void Engine::stop()
 
 void Engine::update(double deltaTime)
 {
-    // Update game logic here
-    count++;
-    std::cout << "Updating game logic..." << std::endl;
+    (void)deltaTime;
+    std::cout << "Updating game logic...\n";
 }
 
 void Engine::gameLoop() {

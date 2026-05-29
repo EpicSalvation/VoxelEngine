@@ -73,6 +73,22 @@ target_link_libraries(voxel-game-engine
     yaml-cpp::yaml-cpp
 )
 
+# Platform-specific compiler flags
+if(MSVC)
+    target_compile_options(voxel-game-engine PRIVATE /W4 /MP)
+    target_compile_definitions(voxel-game-engine PRIVATE
+        _CRT_SECURE_NO_WARNINGS
+        NOMINMAX
+    )
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(voxel-game-engine PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# dlopen/dlsym/dlclose live in libdl on Linux; implicit on macOS and Windows
+if(UNIX AND NOT APPLE)
+    target_link_libraries(voxel-game-engine PRIVATE dl)
+endif()
+
 enable_testing()
 
 # Tests: uncomment when tests/ contains test sources and add engine sources without main.cpp.

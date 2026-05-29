@@ -187,7 +187,6 @@ voxel-game-engine
 │   │   └── LayerConfig.cpp / .h          # Layer stack definition and validation
 │   ├── world
 │   │   ├── Voxel.cpp / .h                # Voxel data: material props, palette index, mode
-│   │   ├── WorldCoord.h                  # Double-precision coordinate type; wraps dvec3
 │   │   ├── Layer.cpp / .h                # Per-layer chunk management and coordinate space
 │   │   ├── World.cpp / .h                # Multi-layer world container
 │   │   ├── MacroVoxel.cpp / .h           # Composition recipe, decomposition state, mode
@@ -205,7 +204,8 @@ voxel-game-engine
 │   │   └── ExamplePlugin.cpp / .h        # Reference plugin: feature generator + material def
 │   └── main.cpp
 ├── include
-│   └── plugin_api.h                      # Public plugin interface; flat callback registration
+│   ├── plugin_api.h                      # Public plugin interface; flat callback registration
+│   └── WorldCoord.h                      # Double-precision coordinate type; wraps dvec3
 ├── docs
 │   └── ARCHITECTURE.md                   # Subsystem design, invariants, AI agent guidance
 ├── CMakeLists.txt
