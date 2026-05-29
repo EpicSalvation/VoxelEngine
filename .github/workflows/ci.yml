@@ -49,7 +49,10 @@ jobs:
             libxinerama-dev \
             libxcursor-dev \
             libxi-dev \
-            libglu1-mesa-dev
+            libglu1-mesa-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libxkbcommon-dev
 
       - name: Configure
         run: cmake -B build -DFETCHCONTENT_UPDATES_DISCONNECTED=ON ${{ matrix.cmake_args }}
