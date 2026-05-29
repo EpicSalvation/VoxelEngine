@@ -1,29 +1,49 @@
 #include "PluginManager.h"
 #include <algorithm>
-#include <dlfcn.h>
 #include <filesystem>
 #include <iostream>
+#include <string>
+
+#ifdef _WIN32
+#  include <windows.h>
+static std::string platformDlError() {
+    DWORD err = GetLastError();
+    char buf[256] = {};
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                   nullptr, err, 0, buf, sizeof(buf), nullptr);
+    return buf;
+}
+static void* platformDlOpen(const char* path)              { return static_cast<void*>(LoadLibraryA(path)); }
+static void* platformDlSym(void* h, const char* sym)       { return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(h), sym)); }
+static void  platformDlClose(void* h)                      { FreeLibrary(static_cast<HMODULE>(h)); }
+#else
+#  include <dlfcn.h>
+static std::string platformDlError()                       { return dlerror(); }
+static void* platformDlOpen(const char* path)              { return dlopen(path, RTLD_LAZY); }
+static void* platformDlSym(void* h, const char* sym)       { return dlsym(h, sym); }
+static void  platformDlClose(void* h)                      { dlclose(h); }
+#endif
 
 PluginManager::PluginManager() {}
 
 PluginManager::~PluginManager() {
     for (void* handle : handles_)
-        if (handle) dlclose(handle);
+        if (handle) platformDlClose(handle);
 }
 
 bool PluginManager::loadPlugin(const std::string& path) {
-    void* handle = dlopen(path.c_str(), RTLD_LAZY);
+    void* handle = platformDlOpen(path.c_str());
     if (!handle) {
-        std::cerr << "[PluginManager] Cannot open " << path << ": " << dlerror() << "\n";
+        std::cerr << "[PluginManager] Cannot open " << path << ": " << platformDlError() << "\n";
         return false;
     }
 
     auto* init = reinterpret_cast<VoxelPluginInitFn*>(
-        dlsym(handle, VOXEL_PLUGIN_INIT_SYMBOL));
+        platformDlSym(handle, VOXEL_PLUGIN_INIT_SYMBOL));
     if (!init) {
         std::cerr << "[PluginManager] " << path << " does not export '"
-                  << VOXEL_PLUGIN_INIT_SYMBOL << "': " << dlerror() << "\n";
-        dlclose(handle);
+                  << VOXEL_PLUGIN_INIT_SYMBOL << "': " << platformDlError() << "\n";
+        platformDlClose(handle);
         return false;
     }
 
@@ -32,7 +52,7 @@ bool PluginManager::loadPlugin(const std::string& path) {
     if (result != 0) {
         std::cerr << "[PluginManager] Plugin init failed for " << path
                   << " (returned " << result << ")\n";
-        dlclose(handle);
+        platformDlClose(handle);
         return false;
     }
 
