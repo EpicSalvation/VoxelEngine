@@ -7,6 +7,7 @@
 // any class hierarchy. See docs/ARCHITECTURE.md §8 for design rationale.
 
 #include "WorldCoord.h"
+#include <cstddef>
 #include <cstdint>
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,28 @@ using ChunkLifecycleFn = void(*)(
     void*       user_data
 );
 
+// Import handler: reads file_data and fills out_voxels (grid_size³, x-fastest).
+// anchor is the world-space corner of the target volume. Returns 0 on success.
+using ImporterFn = int(*)(
+    const uint8_t* file_data,
+    size_t         file_size,
+    WorldCoord     anchor,
+    int            grid_size,
+    Voxel*         out_voxels,
+    void*          user_data
+);
+
+// Export handler: serialises in_voxels (grid_size³) to *out_data / *out_size.
+// The engine calls free() on *out_data after use. Returns 0 on success.
+using ExporterFn = int(*)(
+    const Voxel*   in_voxels,
+    int            grid_size,
+    WorldCoord     anchor,
+    uint8_t**      out_data,
+    size_t*        out_size,
+    void*          user_data
+);
+
 // ---------------------------------------------------------------------------
 // Plugin context
 //
@@ -129,6 +152,20 @@ struct PluginContext {
         const char*       layer_name,
         ChunkLifecycleFn  fn,
         void*             user_data
+    );
+
+    void (*register_importer)(
+        PluginContext* ctx,
+        const char*    extension,
+        ImporterFn     fn,
+        void*          user_data
+    );
+
+    void (*register_exporter)(
+        PluginContext* ctx,
+        const char*    extension,
+        ExporterFn     fn,
+        void*          user_data
     );
 };
 

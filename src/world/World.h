@@ -10,8 +10,10 @@ class World {
 public:
     World(int width, int height, int depth);
 
-    // Fills the world with a basic heightmap using stone and grass materials.
-    void generateWorld();
+    // Populates the world using the provided layer generator plugin callback.
+    // The generator is called for a single cubic chunk (min side length of the world
+    // dimensions) at the world origin. Voxels outside the cubic region stay empty.
+    void generateWorld(LayerGeneratorFn generator, void* user_data = nullptr);
 
     Voxel getVoxel(int x, int y, int z) const;
     void  setVoxel(int x, int y, int z, const Voxel& voxel);

@@ -136,5 +136,13 @@ PluginContext PluginManager::buildContext() {
         static_cast<PluginManager*>(c->engine_data)->chunkEvictedHooks_.push_back({name, fn, ud});
     };
 
+    ctx.register_importer = [](PluginContext* c, const char* ext, ImporterFn fn, void* ud) {
+        static_cast<PluginManager*>(c->engine_data)->importers_.push_back({ext, fn, ud});
+    };
+
+    ctx.register_exporter = [](PluginContext* c, const char* ext, ExporterFn fn, void* ud) {
+        static_cast<PluginManager*>(c->engine_data)->exporters_.push_back({ext, fn, ud});
+    };
+
     return ctx;
 }
