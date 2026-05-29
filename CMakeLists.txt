@@ -1,20 +1,27 @@
 cmake_minimum_required(VERSION 3.16)
 project(voxel-game-engine)
 
-set(CMAKE_CXX_STANDARD 17)
+# bgfx's bx library requires C++20 (designated initializers in its SIMD headers).
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
+# Some pinned dependencies (yaml-cpp 0.8.0, glm 1.0.1) declare a
+# cmake_minimum_required below 3.5. Modern CMake has removed compatibility with
+# those policy versions and errors out. This raises the effective minimum for
+# such subprojects so they configure under newer CMake.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
 # bgfx.cmake — CMake wrapper for bgfx/bimg/bx maintained by bgfx's author.
 # Provides the bgfx, bimg, bx CMake targets.
-# Pin to a specific release tag in production; 'master' is used here for bootstrap.
+# Pinned to a specific release tag for reproducible builds.
 set(BGFX_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   bgfx_cmake
   GIT_REPOSITORY https://github.com/bkaradzic/bgfx.cmake.git
-  GIT_TAG        master
+  GIT_TAG        v1.143.9257-544
   GIT_SUBMODULES_RECURSE TRUE
 )
 FetchContent_MakeAvailable(bgfx_cmake)

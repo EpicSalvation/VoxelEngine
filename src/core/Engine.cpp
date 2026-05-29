@@ -33,9 +33,9 @@ void Engine::stop()
     std::cout << "Engine stopped." << std::endl;
 }
 
-void Engine::update(double deltaTime)
+void Engine::update(double dt)
 {
-    (void)deltaTime;
+    (void)dt;
     std::cout << "Updating game logic...\n";
 }
 

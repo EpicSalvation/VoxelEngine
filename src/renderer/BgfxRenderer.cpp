@@ -58,7 +58,7 @@ void BgfxRenderer::initialize() {
     }
 
     bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x303030ff, 1.0f, 0);
-    bgfx::setViewRect(0, 0, 0, viewWidth, viewHeight);
+    bgfx::setViewRect(0, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
 
     VoxelVertex::initLayout();
     vbo = bgfx::createVertexBuffer(bgfx::makeRef(cubeVertices, sizeof(cubeVertices)), VoxelVertex::layout);
@@ -98,7 +98,7 @@ void BgfxRenderer::setViewport(int width, int height) {
     viewWidth  = static_cast<uint32_t>(width);
     viewHeight = static_cast<uint32_t>(height);
     bgfx::reset(viewWidth, viewHeight, BGFX_RESET_VSYNC);
-    bgfx::setViewRect(0, 0, 0, viewWidth, viewHeight);
+    bgfx::setViewRect(0, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
 }
 
 void BgfxRenderer::setCameraPosition(const WorldCoord& pos) {

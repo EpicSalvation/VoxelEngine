@@ -9,9 +9,8 @@
 int main() {
     // --- M1: validate layer configuration at startup ---
     // A bad config is a hard error: the engine exits before any world system initializes.
-    LayerConfig layerConfig;
     try {
-        layerConfig = LayerConfig::loadFromString(R"(
+        LayerConfig layerConfig = LayerConfig::loadFromString(R"(
 layers:
   - name: terrain
     voxel_size_m: 1.0
