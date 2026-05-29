@@ -11,7 +11,7 @@ public:
 
     void start();
     void stop();
-    void update(double deltaTime);
+    void update(double dt);
 
     bool   getIsRunning()      const { return isRunning; }
     double getDeltaTime()      const { return deltaTime; }
