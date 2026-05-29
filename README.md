@@ -271,14 +271,14 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 ### Phase 1 — Minimum Viable Engine
 
 **M1 — Foundation**
-- [ ] `WorldCoord` type defined with `toLocalFloat()` conversion; raw float/double banned from world-space paths by convention
-- [ ] `LayerConfig` parser and validator with full startup error reporting
-- [ ] Single-layer project config working end-to-end (define one terminal layer, engine starts without errors)
-- [ ] CMake build clean on target platforms
+- [x] `WorldCoord` type defined with `toLocalFloat()` conversion; raw float/double banned from world-space paths by convention
+- [x] `LayerConfig` parser and validator with full startup error reporting
+- [x] Single-layer project config working end-to-end (define one terminal layer, engine starts without errors)
+- [ ] CMake build clean on target platforms *(CMakeLists.txt rebuilt: bgfx.cmake replaces broken raw-repo approach; GLM and yaml-cpp added; broken test references removed — pending first verified build)*
 
 **M2 — Basic Rendering**
 - [ ] Renderer reads a terminal-layer voxel grid and produces a visible window
-- [ ] Floating-origin pipeline in place (camera-local float submission to GPU)
+- [x] Floating-origin pipeline in place (camera-local float submission to GPU)
 - [ ] Palette-based material colors rendering correctly
 - [ ] Basic free-camera movement for development/testing
 
@@ -289,10 +289,10 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [ ] `LODManager` stub in place with per-layer view distance config read correctly
 
 **M4 — Plugin System**
-- [ ] `PluginManager` loading and unloading plugins from disk
-- [ ] `plugin_api.h` stable for terminal-layer hooks: material registration, layer generator, voxel modification hook
-- [ ] Example plugin registers a material and a layer generator; documented as the canonical plugin reference
-- [ ] Plugin load errors reported clearly at startup
+- [x] `PluginManager` loading and unloading plugins from disk
+- [x] `plugin_api.h` stable for terminal-layer hooks: material registration, layer generator, voxel modification hook
+- [x] Example plugin registers a material and a layer generator; documented as the canonical plugin reference
+- [x] Plugin load errors reported clearly at startup
 
 **M5 — Player Interaction**
 - [ ] Player can place and remove terminal-layer voxels
@@ -322,8 +322,8 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 **M8 — Material Property System**
 - [ ] Design task: finalize material property schema and physics integration contracts
-- [ ] Full material property struct on voxels
-- [ ] Material definitions registered via plugin API
+- [x] Full material property struct on voxels
+- [x] Material definitions registered via plugin API
 - [ ] Simulation systems (mining resistance, etc.) driven by properties rather than IDs
 
 **M9 — Composition Recipes and Feature Generators**
