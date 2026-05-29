@@ -296,6 +296,18 @@ The renderer maintains the camera's current position as a `WorldCoord`. Before a
 
 Immutable layer voxels are rendered as static geometry with no chunk management overhead. They do not participate in the dirty/evict cycle. Their mesh is generated once at world load and retained.
 
+### Renderer Backend Targets
+
+bgfx selects its graphics backend at compile time. The targeted backends per platform are:
+
+- **Windows** — Vulkan (preferred), Direct3D 12 as fallback
+- **Linux** — Vulkan
+- **macOS** — Metal
+
+Do not write renderer code that assumes a specific underlying API. All GPU interaction must go through bgfx's abstraction layer. In particular: do not use Vulkan-specific extensions, Direct3D-specific resource hints, or Metal-specific texture formats directly — if something requires platform-specific behavior, it belongs behind a bgfx capability query (`bgfx::getCaps()`), not a compile-time `#ifdef`.
+
+The compile-time backend selection also means the project ships separate binaries per platform rather than a single binary that selects at runtime. This is a known bgfx tradeoff and an acceptable one for this project's scope.
+
 ---
 
 ## 10. Import/Export and Editor Interoperability
