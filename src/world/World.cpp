@@ -1,43 +1,56 @@
 #include "World.h"
-#include "Voxel.h"
-#include <vector>
 #include <iostream>
 
-// class World {
-// public:
-//     World(int width, int height, int depth);
-//     void generateWorld();
-//     Voxel getVoxel(int x, int y, int z);
+World::World(int width, int height, int depth)
+    : width_(width), height_(height), depth_(depth),
+      voxels_(static_cast<size_t>(width * height * depth), Voxel::empty())
+{}
 
-// private:
-//     int width, height, depth;
-//     std::vector<std::vector<std::vector<Voxel>>> voxels;
-// };
+void World::generateWorld() {
+    MaterialProperties stone;
+    stone.density             = 2700.0f;
+    stone.structural_strength = 0.9f;
+    stone.thermal_conductivity = 2.0f;
+    stone.hardness            = 0.7f;
+    stone.palette_index       = 1;
 
-// World::World(int width, int height, int depth)
-//     : width(width), height(height), depth(depth) {
-//     voxels.resize(width, std::vector<std::vector<Voxel>>(height, std::vector<Voxel>(depth)));
-// }
+    MaterialProperties grass;
+    grass.density             = 1200.0f;
+    grass.structural_strength = 0.3f;
+    grass.thermal_conductivity = 0.5f;
+    grass.hardness            = 0.2f;
+    grass.palette_index       = 2;
 
-void World::generateWorld(int width, int height, int depth) {
-    width = width;
-    height = height;
-    depth = depth;
+    int surface_y = height_ / 2;
 
-    // Populate world with error voxels
-    // TODO: ensure we've implemented some handling for setting locations and types as voxels are generated
-    voxels.resize(width, std::vector<std::vector<Voxel>>());
-    
-    // Implementation for generating the voxel world
+    for (int z = 0; z < depth_; ++z) {
+        for (int y = 0; y < height_; ++y) {
+            for (int x = 0; x < width_; ++x) {
+                Voxel v;
+                if (y < surface_y - 1)
+                    v.material = stone;
+                else if (y == surface_y - 1)
+                    v.material = grass;
+                else
+                    v = Voxel::empty();
+                setVoxel(x, y, z, v);
+            }
+        }
+    }
 }
 
-Voxel World::getVoxel(int x, int y, int z) const
-{
-    if (x >= 0 && x < width && y >= 0 && y < height && z >= 0 && z < depth)
-    {
-        return voxels[x][y][z];
+Voxel World::getVoxel(int x, int y, int z) const {
+    if (x < 0 || x >= width_ || y < 0 || y >= height_ || z < 0 || z >= depth_) {
+        std::cerr << "[World] getVoxel out of bounds: " << x << " " << y << " " << z << "\n";
+        return Voxel::empty();
     }
-    // Return a default Voxel or handle error
-    std::cerr << "Error: Voxel out of bounds\n";
-    return Voxel(); // The dreded error voxel!!!
+    return voxels_[idx(x, y, z)];
+}
+
+void World::setVoxel(int x, int y, int z, const Voxel& voxel) {
+    if (x < 0 || x >= width_ || y < 0 || y >= height_ || z < 0 || z >= depth_) {
+        std::cerr << "[World] setVoxel out of bounds: " << x << " " << y << " " << z << "\n";
+        return;
+    }
+    voxels_[idx(x, y, z)] = voxel;
 }
