@@ -192,8 +192,12 @@ voxel-game-engine
 │   │   ├── MacroVoxel.cpp / .h           # Composition recipe, decomposition state, mode
 │   │   └── DecompositionWorker.cpp / .h  # Async on-demand child grid generation
 │   ├── renderer
-│   │   ├── Renderer.cpp / .h             # Layer-aware renderer, floating origin management
+│   │   ├── Renderer.h                    # Abstract renderer interface
+│   │   ├── BgfxRenderer.cpp / .h         # bgfx backend: window surface, shaders, floating origin
 │   │   └── LODManager.cpp / .h           # Per-layer view distance and chunk budgets
+│   ├── platform
+│   │   ├── Window.cpp / .h               # GLFW window; exposes native handles
+│   │   └── NativeWindowHandles.h         # Library-neutral window↔renderer seam
 │   ├── simulation
 │   │   ├── PhysicsSystem.cpp / .h        # Material-property-driven structural simulation
 │   │   └── PropagationSystem.cpp / .h    # Upward damage propagation across composite layers
@@ -207,6 +211,9 @@ voxel-game-engine
 │       └── main.cpp                      # Dev launcher (was src/main.cpp); links voxel-engine
 ├── tests
 │   └── LayerConfigTest.cpp               # Unit tests; link voxel-engine + GoogleTest
+├── shaders                               # bgfx .sc shader sources + committed bytecode
+│   ├── vs_voxel.sc / fs_voxel.sc         # Authored shaders (with varying.def.sc)
+│   └── generated/                        # Per-backend bytecode headers (committed; see ARCHITECTURE §9)
 ├── include                               # Public API (propagated to engine consumers)
 │   ├── plugin_api.h                      # Public plugin interface; flat callback registration
 │   └── WorldCoord.h                      # Double-precision coordinate type; wraps dvec3
@@ -291,12 +298,12 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 **M2 — Basic Rendering**
 
-> The renderer is currently scaffolding only: the vertex layout, a hardcoded cube, VBO/IBO creation, and the floating-origin math helper exist, but nothing reaches the screen yet — there is no window, no shader program, no view/projection, and the renderer is not wired into `main`. The tasks below reflect the full path to a first visible frame.
+> **In progress.** The window layer, bgfx device, and shader program are now in place and compile on all three platforms — but **no frame has been drawn yet**: there is still no per-frame camera transform and no render loop, and nothing has opened a window at runtime. The remaining tasks reach a first visible frame; the single-voxel demo at the end is the first runtime/visual verification of the whole chain, so it may surface integration bugs in the pieces below (which are so far only compile-verified).
 
 - [x] Floating-origin coordinate math in place (`WorldCoord::toLocalFloat`, camera-local submission helper) — math only; not yet driving a live camera
-- [ ] Window + surface: integrate a windowing library (e.g. GLFW), create a window, and feed its native handle into `bgfx::Init::platformData`
-- [ ] bgfx device init wired to the live window; window resize handled via `bgfx::reset`
-- [ ] Shader toolchain: compile a minimal vertex-color vs/fs pair (enable `shaderc` / `BGFX_BUILD_TOOLS`, or embed precompiled bytecode) and build a valid `bgfx::ProgramHandle`
+- [x] Window + surface: GLFW-backed `src/platform/Window` creates a context-less window and feeds a library-neutral native handle into `bgfx::Init::platformData`
+- [x] bgfx device init wired to the live window (single-threaded mode). Resize handling via `bgfx::reset` exists in `setViewport`; hooking it to resize events lands with the render loop
+- [x] Shader toolchain: vertex-color vs/fs compiled by `shaderc` to committed per-backend bytecode (SPIR-V/GLSL/ESSL/DXBC/Metal; opt-in `-DVOXEL_BUILD_SHADERS=ON` regeneration); `bgfx::ProgramHandle` built via `createEmbeddedShader` (runtime validity confirmed by the demo)
 - [ ] Per-frame camera transform: build view + projection matrices and submit via `bgfx::setViewTransform`, with camera position carried as a `WorldCoord` through the floating origin
 - [ ] Render loop wired into `main`: init renderer → poll window events → update camera → draw → `bgfx::frame` → clean shutdown on window close
 - [ ] Renderer reads a terminal-layer voxel grid and produces a visible window
