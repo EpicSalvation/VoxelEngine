@@ -319,6 +319,17 @@ Do not write renderer code that assumes a specific underlying API. All GPU inter
 
 The compile-time backend selection also means the project ships separate binaries per platform rather than a single binary that selects at runtime. This is a known bgfx tradeoff and an acceptable one for this project's scope.
 
+### Shaders
+
+Shaders are authored once in bgfx's `.sc` dialect (`shaders/*.sc`, with `varying.def.sc` declaring the vertex attributes and interpolants) and compiled **at build time** by bgfx's `shaderc` into per-backend bytecode. The bytecode is emitted as embeddable C headers under the build tree (`generated/shaders/<profile>/…`) — **nothing precompiled is checked in** — and `BgfxRenderer` selects the variant matching the live backend at runtime via `bgfx::createEmbeddedShader`. Shader source edits are picked up on the next build.
+
+The generated profile set per platform matches the backends bgfx auto-selects: SPIR-V (Vulkan), GLSL and ESSL (OpenGL/ES) everywhere, plus DXBC (Direct3D11) on Windows and Metal on macOS. Two profiles are intentionally **not** generated yet, both documented follow-ups:
+
+- **Direct3D12 (DXIL):** shaderc's DXC path rejects its own generated varying-initialization under `--werror`. bgfx prefers Direct3D11 on Windows regardless, so D3D12 is deferred rather than worked around.
+- **WebGPU (WGSL):** not a current target.
+
+When adding a shader, keep the embedded-shader backend matrix in `BgfxRenderer.cpp` (the `BGFX_PLATFORM_SUPPORTS_*` overrides and the per-profile `#include`s) in sync with the profiles CMake actually generates — a referenced-but-ungenerated profile is a link error, and a generated-but-unreferenced one is dead weight.
+
 ---
 
 ## 10. Import/Export and Editor Interoperability

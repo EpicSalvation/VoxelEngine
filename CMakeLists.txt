@@ -16,8 +16,15 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 # bgfx.cmake — CMake wrapper for bgfx/bimg/bx maintained by bgfx's author.
 # Provides the bgfx, bimg, bx CMake targets.
 # Pinned to a specific release tag for reproducible builds.
-set(BGFX_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+# Tools are needed for build-time shader compilation: shaderc (.sc -> bytecode)
+# and bin2c (bytecode -> embeddable C headers). The texture/geometry tools are
+# not used, so keep them off to limit build time.
+set(BGFX_BUILD_TOOLS          ON  CACHE BOOL "" FORCE)
+set(BGFX_BUILD_TOOLS_SHADER   ON  CACHE BOOL "" FORCE)
+set(BGFX_BUILD_TOOLS_BIN2C    ON  CACHE BOOL "" FORCE)
+set(BGFX_BUILD_TOOLS_GEOMETRY OFF CACHE BOOL "" FORCE)
+set(BGFX_BUILD_TOOLS_TEXTURE  OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   bgfx_cmake
   GIT_REPOSITORY https://github.com/bkaradzic/bgfx.cmake.git
@@ -25,6 +32,12 @@ FetchContent_Declare(
   GIT_SUBMODULES_RECURSE TRUE
 )
 FetchContent_MakeAvailable(bgfx_cmake)
+
+# bgfx.cmake's build-time shader compilation helpers (bgfx_compile_shaders).
+include(${bgfx_cmake_SOURCE_DIR}/cmake/bgfxToolUtils.cmake)
+# Under FetchContent (vs. an installed bgfx package) this is not set, but the
+# shader helper needs it to resolve <bgfx_shader.sh> and friends.
+set(BGFX_SHADER_INCLUDE_PATH ${bgfx_cmake_SOURCE_DIR}/bgfx/src)
 
 # GLM — math library required by WorldCoord (dvec3 / vec3)
 FetchContent_Declare(
@@ -119,6 +132,47 @@ function(voxel_set_warnings tgt)
 endfunction()
 
 voxel_set_warnings(voxel-engine)
+
+# ─── Shaders ─────────────────────────────────────────────────────────
+# Compiled at build time by shaderc into per-backend bytecode, emitted as
+# embeddable C headers (AS_HEADERS) under the build tree — no binaries are
+# checked in. BgfxRenderer includes these and selects the right variant at
+# runtime via bgfx::createEmbeddedShader. The default profile set per platform
+# (spirv/glsl/essl plus dxbc+dxil on Windows, metal on macOS) matches the
+# backends bgfx auto-selects.
+set(VOXEL_SHADER_DIR ${CMAKE_BINARY_DIR}/generated/shaders)
+
+# On Windows, pin the profile set to exclude s_6_0 (Direct3D12/DXIL). shaderc's
+# DXC path rejects its own generated varying-init under the helper's hardcoded
+# --werror; bgfx prefers Direct3D11 (s_5_0/DXBC) on Windows regardless, so D3D12
+# is a later follow-up. Other platforms use the helper's defaults.
+set(VOXEL_SHADER_PROFILES "")
+if(WIN32)
+  set(VOXEL_SHADER_PROFILES PROFILES spirv 120 100_es s_5_0)
+endif()
+
+bgfx_compile_shaders(
+  TYPE        VERTEX
+  SHADERS     ${CMAKE_SOURCE_DIR}/shaders/vs_voxel.sc
+  VARYING_DEF ${CMAKE_SOURCE_DIR}/shaders/varying.def.sc
+  OUTPUT_DIR  ${VOXEL_SHADER_DIR}
+  OUT_FILES_VAR VOXEL_VS_OUTPUTS
+  AS_HEADERS
+  ${VOXEL_SHADER_PROFILES}
+)
+bgfx_compile_shaders(
+  TYPE        FRAGMENT
+  SHADERS     ${CMAKE_SOURCE_DIR}/shaders/fs_voxel.sc
+  VARYING_DEF ${CMAKE_SOURCE_DIR}/shaders/varying.def.sc
+  OUTPUT_DIR  ${VOXEL_SHADER_DIR}
+  OUT_FILES_VAR VOXEL_FS_OUTPUTS
+  AS_HEADERS
+  ${VOXEL_SHADER_PROFILES}
+)
+add_custom_target(voxel-shaders DEPENDS ${VOXEL_VS_OUTPUTS} ${VOXEL_FS_OUTPUTS})
+add_dependencies(voxel-engine voxel-shaders)
+# Generated headers are included as <generated/shaders/<profile>/<name>.sc.bin.h>.
+target_include_directories(voxel-engine PRIVATE ${CMAKE_BINARY_DIR})
 
 # ─── Demos ───────────────────────────────────────────────────────────
 # Each demo is a thin executable linking the engine library. 'sandbox' is the

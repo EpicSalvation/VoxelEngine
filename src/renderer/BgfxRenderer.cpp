@@ -2,6 +2,41 @@
 #include <bgfx/platform.h>
 #include <iostream>
 
+// Restrict the embedded-shader backend matrix to the profiles actually compiled
+// by the build (see CMakeLists "Shaders"). Defining these before
+// <bgfx/embedded_shader.h> stops BGFX_EMBEDDED_SHADER from referencing bytecode
+// arrays that do not exist:
+//   - WGSL: never generated (no WebGPU target).
+//   - DXIL (Direct3D12): not generated (shaderc/--werror issue; follow-up).
+//   - DXBC (Direct3D11): generated on Windows only.
+#define BGFX_PLATFORM_SUPPORTS_WGSL 0
+#define BGFX_PLATFORM_SUPPORTS_DXIL 0
+#if defined(__linux__)
+#  define BGFX_PLATFORM_SUPPORTS_DXBC 0
+#endif
+#include <bgfx/embedded_shader.h>
+
+// Build-time-generated shader bytecode, one header per backend profile.
+#include <generated/shaders/spirv/vs_voxel.sc.bin.h>
+#include <generated/shaders/glsl/vs_voxel.sc.bin.h>
+#include <generated/shaders/essl/vs_voxel.sc.bin.h>
+#include <generated/shaders/spirv/fs_voxel.sc.bin.h>
+#include <generated/shaders/glsl/fs_voxel.sc.bin.h>
+#include <generated/shaders/essl/fs_voxel.sc.bin.h>
+#if defined(_WIN32)
+#  include <generated/shaders/dxbc/vs_voxel.sc.bin.h>
+#  include <generated/shaders/dxbc/fs_voxel.sc.bin.h>
+#elif defined(__APPLE__)
+#  include <generated/shaders/metal/vs_voxel.sc.bin.h>
+#  include <generated/shaders/metal/fs_voxel.sc.bin.h>
+#endif
+
+static const bgfx::EmbeddedShader s_embeddedShaders[] = {
+    BGFX_EMBEDDED_SHADER(vs_voxel),
+    BGFX_EMBEDDED_SHADER(fs_voxel),
+    BGFX_EMBEDDED_SHADER_END()
+};
+
 bgfx::VertexLayout VoxelVertex::layout;
 
 void VoxelVertex::initLayout() {
@@ -78,6 +113,14 @@ void BgfxRenderer::initialize(const platform::NativeWindowHandles& handles,
     VoxelVertex::initLayout();
     vbo = bgfx::createVertexBuffer(bgfx::makeRef(cubeVertices, sizeof(cubeVertices)), VoxelVertex::layout);
     ibo = bgfx::createIndexBuffer(bgfx::makeRef(cubeIndices, sizeof(cubeIndices)));
+
+    // Select the bytecode matching the backend bgfx actually chose at init.
+    const bgfx::RendererType::Enum rendererType = bgfx::getRendererType();
+    bgfx::ShaderHandle vsh = bgfx::createEmbeddedShader(s_embeddedShaders, rendererType, "vs_voxel");
+    bgfx::ShaderHandle fsh = bgfx::createEmbeddedShader(s_embeddedShaders, rendererType, "fs_voxel");
+    program = bgfx::createProgram(vsh, fsh, true /* destroy shaders with program */);
+    if (!bgfx::isValid(program))
+        std::cerr << "[BgfxRenderer] Failed to create shader program\n";
 
     initialized = true;
 }
