@@ -19,8 +19,9 @@ If you are an AI agent: read this document before modifying any subsystem. The c
 9. [Renderer and LOD](#9-renderer-and-lod)
 10. [Import/Export and Editor Interoperability](#10-importexport-and-editor-interoperability)
 11. [Persistence and Dirty Tracking](#11-persistence-and-dirty-tracking)
-12. [Subsystem Dependency Map](#12-subsystem-dependency-map)
-13. [Guidance for AI Coding Agents](#13-guidance-for-ai-coding-agents)
+12. [Build, Packaging, and the Engine Library Boundary](#12-build-packaging-and-the-engine-library-boundary)
+13. [Subsystem Dependency Map](#13-subsystem-dependency-map)
+14. [Guidance for AI Coding Agents](#14-guidance-for-ai-coding-agents)
 
 ---
 
@@ -362,7 +363,64 @@ Dirty chunks are never evicted from disk, but may be evicted from the in-memory 
 
 ---
 
-## 12. Subsystem Dependency Map
+## 12. Build, Packaging, and the Engine Library Boundary
+
+**Files:** `CMakeLists.txt`, `include/`, `src/`, `demos/`, `tests/`
+
+### The Engine Is a Library; Front-Ends Are Separate Executables
+
+The engine builds as a library target (`voxel-engine`) compiled from everything under `src/`. It contains no `main()`. Games, demos, development tools, and the test suite are **separate executable targets that link the library**:
+
+```
+voxel-engine        (library)     ← all of src/**
+demos/sandbox       (executable)  ← development launcher; links voxel-engine
+demos/<milestone>   (executable)  ← per-milestone demos; each links voxel-engine
+voxel-engine-tests  (executable)  ← links voxel-engine + GoogleTest
+plugins/*           (shared lib)  ← built independently, loaded at runtime
+```
+
+A plugin-based engine is meant to host many front-ends — the per-milestone demos in the README, and eventually real games — so the engine cannot itself be the executable. The test suite is a concrete forcing function: tests must link engine code *without* a `main()`, which is impossible if the engine and `main()` are one target.
+
+In-tree executables (the demos and tests in this repository) are privileged consumers: they may reach into `src/` for engine internals. Out-of-tree consumers (third-party games and plugins) see only the public API in `include/`.
+
+### Static by Default, Shared by Flag
+
+The library builds **static by default** and honours CMake's `BUILD_SHARED_LIBS` — `-DBUILD_SHARED_LIBS=ON` produces a shared library instead, with no source changes. Static is the right default during active development: there are no export-macro or symbol-visibility annotations to maintain across a still-churning API, no runtime library deployment or path management, and link-time iteration stays fast.
+
+A shared build becomes worthwhile only when shipping a prebuilt engine SDK that third parties link without recompiling, or when many executables should share a single engine binary. At that point, add `__declspec(dllexport/import)` / visibility-attribute export macros to the public headers — but **not before**, and never as a workaround for something the static build handles fine.
+
+### Public / Private Header Boundary
+
+The library's include directories encode the API surface:
+
+- **`include/` is `PUBLIC`** — the committed public API. It propagates to every consumer that links the library. Currently `WorldCoord.h` and `plugin_api.h`.
+- **`src/` is `PRIVATE`** — engine internals, on the path only for the library's own compilation.
+
+Dependency visibility mirrors this boundary, and is itself a load-bearing decision:
+
+- **`glm` is `PUBLIC`** — it is the only third-party type intentionally exposed in a public header (`WorldCoord` wraps `glm::dvec3`).
+- **`bgfx` / `bx` / `bimg` and `yaml-cpp` are `PRIVATE`** — implementation details that must not appear in any public header. `dl` is carried portably via `${CMAKE_DL_LIBS}`.
+
+**Rule:** do not introduce a private dependency's types into a public header. In particular, keep `bgfx` out of `include/` — rendering is exposed to consumers through the abstract `Renderer` interface, never through concrete bgfx handles. Leaking bgfx into the public API would also make a future shared build far harder (it would drag the graphics ABI across the library boundary).
+
+### The Plugin ABI Is Independent of the Packaging Choice
+
+This is the invariant that makes static-vs-shared a free decision rather than a constraint. Plugins receive a **function-pointer table** (`PluginContext`, see [Plugin System](#8-plugin-system)) and link **zero** engine symbols. A plugin's only exported symbol is `voxel_plugin_init`, which the engine resolves at runtime via `dlopen`/`dlsym` (or `LoadLibrary`/`GetProcAddress`). Whether the engine is a static library baked into an executable or a standalone shared library, plugins load and call back identically.
+
+**Corollary:** if a plugin needs a capability the engine does not yet expose, the fix is to **add a function pointer to `PluginContext`** — never to export engine symbols, link the engine into the plugin, or force a shared build.
+
+### Toolchain Notes
+
+- **C++20 is required** (bgfx's `bx` uses designated initializers in its SIMD headers).
+- Third-party dependencies are fetched with CMake `FetchContent` and pinned (bgfx.cmake to a release tag) for reproducible builds. Some pinned deps predate modern CMake's policy floor, which `CMAKE_POLICY_VERSION_MINIMUM` accommodates.
+
+### Not Yet Finalized
+
+The exact public-header surface is a deliberate open decision, not the current state frozen. Consumer-facing types such as `Engine`, `LayerConfig`, and `PluginManager` still live under `src/` and are reached by in-tree demos directly. Promoting the genuinely public ones into `include/` — and exposing the renderer behind a creation factory so bgfx stays entirely out of the public API — is a planned follow-up. Until then: treat `include/` as the **committed** public API and `src/` as internal and subject to change.
+
+---
+
+## 13. Subsystem Dependency Map
 
 ```
 LayerConfig
@@ -413,7 +471,7 @@ Keep these dependency boundaries. A subsystem that reaches outside its declared 
 
 ---
 
-## 13. Guidance for AI Coding Agents
+## 14. Guidance for AI Coding Agents
 
 This section is written directly for AI coding agents working on this codebase.
 
@@ -422,7 +480,7 @@ This section is written directly for AI coding agents working on this codebase.
 1. Read this document fully
 2. Read `include/plugin_api.h` fully
 3. Read the `LayerConfig` validation logic in `src/core/LayerConfig.cpp`
-4. Check the subsystem dependency map in Section 12 — if your feature needs a dependency not listed there, that is a design question to raise, not a decision to make unilaterally
+4. Check the subsystem dependency map in Section 13 — if your feature needs a dependency not listed there, that is a design question to raise, not a decision to make unilaterally
 
 ### Hard Rules
 
@@ -432,9 +490,11 @@ This section is written directly for AI coding agents working on this codebase.
 
 **Do not shortcut the decomposition chain.** A composite voxel decomposes into its immediate child layer only. It does not skip levels. Do not add logic that attempts to decompose multiple levels in one step.
 
-**Do not cross the subsystem dependency boundaries in Section 12.** In particular: `DecompositionWorker` must not call into the `Renderer` or `PhysicsSystem`. `Renderer` must not call into `PhysicsSystem` or `IO`. These boundaries exist so each subsystem can be understood, tested, and modified in isolation.
+**Do not cross the subsystem dependency boundaries in Section 13.** In particular: `DecompositionWorker` must not call into the `Renderer` or `PhysicsSystem`. `Renderer` must not call into `PhysicsSystem` or `IO`. These boundaries exist so each subsystem can be understood, tested, and modified in isolation.
 
 **Register plugins via `plugin_api.h`, not by modifying engine internals.** If you are adding a new feature generator, material, or simulation behavior, it belongs in a plugin that registers callbacks. It does not belong as a modification to `PhysicsSystem.cpp` or `World.cpp`.
+
+**Keep engine internals out of public headers.** `include/` is the committed public API; `src/` is private. Do not move a `src/` header into `include/`, and do not expose a private dependency's types (especially `bgfx`) through a public header, without raising it as a design question — the public surface is being decided deliberately. New front-ends are executables that link the `voxel-engine` library; do not add a `main()` to the library or fold a demo back into it. See [Build, Packaging, and the Engine Library Boundary](#12-build-packaging-and-the-engine-library-boundary).
 
 ### Common Mistakes to Avoid
 
@@ -448,4 +508,4 @@ This section is written directly for AI coding agents working on this codebase.
 
 Proceed independently when: adding a new plugin that registers via `plugin_api.h`, adding a new material definition, writing a new feature generator, adding tests.
 
-Raise as a design question when: a new feature requires a dependency not in the Section 12 map, a new feature requires modifying `plugin_api.h`, a new feature requires changing the `WorldCoord` type or the floating-origin pipeline, a new layer mode beyond the three defined ones seems necessary.
+Raise as a design question when: a new feature requires a dependency not in the Section 13 map, a new feature requires modifying `plugin_api.h`, a new feature requires changing the `WorldCoord` type or the floating-origin pipeline, a new layer mode beyond the three defined ones seems necessary.
