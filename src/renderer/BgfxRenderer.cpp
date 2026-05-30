@@ -45,12 +45,27 @@ BgfxRenderer::~BgfxRenderer() {
     shutdown();
 }
 
-void BgfxRenderer::initialize() {
+void BgfxRenderer::initialize(const platform::NativeWindowHandles& handles,
+                              uint32_t width, uint32_t height) {
+    viewWidth  = width;
+    viewHeight = height;
+
+    // Render on the calling thread (single-threaded mode). Calling renderFrame()
+    // before init avoids bgfx spawning its own render thread — simpler and
+    // required on platforms (notably macOS) where window/device calls must stay
+    // on the main thread.
+    bgfx::renderFrame();
+
     bgfx::Init init;
-    init.type              = bgfx::RendererType::Count;
+    init.type              = bgfx::RendererType::Count;  // auto-select per platform
     init.resolution.width  = viewWidth;
     init.resolution.height = viewHeight;
     init.resolution.reset  = BGFX_RESET_VSYNC;
+
+    init.platformData.nwh = handles.window;
+    init.platformData.ndt = handles.display;
+    if (handles.wayland)
+        init.platformData.type = bgfx::NativeWindowHandleType::Wayland;
 
     if (!bgfx::init(init)) {
         std::cerr << "[BgfxRenderer] Failed to initialize bgfx\n";

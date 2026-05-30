@@ -279,7 +279,17 @@ Plugins are loaded in declaration order from the project config. Hook registrati
 
 ## 9. Renderer and LOD
 
-**Files:** `src/renderer/Renderer.cpp/.h`, `src/renderer/LODManager.cpp/.h`
+**Files:** `src/renderer/Renderer.cpp/.h`, `src/renderer/BgfxRenderer.cpp/.h`, `src/renderer/LODManager.cpp/.h`, `src/platform/Window.cpp/.h`, `src/platform/NativeWindowHandles.h`
+
+### Windowing and Surface
+
+The window is owned by a separate platform layer (`src/platform/Window`, backed by GLFW), not by the renderer. The window creates no graphics context of its own (`GLFW_NO_API`) — bgfx owns the device and renders into the window's native handle.
+
+The seam between the two is `platform::NativeWindowHandles`, a small struct carrying the native window/display pointers (and a Wayland flag). The window layer produces it; the renderer consumes it to populate `bgfx::PlatformData` in `Renderer::initialize`. This keeps the dependency one-directional and library-neutral: **the window layer never includes bgfx, and the renderer never includes GLFW.** Do not collapse these — a renderer that pulls in GLFW, or a window that pulls in bgfx, defeats the separation that lets either backend be swapped.
+
+bgfx is initialized in single-threaded mode (a `bgfx::renderFrame()` call precedes `bgfx::init`), so device and window calls stay on the main thread — required on macOS and simpler everywhere.
+
+**Linux:** X11 is requested explicitly for now (`GLFW_PLATFORM_X11`); native-handle wiring for Wayland is a planned follow-up. On a Wayland session the window runs through XWayland until then.
 
 ### Layer-Aware Rendering
 
@@ -454,9 +464,15 @@ PropagationSystem
     └── depends on: World (read voxel properties), PhysicsSystem (structural events)
     └── stops at: immutable layer boundaries
 
+Window (platform)
+    └── depends on: GLFW
+    └── produces: NativeWindowHandles (consumed by Renderer)
+    └── must NOT depend on: bgfx, Renderer, World, or any engine subsystem
+
 Renderer
-    └── depends on: World (read geometry), LODManager, WorldCoord
-    └── must NOT depend on: PhysicsSystem, DecompositionWorker, IO
+    └── depends on: World (read geometry), LODManager, WorldCoord,
+                    NativeWindowHandles (from Window, at init only)
+    └── must NOT depend on: GLFW, PhysicsSystem, DecompositionWorker, IO
 
 PhysicsSystem
     └── depends on: World (read/write voxel properties), PropagationSystem
