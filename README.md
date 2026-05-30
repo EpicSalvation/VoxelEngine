@@ -206,9 +206,9 @@ voxel-game-engine
 │   │   └── VoxExporter.cpp / .h          # .vox format export with auto-chunking
 │   └── plugins
 │       └── ExamplePlugin.cpp / .h        # Reference plugin: feature generator + material def
-├── demos
-│   └── sandbox
-│       └── main.cpp                      # Dev launcher (was src/main.cpp); links voxel-engine
+├── demos                                # Progressive series of reference examples
+│   └── 01-single-voxel                  # M2: single voxel in space (auto-orbit / free-cam)
+│       └── main.cpp                      # Each demo/<NN-name>/main.cpp builds its own target
 ├── tests
 │   └── LayerConfigTest.cpp               # Unit tests; link voxel-engine + GoogleTest
 ├── shaders                               # bgfx .sc shader sources + committed bytecode
@@ -248,15 +248,21 @@ The engine builds as a library (`voxel-engine`); demos and games are separate
 executables that link it. The build is static by default — pass
 `-DBUILD_SHARED_LIBS=ON` to produce a shared engine library instead.
 
+The `demos/` directory holds a progressive series of reference examples, each a
+standalone target named after its folder. Every `demos/<NN-name>/` with a
+`main.cpp` is discovered automatically — `cmake --build build` builds them all,
+or build one with `--target <NN-name>`. To add a demo, drop in a new
+`demos/<NN-name>/main.cpp`; no CMake edits are needed.
+
 ```bash
 git clone <repository-url>
 cd voxel-game-engine
 cmake -B build
 cmake --build build
 
-# Run the sandbox demo (the development launcher).
-# Single-config generators (Make/Ninja):     ./build/sandbox
-# Multi-config generators (Visual Studio):    ./build/Debug/sandbox.exe
+# Run the first demo (single voxel in space).
+# Single-config generators (Make/Ninja):     ./build/01-single-voxel
+# Multi-config generators (Visual Studio):    ./build/Debug/01-single-voxel.exe
 
 # Run the test suite
 ctest --test-dir build
@@ -298,7 +304,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 **M2 — Basic Rendering**
 
-> **Complete.** The full rendering pipeline is wired end-to-end: GLFW window → bgfx device → per-frame view/projection matrices via floating-origin → transient vertex buffers with palette-mapped colors → `bgfx::frame`. The sandbox demo opens a live window, renders a single voxel at the world origin with the camera auto-orbiting it, and supports toggling into a WASD + mouse free-camera mode (press F). All tasks compile on Linux/GCC, macOS/Clang, and Windows/MSVC.
+> **Complete.** The full rendering pipeline is wired end-to-end: GLFW window → bgfx device → per-frame view/projection matrices via floating-origin → transient vertex buffers with palette-mapped colors → `bgfx::frame`. The `01-single-voxel` demo opens a live window, renders a single voxel at the world origin with the camera auto-orbiting it, and supports toggling into a WASD + mouse free-camera mode (press F). All tasks compile on Linux/GCC, macOS/Clang, and Windows/MSVC.
 
 - [x] Floating-origin coordinate math in place (`WorldCoord::toLocalFloat`, camera-local submission helper)
 - [x] Window + surface: GLFW-backed `src/platform/Window` creates a context-less window and feeds a library-neutral native handle into `bgfx::Init::platformData`

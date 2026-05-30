@@ -188,13 +188,26 @@ if(VOXEL_BUILD_SHADERS)
 endif()
 
 # ─── Demos ───────────────────────────────────────────────────────────
-# Each demo is a thin executable linking the engine library. 'sandbox' is the
-# development launcher (formerly src/main.cpp). As an in-tree demo it is
-# allowed to reach engine internals under src/.
-add_executable(sandbox demos/sandbox/main.cpp)
-target_link_libraries(sandbox PRIVATE voxel-engine bgfx bx glfw)
-target_include_directories(sandbox PRIVATE src)
-voxel_set_warnings(sandbox)
+# The demos form a progressive series of reference examples, each a standalone
+# executable linking the engine library. Every immediate subdirectory of demos/
+# that contains a main.cpp becomes its own build target named after the folder
+# (e.g. demos/01-single-voxel/ → target 01-single-voxel). Adding a demo is just
+# dropping in demos/<NN-name>/main.cpp — no edits here are needed. The numeric
+# prefix keeps the series ordered and maps to the README milestones. As in-tree
+# demos they are allowed to reach engine internals under src/.
+file(GLOB _voxel_demo_dirs RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/demos
+     ${CMAKE_CURRENT_SOURCE_DIR}/demos/*)
+list(SORT _voxel_demo_dirs)
+foreach(_demo ${_voxel_demo_dirs})
+  set(_demo_dir  ${CMAKE_CURRENT_SOURCE_DIR}/demos/${_demo})
+  set(_demo_main ${_demo_dir}/main.cpp)
+  if(IS_DIRECTORY ${_demo_dir} AND EXISTS ${_demo_main})
+    add_executable(${_demo} ${_demo_main})
+    target_link_libraries(${_demo} PRIVATE voxel-engine bgfx bx glfw)
+    target_include_directories(${_demo} PRIVATE src)
+    voxel_set_warnings(${_demo})
+  endif()
+endforeach()
 
 # ─── Tests ───────────────────────────────────────────────────────────
 enable_testing()

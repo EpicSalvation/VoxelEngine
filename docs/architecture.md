@@ -404,8 +404,7 @@ The engine builds as a library target (`voxel-engine`) compiled from everything 
 
 ```
 voxel-engine        (library)     ← all of src/**
-demos/sandbox       (executable)  ← development launcher; links voxel-engine
-demos/<milestone>   (executable)  ← per-milestone demos; each links voxel-engine
+demos/<NN-name>     (executable)  ← progressive reference examples; each links voxel-engine
 voxel-engine-tests  (executable)  ← links voxel-engine + GoogleTest
 plugins/*           (shared lib)  ← built independently, loaded at runtime
 ```
