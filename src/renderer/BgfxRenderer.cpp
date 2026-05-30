@@ -1,4 +1,6 @@
 #include "BgfxRenderer.h"
+#include "ChunkMesh.h"
+#include "Palette.h"
 #include <bgfx/platform.h>
 #include <iostream>
 #include <cstring>
@@ -39,32 +41,6 @@ static const bgfx::EmbeddedShader s_embeddedShaders[] = {
     BGFX_EMBEDDED_SHADER(fs_voxel),
     BGFX_EMBEDDED_SHADER_END()
 };
-
-// 16-color base palette (ABGR format: 0xAABBGGRR).
-// Index 0 is "empty" — voxels with palette_index == 0 are skipped by renderWorld.
-// Indices 16-255 cycle back through the base 16.
-static const uint32_t s_paletteBase[16] = {
-    0x00000000,  //  0: empty (not rendered)
-    0xffaaaaaa,  //  1: stone
-    0xff228b22,  //  2: grass
-    0xff2b5a8b,  //  3: dirt
-    0xff3be3f4,  //  4: sand
-    0xfff08000,  //  5: water (blue)
-    0xff003399,  //  6: wood
-    0xff00aa44,  //  7: leaves
-    0xffffffff,  //  8: snow
-    0xff2050e0,  //  9: lava/fire (orange-red)
-    0xff333333,  // 10: coal
-    0xff6496c8,  // 11: iron ore
-    0xff00d0d0,  // 12: gold ore (yellow)
-    0xffd0a000,  // 13: diamond (cyan)
-    0xff2222cc,  // 14: brick (dark red)
-    0xffff00ff,  // 15: debug (magenta)
-};
-
-static uint32_t paletteColor(uint8_t idx) {
-    return s_paletteBase[idx & 15];
-}
 
 // Cube geometry — 8 vertices in unit cube centred at origin.
 // Colors are patched per-voxel into a transient vertex buffer each frame so that
@@ -202,7 +178,23 @@ void BgfxRenderer::render() {
             bgfx::submit(0, program);
     }
 
+    // Per-chunk static meshes: one draw call each, placed via a floating-origin
+    // model transform of the chunk's world origin (see ARCHITECTURE.md §9).
+    for (const auto& pc : pendingChunks) {
+        glm::vec3 lo = pc.origin.toLocalFloat(cameraPos);
+        float mtx[16];
+        bx::mtxTranslate(mtx, lo.x, lo.y, lo.z);
+
+        bgfx::setState(BGFX_STATE_DEFAULT);
+        bgfx::setTransform(mtx);
+        bgfx::setVertexBuffer(0, pc.vbh);
+        bgfx::setIndexBuffer(pc.ibh);
+        if (bgfx::isValid(program))
+            bgfx::submit(0, program);
+    }
+
     pendingVoxels.clear();
+    pendingChunks.clear();
     bgfx::frame();
 }
 
@@ -217,10 +209,15 @@ void BgfxRenderer::renderWorld(const World& world) {
                 const Voxel& v = world.getVoxel(x, y, z);
                 if (!v.isEmpty())
                     drawVoxel(WorldCoord(double(x), double(y), double(z)),
-                              paletteColor(v.material.palette_index));
+                              palette::color(v.material.palette_index));
             }
         }
     }
+}
+
+void BgfxRenderer::renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin) {
+    if (mesh.empty()) return;
+    pendingChunks.push_back({chunkOrigin, mesh.vbh(), mesh.ibh()});
 }
 
 void BgfxRenderer::setViewport(int width, int height) {

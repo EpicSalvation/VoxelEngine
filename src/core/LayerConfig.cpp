@@ -60,6 +60,22 @@ LayerConfig LayerConfig::parseAndValidate(const std::string& yamlContent) {
         if (node["decompose_to"])
             def.decompose_to = node["decompose_to"].as<std::string>();
 
+        // Chunk streaming parameters are optional; defaults (set in LayerDef) apply when absent.
+        if (node["chunk_size_voxels"]) {
+            def.chunk_size_voxels = node["chunk_size_voxels"].as<int>();
+            if (def.chunk_size_voxels < 1)
+                throw std::runtime_error(
+                    "Layer '" + def.name + "': chunk_size_voxels must be >= 1 (got " +
+                    std::to_string(def.chunk_size_voxels) + ").");
+        }
+        if (node["view_distance_chunks"]) {
+            def.view_distance_chunks = node["view_distance_chunks"].as<int>();
+            if (def.view_distance_chunks < 0)
+                throw std::runtime_error(
+                    "Layer '" + def.name + "': view_distance_chunks must be >= 0 (got " +
+                    std::to_string(def.view_distance_chunks) + ").");
+        }
+
         config.layers_.push_back(def);
     }
 

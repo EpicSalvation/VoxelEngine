@@ -15,6 +15,10 @@ struct LayerDef {
     double                   voxel_size_m  = 0.0;
     VoxelMode                mode          = VoxelMode::terminal;
     std::optional<std::string> decompose_to;  // composite layers only; names the child layer
+
+    // Chunk streaming parameters (M3). Optional in the config; defaults applied when omitted.
+    int chunk_size_voxels    = 32;  // voxels per chunk side; the chunk grid is chunk_size_voxels³
+    int view_distance_chunks = 8;   // load/evict radius around the camera, measured in chunks
 };
 
 // Parses and validates a layer stack from a YAML project config file.

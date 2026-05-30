@@ -24,3 +24,39 @@ TEST(LayerConfig, RejectsEmptyLayerStack) {
     // At least one layer must be defined — an empty stack is a startup error.
     EXPECT_THROW(LayerConfig::loadFromString("layers: []"), std::exception);
 }
+
+TEST(LayerConfig, ChunkStreamingDefaultsWhenOmitted) {
+    // M3: chunk_size_voxels / view_distance_chunks are optional and fall back to
+    // LayerDef defaults so existing configs keep working.
+    LayerConfig config = LayerConfig::loadFromString(R"(
+layers:
+  - name: terrain
+    voxel_size_m: 1.0
+    mode: terminal
+)");
+    EXPECT_EQ(config.layers()[0].chunk_size_voxels, 32);
+    EXPECT_EQ(config.layers()[0].view_distance_chunks, 8);
+}
+
+TEST(LayerConfig, ParsesExplicitChunkStreamingValues) {
+    LayerConfig config = LayerConfig::loadFromString(R"(
+layers:
+  - name: terrain
+    voxel_size_m: 1.0
+    mode: terminal
+    chunk_size_voxels: 16
+    view_distance_chunks: 4
+)");
+    EXPECT_EQ(config.layers()[0].chunk_size_voxels, 16);
+    EXPECT_EQ(config.layers()[0].view_distance_chunks, 4);
+}
+
+TEST(LayerConfig, RejectsNonPositiveChunkSize) {
+    EXPECT_THROW(LayerConfig::loadFromString(R"(
+layers:
+  - name: terrain
+    voxel_size_m: 1.0
+    mode: terminal
+    chunk_size_voxels: 0
+)"), std::exception);
+}
