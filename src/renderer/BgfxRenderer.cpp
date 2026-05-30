@@ -16,19 +16,21 @@
 #endif
 #include <bgfx/embedded_shader.h>
 
-// Build-time-generated shader bytecode, one header per backend profile.
-#include <generated/shaders/spirv/vs_voxel.sc.bin.h>
-#include <generated/shaders/glsl/vs_voxel.sc.bin.h>
-#include <generated/shaders/essl/vs_voxel.sc.bin.h>
-#include <generated/shaders/spirv/fs_voxel.sc.bin.h>
-#include <generated/shaders/glsl/fs_voxel.sc.bin.h>
-#include <generated/shaders/essl/fs_voxel.sc.bin.h>
+// Shader bytecode generated from shaders/*.sc by the opt-in VOXEL_BUILD_SHADERS
+// build (see CMakeLists "Shaders"); the headers are committed under
+// shaders/generated/ so normal builds and CI need no shader toolchain.
+#include <generated/spirv/vs_voxel.sc.bin.h>
+#include <generated/glsl/vs_voxel.sc.bin.h>
+#include <generated/essl/vs_voxel.sc.bin.h>
+#include <generated/spirv/fs_voxel.sc.bin.h>
+#include <generated/glsl/fs_voxel.sc.bin.h>
+#include <generated/essl/fs_voxel.sc.bin.h>
 #if defined(_WIN32)
-#  include <generated/shaders/dxbc/vs_voxel.sc.bin.h>
-#  include <generated/shaders/dxbc/fs_voxel.sc.bin.h>
+#  include <generated/dxbc/vs_voxel.sc.bin.h>
+#  include <generated/dxbc/fs_voxel.sc.bin.h>
 #elif defined(__APPLE__)
-#  include <generated/shaders/metal/vs_voxel.sc.bin.h>
-#  include <generated/shaders/metal/fs_voxel.sc.bin.h>
+#  include <generated/metal/vs_voxel.sc.bin.h>
+#  include <generated/metal/fs_voxel.sc.bin.h>
 #endif
 
 static const bgfx::EmbeddedShader s_embeddedShaders[] = {
