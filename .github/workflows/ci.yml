@@ -1,10 +1,14 @@
 name: CI
 
 on:
-  push:
-    branches: ["**"]
+  # Validate every PR (GitHub builds the merge result). This is the run that
+  # gates merging, and it covers all feature-branch work.
   pull_request:
-    branches: ["**"]
+  # Only build direct pushes to main (merges + the occasional direct commit).
+  # Scoping push to main means a branch with an open PR is no longer built
+  # twice (once for the push, once for the PR) — only the PR run fires.
+  push:
+    branches: [main]
 
 jobs:
   build:
