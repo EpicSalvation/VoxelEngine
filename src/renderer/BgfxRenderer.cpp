@@ -1,6 +1,7 @@
 #include "BgfxRenderer.h"
 #include <bgfx/platform.h>
 #include <iostream>
+#include <cstring>
 
 // Restrict the embedded-shader backend matrix to the profiles actually compiled
 // by the build (see CMakeLists "Shaders"). Defining these before
@@ -39,6 +40,55 @@ static const bgfx::EmbeddedShader s_embeddedShaders[] = {
     BGFX_EMBEDDED_SHADER_END()
 };
 
+// 16-color base palette (ABGR format: 0xAABBGGRR).
+// Index 0 is "empty" — voxels with palette_index == 0 are skipped by renderWorld.
+// Indices 16-255 cycle back through the base 16.
+static const uint32_t s_paletteBase[16] = {
+    0x00000000,  //  0: empty (not rendered)
+    0xffaaaaaa,  //  1: stone
+    0xff228b22,  //  2: grass
+    0xff2b5a8b,  //  3: dirt
+    0xff3be3f4,  //  4: sand
+    0xfff08000,  //  5: water (blue)
+    0xff003399,  //  6: wood
+    0xff00aa44,  //  7: leaves
+    0xffffffff,  //  8: snow
+    0xff2050e0,  //  9: lava/fire (orange-red)
+    0xff333333,  // 10: coal
+    0xff6496c8,  // 11: iron ore
+    0xff00d0d0,  // 12: gold ore (yellow)
+    0xffd0a000,  // 13: diamond (cyan)
+    0xff2222cc,  // 14: brick (dark red)
+    0xffff00ff,  // 15: debug (magenta)
+};
+
+static uint32_t paletteColor(uint8_t idx) {
+    return s_paletteBase[idx & 15];
+}
+
+// Cube geometry — 8 vertices in unit cube centred at origin.
+// Colors are patched per-voxel into a transient vertex buffer each frame so that
+// different voxels can use different palette entries without changing this template.
+static const VoxelVertex kCubeTemplate[8] = {
+    {-0.5f, -0.5f,  0.5f, 0},
+    { 0.5f, -0.5f,  0.5f, 0},
+    { 0.5f,  0.5f,  0.5f, 0},
+    {-0.5f,  0.5f,  0.5f, 0},
+    {-0.5f, -0.5f, -0.5f, 0},
+    { 0.5f, -0.5f, -0.5f, 0},
+    { 0.5f,  0.5f, -0.5f, 0},
+    {-0.5f,  0.5f, -0.5f, 0},
+};
+
+static const uint16_t kCubeIndices[36] = {
+    0,1,2, 0,2,3,
+    4,6,5, 4,7,6,
+    0,4,5, 0,5,1,
+    2,6,7, 2,7,3,
+    0,3,7, 0,7,4,
+    1,5,6, 1,6,2,
+};
+
 bgfx::VertexLayout VoxelVertex::layout;
 
 void VoxelVertex::initLayout() {
@@ -48,29 +98,8 @@ void VoxelVertex::initLayout() {
         .end();
 }
 
-static VoxelVertex cubeVertices[] = {
-    {-0.5f, -0.5f,  0.5f, 0xffffffff},
-    { 0.5f, -0.5f,  0.5f, 0xffffffff},
-    { 0.5f,  0.5f,  0.5f, 0xffffffff},
-    {-0.5f,  0.5f,  0.5f, 0xffffffff},
-    {-0.5f, -0.5f, -0.5f, 0xffffffff},
-    { 0.5f, -0.5f, -0.5f, 0xffffffff},
-    { 0.5f,  0.5f, -0.5f, 0xffffffff},
-    {-0.5f,  0.5f, -0.5f, 0xffffffff},
-};
-
-static const uint16_t cubeIndices[] = {
-    0,1,2, 0,2,3,
-    4,5,6, 4,6,7,
-    0,1,5, 0,5,4,
-    2,3,7, 2,7,6,
-    0,3,7, 0,7,4,
-    1,2,6, 1,6,5,
-};
-
 BgfxRenderer::BgfxRenderer()
     : program(BGFX_INVALID_HANDLE),
-      vbo(BGFX_INVALID_HANDLE),
       ibo(BGFX_INVALID_HANDLE),
       cameraRot{0.0f, 0.0f, 0.0f},
       viewWidth(800),
@@ -113,14 +142,12 @@ void BgfxRenderer::initialize(const platform::NativeWindowHandles& handles,
     bgfx::setViewRect(0, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
 
     VoxelVertex::initLayout();
-    vbo = bgfx::createVertexBuffer(bgfx::makeRef(cubeVertices, sizeof(cubeVertices)), VoxelVertex::layout);
-    ibo = bgfx::createIndexBuffer(bgfx::makeRef(cubeIndices, sizeof(cubeIndices)));
+    ibo = bgfx::createIndexBuffer(bgfx::makeRef(kCubeIndices, sizeof(kCubeIndices)));
 
-    // Select the bytecode matching the backend bgfx actually chose at init.
     const bgfx::RendererType::Enum rendererType = bgfx::getRendererType();
     bgfx::ShaderHandle vsh = bgfx::createEmbeddedShader(s_embeddedShaders, rendererType, "vs_voxel");
     bgfx::ShaderHandle fsh = bgfx::createEmbeddedShader(s_embeddedShaders, rendererType, "fs_voxel");
-    program = bgfx::createProgram(vsh, fsh, true /* destroy shaders with program */);
+    program = bgfx::createProgram(vsh, fsh, true);
     if (!bgfx::isValid(program))
         std::cerr << "[BgfxRenderer] Failed to create shader program\n";
 
@@ -130,28 +157,70 @@ void BgfxRenderer::initialize(const platform::NativeWindowHandles& handles,
 void BgfxRenderer::render() {
     if (!initialized) return;
 
+    // Per-frame view matrix: camera sits at the floating-origin (local 0,0,0).
+    // All voxel positions are already translated into camera-local space via
+    // toLocalFloat(cameraPos) below, so only orientation enters the view matrix.
+    float sp = bx::sin(cameraRot.x), cp = bx::cos(cameraRot.x);
+    float sy = bx::sin(cameraRot.y), cy = bx::cos(cameraRot.y);
+    bx::Vec3 eye     = {0.0f, 0.0f, 0.0f};
+    bx::Vec3 forward = {cp * sy, sp, cp * cy};
+    bx::Vec3 at      = bx::add(eye, forward);
+    float view[16];
+    bx::mtxLookAt(view, eye, at);
+
+    float proj[16];
+    bx::mtxProj(proj, 60.0f,
+                float(viewWidth) / float(viewHeight),
+                0.01f, 1000.0f,
+                bgfx::getCaps()->homogeneousDepth);
+
+    bgfx::setViewTransform(0, view, proj);
+    bgfx::setViewRect(0, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
+
     bgfx::touch(0);
 
-    for (const auto& worldPos : voxelPositions) {
+    for (const auto& pv : pendingVoxels) {
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::allocTransientVertexBuffer(&tvb, 8, VoxelVertex::layout);
+        VoxelVertex* verts = reinterpret_cast<VoxelVertex*>(tvb.data);
+        std::memcpy(verts, kCubeTemplate, sizeof(kCubeTemplate));
+        for (int i = 0; i < 8; ++i)
+            verts[i].abgr = pv.abgr;
+
         // Floating origin: convert world-space position to camera-local float.
         // This keeps vertex values small in magnitude, preserving float32 precision
         // even at large world scales. See docs/ARCHITECTURE.md §9.
-        glm::vec3 localPos = worldPos.toLocalFloat(cameraPos);
+        glm::vec3 lp = pv.pos.toLocalFloat(cameraPos);
         float mtx[16];
-        bx::mtxTranslate(mtx, localPos.x, localPos.y, localPos.z);
+        bx::mtxTranslate(mtx, lp.x, lp.y, lp.z);
+
+        bgfx::setState(BGFX_STATE_DEFAULT);
         bgfx::setTransform(mtx);
-        bgfx::setVertexBuffer(0, vbo);
+        bgfx::setVertexBuffer(0, &tvb);
         bgfx::setIndexBuffer(ibo);
         if (bgfx::isValid(program))
             bgfx::submit(0, program);
     }
 
+    pendingVoxels.clear();
     bgfx::frame();
-    voxelPositions.clear();
 }
 
-void BgfxRenderer::drawVoxel(const WorldCoord& position) {
-    voxelPositions.push_back(position);
+void BgfxRenderer::drawVoxel(const WorldCoord& position, uint32_t abgr) {
+    pendingVoxels.push_back({position, abgr});
+}
+
+void BgfxRenderer::renderWorld(const World& world) {
+    for (int z = 0; z < world.getDepth(); ++z) {
+        for (int y = 0; y < world.getHeight(); ++y) {
+            for (int x = 0; x < world.getWidth(); ++x) {
+                const Voxel& v = world.getVoxel(x, y, z);
+                if (!v.isEmpty())
+                    drawVoxel(WorldCoord(double(x), double(y), double(z)),
+                              paletteColor(v.material.palette_index));
+            }
+        }
+    }
 }
 
 void BgfxRenderer::setViewport(int width, int height) {
@@ -170,8 +239,7 @@ void BgfxRenderer::setCameraRotation(float pitch, float yaw, float roll) {
 }
 
 void BgfxRenderer::cleanup() {
-    if (bgfx::isValid(vbo)) { bgfx::destroy(vbo); vbo = BGFX_INVALID_HANDLE; }
-    if (bgfx::isValid(ibo)) { bgfx::destroy(ibo); ibo = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(ibo))     { bgfx::destroy(ibo);     ibo     = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(program)) { bgfx::destroy(program); program = BGFX_INVALID_HANDLE; }
 }
 
@@ -180,8 +248,4 @@ void BgfxRenderer::shutdown() {
     cleanup();
     bgfx::shutdown();
     initialized = false;
-}
-
-void BgfxRenderer::renderWorld(const World& /*world*/) {
-    // Placeholder — full layer-aware world rendering is M2/M3.
 }
