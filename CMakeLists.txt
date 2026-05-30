@@ -58,50 +58,69 @@ else()
   FetchContent_MakeAvailable(googletest)
 endif()
 
-file(GLOB_RECURSE SOURCES
+# ─── Engine library ──────────────────────────────────────────────────
+# The engine is a library; games and demos are separate executables that
+# link it (see demos/ below). Builds static by default; pass
+# -DBUILD_SHARED_LIBS=ON to produce a shared library instead (the plugin
+# ABI is unaffected either way — plugins receive a function-pointer table,
+# see include/plugin_api.h).
+file(GLOB_RECURSE ENGINE_SOURCES
     src/core/*.cpp
     src/plugins/*.cpp
     src/renderer/*.cpp
     src/world/*.cpp
-    src/main.cpp
 )
 
-add_executable(voxel-game-engine ${SOURCES})
+add_library(voxel-engine ${ENGINE_SOURCES})
 
-# Both include/ (public API headers) and src/ (engine internals) are on the path.
-target_include_directories(voxel-game-engine PRIVATE include src)
+# include/ is the public API (WorldCoord.h, plugin_api.h) and propagates to
+# consumers; src/ holds engine internals and is private to the library's own
+# compilation. In-tree demos/tests opt into src/ explicitly when they need it.
+target_include_directories(voxel-engine
+  PUBLIC  include
+  PRIVATE src
+)
 
-target_link_libraries(voxel-game-engine
+target_link_libraries(voxel-engine
+  PUBLIC
+    glm::glm              # glm types appear in public headers (WorldCoord)
+    ${CMAKE_DL_LIBS}      # dlopen/dlsym/dlclose (libdl on Linux; empty elsewhere)
   PRIVATE
-    bgfx
+    bgfx                  # renderer internals only; not exposed in the public API
     bx
     bimg
-    glm::glm
     yaml-cpp::yaml-cpp
 )
 
-# Platform-specific compiler flags
-if(MSVC)
-    target_compile_options(voxel-game-engine PRIVATE /W4 /MP)
-    target_compile_definitions(voxel-game-engine PRIVATE
-        _CRT_SECURE_NO_WARNINGS
-        NOMINMAX
-    )
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(voxel-game-engine PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+# Warning flags applied to first-party targets only (not fetched dependencies).
+function(voxel_set_warnings tgt)
+  if(MSVC)
+    target_compile_options(${tgt} PRIVATE /W4 /MP)
+    target_compile_definitions(${tgt} PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${tgt} PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+endfunction()
 
-# dlopen/dlsym/dlclose live in libdl on Linux; implicit on macOS and Windows
-if(UNIX AND NOT APPLE)
-    target_link_libraries(voxel-game-engine PRIVATE dl)
-endif()
+voxel_set_warnings(voxel-engine)
 
+# ─── Demos ───────────────────────────────────────────────────────────
+# Each demo is a thin executable linking the engine library. 'sandbox' is the
+# development launcher (formerly src/main.cpp). As an in-tree demo it is
+# allowed to reach engine internals under src/.
+add_executable(sandbox demos/sandbox/main.cpp)
+target_link_libraries(sandbox PRIVATE voxel-engine)
+target_include_directories(sandbox PRIVATE src)
+voxel_set_warnings(sandbox)
+
+# ─── Tests ───────────────────────────────────────────────────────────
 enable_testing()
 
-# Tests: uncomment when tests/ contains test sources and add engine sources without main.cpp.
-# file(GLOB_RECURSE TEST_SOURCES tests/*.cpp)
-# file(GLOB_RECURSE ENGINE_SOURCES src/core/*.cpp src/world/*.cpp src/plugins/*.cpp)
-# add_executable(voxel-game-engine-tests ${TEST_SOURCES} ${ENGINE_SOURCES})
-# target_include_directories(voxel-game-engine-tests PRIVATE include src)
-# target_link_libraries(voxel-game-engine-tests PRIVATE gtest gtest_main glm::glm yaml-cpp::yaml-cpp)
-# add_test(NAME AllTests COMMAND voxel-game-engine-tests)
+file(GLOB_RECURSE TEST_SOURCES tests/*.cpp)
+if(TEST_SOURCES)
+  add_executable(voxel-engine-tests ${TEST_SOURCES})
+  target_link_libraries(voxel-engine-tests PRIVATE voxel-engine gtest gtest_main)
+  target_include_directories(voxel-engine-tests PRIVATE src)
+  voxel_set_warnings(voxel-engine-tests)
+  add_test(NAME AllTests COMMAND voxel-engine-tests)
+endif()

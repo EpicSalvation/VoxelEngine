@@ -180,7 +180,7 @@ The `.vox` format supports volumes up to 256³ per object. Larger volumes are au
 
 ```
 voxel-game-engine
-├── src
+├── src                                   # → voxel-engine library (all sources below)
 │   ├── core
 │   │   ├── Engine.cpp / .h               # Engine lifecycle, startup validation
 │   │   ├── PluginManager.cpp / .h        # Plugin load/unload, hook registration
@@ -200,10 +200,14 @@ voxel-game-engine
 │   ├── io
 │   │   ├── VoxImporter.cpp / .h          # .vox format import with layer assignment
 │   │   └── VoxExporter.cpp / .h          # .vox format export with auto-chunking
-│   ├── plugins
-│   │   └── ExamplePlugin.cpp / .h        # Reference plugin: feature generator + material def
-│   └── main.cpp
-├── include
+│   └── plugins
+│       └── ExamplePlugin.cpp / .h        # Reference plugin: feature generator + material def
+├── demos
+│   └── sandbox
+│       └── main.cpp                      # Dev launcher (was src/main.cpp); links voxel-engine
+├── tests
+│   └── LayerConfigTest.cpp               # Unit tests; link voxel-engine + GoogleTest
+├── include                               # Public API (propagated to engine consumers)
 │   ├── plugin_api.h                      # Public plugin interface; flat callback registration
 │   └── WorldCoord.h                      # Double-precision coordinate type; wraps dvec3
 ├── docs
@@ -233,13 +237,22 @@ To create a plugin, implement the interface defined in `include/plugin_api.h` an
 
 ## Setup
 
+The engine builds as a library (`voxel-engine`); demos and games are separate
+executables that link it. The build is static by default — pass
+`-DBUILD_SHARED_LIBS=ON` to produce a shared engine library instead.
+
 ```bash
 git clone <repository-url>
 cd voxel-game-engine
-mkdir build && cd build
-cmake ..
-make
-./voxel-game-engine
+cmake -B build
+cmake --build build
+
+# Run the sandbox demo (the development launcher).
+# Single-config generators (Make/Ninja):     ./build/sandbox
+# Multi-config generators (Visual Studio):    ./build/Debug/sandbox.exe
+
+# Run the test suite
+ctest --test-dir build
 ```
 
 ---
