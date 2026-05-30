@@ -192,7 +192,7 @@ endif()
 # development launcher (formerly src/main.cpp). As an in-tree demo it is
 # allowed to reach engine internals under src/.
 add_executable(sandbox demos/sandbox/main.cpp)
-target_link_libraries(sandbox PRIVATE voxel-engine)
+target_link_libraries(sandbox PRIVATE voxel-engine bgfx bx glfw)
 target_include_directories(sandbox PRIVATE src)
 voxel_set_warnings(sandbox)
 

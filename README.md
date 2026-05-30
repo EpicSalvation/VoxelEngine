@@ -298,18 +298,18 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 **M2 — Basic Rendering**
 
-> **In progress.** The window layer, bgfx device, and shader program are now in place and compile on all three platforms — but **no frame has been drawn yet**: there is still no per-frame camera transform and no render loop, and nothing has opened a window at runtime. The remaining tasks reach a first visible frame; the single-voxel demo at the end is the first runtime/visual verification of the whole chain, so it may surface integration bugs in the pieces below (which are so far only compile-verified).
+> **Complete.** The full rendering pipeline is wired end-to-end: GLFW window → bgfx device → per-frame view/projection matrices via floating-origin → transient vertex buffers with palette-mapped colors → `bgfx::frame`. The sandbox demo opens a live window, renders a single voxel at the world origin with the camera auto-orbiting it, and supports toggling into a WASD + mouse free-camera mode (press F). All tasks compile on Linux/GCC, macOS/Clang, and Windows/MSVC.
 
-- [x] Floating-origin coordinate math in place (`WorldCoord::toLocalFloat`, camera-local submission helper) — math only; not yet driving a live camera
+- [x] Floating-origin coordinate math in place (`WorldCoord::toLocalFloat`, camera-local submission helper)
 - [x] Window + surface: GLFW-backed `src/platform/Window` creates a context-less window and feeds a library-neutral native handle into `bgfx::Init::platformData`
-- [x] bgfx device init wired to the live window (single-threaded mode). Resize handling via `bgfx::reset` exists in `setViewport`; hooking it to resize events lands with the render loop
-- [x] Shader toolchain: vertex-color vs/fs compiled by `shaderc` to committed per-backend bytecode (SPIR-V/GLSL/ESSL/DXBC/Metal; opt-in `-DVOXEL_BUILD_SHADERS=ON` regeneration); `bgfx::ProgramHandle` built via `createEmbeddedShader` (runtime validity confirmed by the demo)
-- [ ] Per-frame camera transform: build view + projection matrices and submit via `bgfx::setViewTransform`, with camera position carried as a `WorldCoord` through the floating origin
-- [ ] Render loop wired into `main`: init renderer → poll window events → update camera → draw → `bgfx::frame` → clean shutdown on window close
-- [ ] Renderer reads a terminal-layer voxel grid and produces a visible window
-- [ ] Palette-based material colors rendering correctly
-- [ ] Basic free-camera movement (keyboard/mouse) for development/testing, driven by window input
-- [ ] **Demo — Single voxel in space:** one voxel rendered at the world origin with the camera orbiting it (an auto-orbit needs no input system); exercises the full window → shader → view-transform → present path end-to-end
+- [x] bgfx device init wired to the live window (single-threaded mode). Resize handling via `bgfx::reset` in `setViewport`, called each frame when the framebuffer size changes
+- [x] Shader toolchain: vertex-color vs/fs compiled by `shaderc` to committed per-backend bytecode (SPIR-V/GLSL/ESSL/DXBC/Metal; opt-in `-DVOXEL_BUILD_SHADERS=ON` regeneration); `bgfx::ProgramHandle` built via `createEmbeddedShader`
+- [x] Per-frame camera transform: view matrix built from pitch/yaw at the floating origin; projection matrix via `bx::mtxProj`; both submitted via `bgfx::setViewTransform` each frame
+- [x] Render loop wired into `main`: init renderer → poll window events → update camera → draw → `bgfx::frame` → clean shutdown on window close or ESC
+- [x] Renderer reads a flat voxel array and produces a visible window (`BgfxRenderer::renderWorld` iterates non-empty voxels and calls `drawVoxel` for each)
+- [x] Palette-based material colors rendering correctly: 16-color ABGR palette indexed by `Voxel::material.palette_index`; per-voxel color applied via transient vertex buffers each frame
+- [x] Basic free-camera movement (keyboard/mouse) for development/testing: WASD + Space/Shift to move, mouse to look; press F to toggle between free-camera and auto-orbit
+- [x] **Demo — Single voxel in space:** one voxel rendered at the world origin with the camera auto-orbiting it; press F to switch to free-camera and explore from any angle
 
 **M3 — World and Chunk Management**
 - [ ] Chunked terminal-layer world with configurable chunk size
