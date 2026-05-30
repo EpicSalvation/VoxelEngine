@@ -18,7 +18,8 @@ public:
     BgfxRenderer();
     ~BgfxRenderer() override;
 
-    void initialize() override;
+    void initialize(const platform::NativeWindowHandles& handles,
+                    uint32_t width, uint32_t height) override;
     void render() override;
     void drawVoxel(const WorldCoord& position) override;
     void setViewport(int width, int height) override;

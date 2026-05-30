@@ -1,6 +1,9 @@
 #pragma once
 
 #include "WorldCoord.h"
+#include "platform/NativeWindowHandles.h"
+
+#include <cstdint>
 
 // Abstract renderer interface.
 // Camera position uses WorldCoord so the renderer can implement floating-origin
@@ -8,7 +11,11 @@
 class Renderer {
 public:
     virtual ~Renderer() = default;
-    virtual void initialize() = 0;
+
+    // Initialize the graphics device against an existing native window surface.
+    // width/height are the initial framebuffer size in pixels.
+    virtual void initialize(const platform::NativeWindowHandles& handles,
+                            uint32_t width, uint32_t height) = 0;
     virtual void render() = 0;
 
     // Submit a voxel at world-space position for rendering this frame.

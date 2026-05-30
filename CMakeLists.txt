@@ -44,6 +44,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(yaml-cpp)
 
+# GLFW — windowing and input. bgfx renders into the native window handle GLFW
+# creates; GLFW itself creates no graphics context (the renderer sets
+# GLFW_NO_API). On Linux this pulls X11 (and optionally Wayland) dev libraries.
+set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  glfw
+  GIT_REPOSITORY https://github.com/glfw/glfw.git
+  GIT_TAG        3.4
+)
+FetchContent_MakeAvailable(glfw)
+
 # GoogleTest
 set(gtest_SOURCE_DIR "${CMAKE_SOURCE_DIR}/external/googletest")
 if(EXISTS "${gtest_SOURCE_DIR}/CMakeLists.txt")
@@ -66,6 +80,7 @@ endif()
 # see include/plugin_api.h).
 file(GLOB_RECURSE ENGINE_SOURCES
     src/core/*.cpp
+    src/platform/*.cpp
     src/plugins/*.cpp
     src/renderer/*.cpp
     src/world/*.cpp
@@ -89,6 +104,7 @@ target_link_libraries(voxel-engine
     bgfx                  # renderer internals only; not exposed in the public API
     bx
     bimg
+    glfw                  # windowing/input; native handles wrapped by src/platform
     yaml-cpp::yaml-cpp
 )
 
