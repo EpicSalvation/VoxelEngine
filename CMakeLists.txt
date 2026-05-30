@@ -16,8 +16,21 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 # bgfx.cmake — CMake wrapper for bgfx/bimg/bx maintained by bgfx's author.
 # Provides the bgfx, bimg, bx CMake targets.
 # Pinned to a specific release tag for reproducible builds.
-set(BGFX_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+# Building shaders from source needs bgfx's shaderc, which unconditionally links
+# tint/Dawn (bgfx's WebGPU backend) — thousands of translation units that blow
+# past CI runner limits. Shaders are therefore precompiled and committed
+# (shaders/generated/); the toolchain is built only when explicitly regenerating
+# them. See the "Shaders" section below and docs/ARCHITECTURE.md §9.
+option(VOXEL_BUILD_SHADERS "Build shaderc and recompile shaders from source" OFF)
+if(VOXEL_BUILD_SHADERS)
+  set(BGFX_BUILD_TOOLS          ON  CACHE BOOL "" FORCE)
+  set(BGFX_BUILD_TOOLS_SHADER   ON  CACHE BOOL "" FORCE)
+  set(BGFX_BUILD_TOOLS_GEOMETRY OFF CACHE BOOL "" FORCE)
+  set(BGFX_BUILD_TOOLS_TEXTURE  OFF CACHE BOOL "" FORCE)
+else()
+  set(BGFX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+endif()
 FetchContent_Declare(
   bgfx_cmake
   GIT_REPOSITORY https://github.com/bkaradzic/bgfx.cmake.git
@@ -119,6 +132,60 @@ function(voxel_set_warnings tgt)
 endfunction()
 
 voxel_set_warnings(voxel-engine)
+
+# ─── Shaders ─────────────────────────────────────────────────────────
+# Shaders are authored in shaders/*.sc and precompiled to per-backend bytecode
+# headers committed under shaders/generated/. Normal builds (and CI) consume the
+# committed headers and need no shader toolchain. BgfxRenderer includes the
+# per-backend headers and selects the right one at runtime via
+# bgfx::createEmbeddedShader. <generated/<profile>/<name>.sc.bin.h> resolves here:
+target_include_directories(voxel-engine PRIVATE ${CMAKE_SOURCE_DIR}/shaders)
+
+# Opt-in regeneration. After editing a shader:
+#   cmake -B build -DVOXEL_BUILD_SHADERS=ON
+#   cmake --build build --target voxel-shaders   # then commit shaders/generated/
+# All backends are produced from one host (shaderc cross-compiles), so the
+# committed set covers every platform: SPIR-V/GLSL/ESSL plus DXBC (Direct3D11)
+# and Metal. Direct3D12 (DXIL) and WebGPU (WGSL) are intentionally omitted —
+# see docs/ARCHITECTURE.md §9.
+if(VOXEL_BUILD_SHADERS)
+  set(BGFX_SHADER_INCLUDE_PATH ${bgfx_cmake_SOURCE_DIR}/bgfx/src)
+  set(VOXEL_SHADER_GEN ${CMAKE_SOURCE_DIR}/shaders/generated)
+  # Synchronized rows: target platform | shaderc profile | output dir | array suffix
+  set(_voxel_plats    linux  linux android windows osx)
+  set(_voxel_profiles spirv  120   100_es  s_5_0   metal)
+  set(_voxel_pdirs    spirv  glsl  essl    dxbc    metal)
+  set(_voxel_exts     spv    glsl  essl    dxbc    mtl)
+  list(LENGTH _voxel_profiles _voxel_n)
+  math(EXPR _voxel_last "${_voxel_n} - 1")
+  set(_voxel_shader_outputs)
+  foreach(_stage "vertex|vs_voxel" "fragment|fs_voxel")
+    string(REPLACE "|" ";" _stage_pair "${_stage}")
+    list(GET _stage_pair 0 _stage_type)
+    list(GET _stage_pair 1 _stage_name)
+    foreach(_i RANGE ${_voxel_last})
+      list(GET _voxel_plats    ${_i} _plat)
+      list(GET _voxel_profiles ${_i} _prof)
+      list(GET _voxel_pdirs    ${_i} _pdir)
+      list(GET _voxel_exts     ${_i} _ext)
+      set(_out ${VOXEL_SHADER_GEN}/${_pdir}/${_stage_name}.sc.bin.h)
+      add_custom_command(
+        OUTPUT  ${_out}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${VOXEL_SHADER_GEN}/${_pdir}
+        COMMAND bgfx::shaderc --type ${_stage_type} --platform ${_plat} -p ${_prof} -O 3
+                --varyingdef ${CMAKE_SOURCE_DIR}/shaders/varying.def.sc
+                -f ${CMAKE_SOURCE_DIR}/shaders/${_stage_name}.sc
+                -o ${_out} --bin2c ${_stage_name}_${_ext}
+                -i ${BGFX_SHADER_INCLUDE_PATH}
+        MAIN_DEPENDENCY ${CMAKE_SOURCE_DIR}/shaders/${_stage_name}.sc
+        DEPENDS ${CMAKE_SOURCE_DIR}/shaders/varying.def.sc
+        VERBATIM
+      )
+      list(APPEND _voxel_shader_outputs ${_out})
+    endforeach()
+  endforeach()
+  add_custom_target(voxel-shaders DEPENDS ${_voxel_shader_outputs})
+endif()
 
 # ─── Demos ───────────────────────────────────────────────────────────
 # Each demo is a thin executable linking the engine library. 'sandbox' is the

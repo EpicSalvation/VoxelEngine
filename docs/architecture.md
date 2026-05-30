@@ -319,6 +319,27 @@ Do not write renderer code that assumes a specific underlying API. All GPU inter
 
 The compile-time backend selection also means the project ships separate binaries per platform rather than a single binary that selects at runtime. This is a known bgfx tradeoff and an acceptable one for this project's scope.
 
+### Shaders
+
+Shaders are authored in bgfx's `.sc` dialect (`shaders/*.sc`, with `varying.def.sc` declaring the vertex attributes and interpolants) and compiled by bgfx's `shaderc` into per-backend bytecode, emitted as embeddable C headers. `BgfxRenderer` includes the per-backend headers and selects the variant matching the live backend at runtime via `bgfx::createEmbeddedShader`.
+
+**Why the bytecode is precompiled and committed, not built in CI.** bgfx's `shaderc` unconditionally links `tint`/Dawn (bgfx's WebGPU backend) — thousands of translation units that exhaust the CI runners' time/memory. Building it on every CI run (or every clean build) is impractical. So the compiled headers are **committed under `shaders/generated/`**, and the shader toolchain is built only on demand:
+
+- **Normal builds and CI** consume the committed headers and need no toolchain (`VOXEL_BUILD_SHADERS=OFF`, the default; bgfx tools are not built).
+- **Regenerating** after editing a shader is explicit and local:
+  ```
+  cmake -B build -DVOXEL_BUILD_SHADERS=ON
+  cmake --build build --target voxel-shaders   # then commit shaders/generated/
+  ```
+  `shaderc` cross-compiles all backends from one host, so the committed set is complete on any developer machine.
+
+The committed profile set covers the backends bgfx auto-selects: SPIR-V (Vulkan), GLSL and ESSL (OpenGL/ES), DXBC (Direct3D11), and Metal. Two are intentionally omitted, both documented follow-ups:
+
+- **Direct3D12 (DXIL):** shaderc's DXC path rejects its own generated varying-initialization under `--werror`. bgfx prefers Direct3D11 on Windows regardless, so D3D12 is deferred rather than worked around.
+- **WebGPU (WGSL):** not a current target.
+
+When adding or changing a shader, keep three things in sync, or the build breaks: the regeneration profile rows in `CMakeLists.txt`, the committed headers under `shaders/generated/`, and the embedded-shader backend matrix in `BgfxRenderer.cpp` (the `BGFX_PLATFORM_SUPPORTS_*` overrides and per-profile `#include`s). A referenced-but-missing profile is a build error; a committed-but-unreferenced one is dead weight.
+
 ---
 
 ## 10. Import/Export and Editor Interoperability
