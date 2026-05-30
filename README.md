@@ -277,28 +277,40 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] CMake build clean on target platforms *(verified building clean on Linux/GCC, macOS/Clang, and Windows/MSVC via CI; bgfx.cmake pinned to release v1.143.9257-544, C++20 required by bx, `CMAKE_POLICY_VERSION_MINIMUM` set for older deps, Wayland dev packages added to the Linux CI job)*
 
 **M2 — Basic Rendering**
+
+> The renderer is currently scaffolding only: the vertex layout, a hardcoded cube, VBO/IBO creation, and the floating-origin math helper exist, but nothing reaches the screen yet — there is no window, no shader program, no view/projection, and the renderer is not wired into `main`. The tasks below reflect the full path to a first visible frame.
+
+- [x] Floating-origin coordinate math in place (`WorldCoord::toLocalFloat`, camera-local submission helper) — math only; not yet driving a live camera
+- [ ] Window + surface: integrate a windowing library (e.g. GLFW), create a window, and feed its native handle into `bgfx::Init::platformData`
+- [ ] bgfx device init wired to the live window; window resize handled via `bgfx::reset`
+- [ ] Shader toolchain: compile a minimal vertex-color vs/fs pair (enable `shaderc` / `BGFX_BUILD_TOOLS`, or embed precompiled bytecode) and build a valid `bgfx::ProgramHandle`
+- [ ] Per-frame camera transform: build view + projection matrices and submit via `bgfx::setViewTransform`, with camera position carried as a `WorldCoord` through the floating origin
+- [ ] Render loop wired into `main`: init renderer → poll window events → update camera → draw → `bgfx::frame` → clean shutdown on window close
 - [ ] Renderer reads a terminal-layer voxel grid and produces a visible window
-- [x] Floating-origin pipeline in place (camera-local float submission to GPU)
 - [ ] Palette-based material colors rendering correctly
-- [ ] Basic free-camera movement for development/testing
+- [ ] Basic free-camera movement (keyboard/mouse) for development/testing, driven by window input
+- [ ] **Demo — Single voxel in space:** one voxel rendered at the world origin with the camera orbiting it (an auto-orbit needs no input system); exercises the full window → shader → view-transform → present path end-to-end
 
 **M3 — World and Chunk Management**
 - [ ] Chunked terminal-layer world with configurable chunk size
 - [ ] Chunk load/unload within a view distance budget
 - [ ] Simple procedural generation for a single terminal layer (flat or heightmap)
 - [ ] `LODManager` stub in place with per-layer view distance config read correctly
+- [ ] **Demo — Streaming terrain flythrough:** free-camera flight over a procedurally generated single-layer heightmap whose chunks stream in and out around the camera within the view-distance budget
 
 **M4 — Plugin System**
 - [x] `PluginManager` loading and unloading plugins from disk
 - [x] `plugin_api.h` stable for terminal-layer hooks: material registration, layer generator, voxel modification hook
 - [x] Example plugin registers a material and a layer generator; documented as the canonical plugin reference
 - [x] Plugin load errors reported clearly at startup
+- [ ] **Demo — Plugin-driven world:** render a world whose materials and terrain come entirely from the example plugin's registered material and layer generator, and show that removing the plugin visibly changes the output
 
 **M5 — Player Interaction**
 - [ ] Player can place and remove terminal-layer voxels
 - [ ] Dirty tracking at chunk granularity; modified chunks flagged correctly
 - [ ] Basic save/load of dirty chunks to disk
 - [ ] Collision detection against terminal-layer voxels
+- [ ] **Demo — Build, break, and persist:** move through the world with collision, place and remove terminal voxels, then quit and relaunch to confirm modified chunks were saved and reload identically
 
 **M6 — Multi-Layer Support**
 - [ ] Two-layer project config working (one composite layer above one terminal layer)
@@ -307,12 +319,14 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [ ] `DecompositionWorker` running on a thread pool with async pop-in; main thread never blocked
 - [ ] Decomposition determinism verified by test: same seed produces identical child grid across multiple runs
 - [ ] Immutable layer mode working: renders and collides, no decomposition, no persistence
+- [ ] **Demo — Decompose on approach:** a two-layer world where a large composite voxel renders as a solid block from afar and decomposes into its terminal child grid on demand as the player approaches, alongside an immutable backdrop layer that renders and collides but never decomposes
 
 **M7 — Voxel Editor Interoperability**
 - [ ] `.vox` import assigns content to a specified layer at a specified world anchor
 - [ ] `.vox` export with automatic chunking for volumes larger than 256³
 - [ ] Lossy export fallback (extended data dropped, warning logged) working correctly
 - [ ] Tested against a real MagicaVoxel-exported file
+- [ ] **Demo — MagicaVoxel round-trip:** import a real `.vox` model to a chosen layer and world anchor, view and edit it in-engine, then export back to `.vox` — exercising auto-chunking for large volumes and the logged lossy fallback when extended data is dropped
 
 ---
 
@@ -325,28 +339,33 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] Full material property struct on voxels
 - [x] Material definitions registered via plugin API
 - [ ] Simulation systems (mining resistance, etc.) driven by properties rather than IDs
+- [ ] **Demo — Material matters:** mine and interact with several materials whose differing `hardness`, `density`, and `structural_strength` produce visibly different behavior, all driven by plugin-registered property values rather than block IDs
 
 **M9 — Composition Recipes and Feature Generators**
 - [ ] Design task: recipe schema, feature generator interface, hierarchical seed parameter passing
 - [ ] Recipe system implemented and referenced from composite voxel types
 - [ ] Feature generator plugin hook live; example cave generator plugin written
 - [ ] Hierarchical seed parameters passed from parent recipe to child recipe
+- [ ] **Demo — Recipe-built voxel:** decompose a composite voxel whose recipe stamps feature overlays (e.g. a cave network and ore veins via the example feature-generator plugin) and biases child materials, with a parent seed visibly constraining what the children generate
 
 **M10 — Cascading Multi-Layer Decomposition**
 - [ ] Design task: cache eviction policy, memory budget across deep layer stacks
 - [ ] Full N-layer decomposition chain working
 - [ ] Clean chunk eviction and deterministic regeneration on cache miss verified by test
+- [ ] **Demo — Drill to the core:** descend through the full N-layer chain (e.g. continental → regional → local → terrain) one layer at a time, then revisit a previously evicted region to confirm it regenerates identically
 
 **M11 — Physics and Upward Damage Propagation**
 - [ ] Design task: propagation algorithm, performance budget, immutable boundary behavior
 - [ ] Structural strength aggregation from child voxels to parent composite
 - [ ] Collapse events firing and cascading correctly
 - [ ] Propagation confirmed to stop at immutable layer boundaries
+- [ ] **Demo — Structural collapse:** hollow out a composite structure until its aggregated structural strength fails, triggering a collapse that cascades to neighbors and visibly stops at an immutable layer boundary
 
 **M12 — Fluid and Thermal Simulation**
 - [ ] Design task: fluid and heat transfer algorithms, interaction with porosity and thermal conductivity properties
 - [ ] Fluid flow driven by `porosity` material property
 - [ ] Heat transfer driven by `thermal_conductivity` material property
+- [ ] **Demo — Flow and heat:** release a fluid that flows through porous materials and is blocked by low-`porosity` ones, plus a heat source that spreads at rates set by each material's `thermal_conductivity`
 
 **M13 — Polish and Release**
 - [ ] Design task: identify gaps between Phase 1 implementation and full architecture spec
