@@ -95,9 +95,12 @@ void buildChunkMeshData(const Chunk& chunk,
                             continue;
                     }
 
-                    // Bake directional shading into the face color so flat-colored
-                    // terrain reads its shape (top brightest, sides/bottom darker).
-                    const uint32_t faceColor = shadeColor(color, f.shade);
+                    // Bake directional shading into opaque face colors so flat-
+                    // colored terrain reads its shape (top brightest, sides/bottom
+                    // darker). Translucent media (water) keep a uniform color —
+                    // per-face shading on a flat fluid surface looks wrong.
+                    const uint32_t faceColor =
+                        translucent ? color : shadeColor(color, f.shade);
                     for (int i = 0; i < 6; ++i) {
                         const int* c = kCorner[f.tri[i]];
                         indices.push_back(static_cast<uint32_t>(out_vertices.size()));
