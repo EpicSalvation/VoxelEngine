@@ -353,11 +353,39 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] **Demo — Plugin-driven world:** `03-plugin-driven-world` — a world whose materials and terrain come entirely from disk-loaded plugins; press P to load/unload the `water` plugin at runtime and watch its standing water appear/disappear, with the world reverting exactly to the base-terrain (M3) output on removal
 
 **M5 — Player Interaction**
-- [ ] Player can place and remove terminal-layer voxels
-- [ ] Dirty tracking at chunk granularity; modified chunks flagged correctly
-- [ ] Basic save/load of dirty chunks to disk
-- [ ] Collision detection against terminal-layer voxels
-- [ ] **Demo — Build, break, and persist:** move through the world with collision, place and remove terminal voxels, then quit and relaunch to confirm modified chunks were saved and reload identically
+
+> Player interaction turns the read-only streaming world (M3/M4) into a writable one. The foundation it adds is the first **world-space single-voxel accessor** on the chunked `World` — until now the chunked path addressed voxels only by per-chunk local index or by whole-chunk load/unload, with no way to read or write the voxel at an arbitrary `WorldCoord`. Picking, editing, and collision all build on that accessor. M5 is also the first milestone to **fire the `on_voxel_modified` hook** (registered in M4, dormant until now) and the first to **write game state to disk**. Collision here is deliberately lightweight kinematic terminal-voxel AABB resolution — the material-property-driven `PhysicsSystem` (structural load, collapse, propagation) is M11, not this.
+
+*World-space voxel access — the shared foundation*
+- [ ] Global voxel-coordinate math in `ChunkCoordMath.h`: conversions between `WorldCoord`, a global integer voxel coordinate, and `(ChunkCoord, local x/y/z)`; double-only and `floor`-based to match `worldToChunk` (correct on the negative side of the origin)
+- [ ] World-space single-voxel accessors on the chunked `World`: `getVoxel(WorldCoord)` / `setVoxel(WorldCoord, const Voxel&)` that resolve the owning chunk and local index (read returns `Voxel::empty()` when the chunk is not resident; write is a no-op or loads on demand — decide and document), kept distinct from the finite-grid `getVoxel(int,int,int)`
+
+*Place and remove terminal-layer voxels*
+- [ ] Voxel raycast by DDA grid traversal, in double precision, from the eye along the camera look vector (reconstructed from pitch/yaw as in the demos), walking chunk-to-chunk across the resident `ChunkStore`; returns the first solid terminal voxel hit, the hit-face normal, and the adjacent empty cell, bounded by a max reach distance
+- [ ] Remove clears the hit voxel to `Voxel::empty()`; place writes the selected material into the adjacent empty cell, guarded against placing inside the player's own AABB
+- [ ] Build material selected from the loaded-plugin material registry (`PluginManager::materials()`); a minimal cycle/hotbar selection is sufficient for the demo
+- [ ] Re-mesh the edited chunk after each modification — and any neighbor chunk sharing the edited face, since opaque border faces are emitted without cross-chunk culling (an edit on a chunk seam changes the neighbor's visible faces); reuse `ChunkMesh::build`
+- [ ] Fire the `on_voxel_modified` hook (`PluginManager::voxelModifiedHooks()`) on every edit with the old/new `Voxel` and world position — activating the surface declared in `plugin_api.h` and registered in M4 but never yet fired
+- [ ] Mouse-button input (place / remove) added to the demo input path; targeted-voxel highlight and a crosshair for aiming
+
+*Dirty tracking at chunk granularity*
+- [ ] Chunk-granular dirty flag on `Chunk`, set by the world-space `setVoxel` and queryable; generator-produced but unmodified chunks stay clean
+- [ ] LOD eviction made dirty-aware: a dirty chunk is persisted before its in-memory copy is dropped (currently `unloadChunk` discards unconditionally), so player edits are never silently lost when the camera moves away
+
+*Persistence — save/load of dirty chunks*
+- [ ] Define an internal chunk save format: versioned header tied to the layer/voxel-size identity, compact voxel encoding (palette + run-length over `MaterialProperties`), one file (or packed region file) keyed by `ChunkCoord`; this is the engine's own save format, distinct from the M7 `.vox`/`.vxe` interop formats
+- [ ] Save path: write all dirty chunks to a per-world save directory on quit (optional periodic autosave); a world-save identity so a save can be matched back to its layer config
+- [ ] Load path: on chunk load, prefer a persisted dirty chunk over running the generator; clean chunks still regenerate deterministically (and re-run feature generators) on cache miss, while a loaded dirty chunk does **not** re-run feature generators (its edited state is authoritative)
+- [ ] Round-trip identity verified: a dirty chunk saved and reloaded is byte-for-byte equal to its in-memory state at save time
+
+*Collision against terminal-layer voxels*
+- [ ] Kinematic player body: `WorldCoord` position plus AABB extents, gravity, jump, and grounded state — a walk mode distinct from the existing free-fly camera (toggle between them), built on the world-space voxel accessor
+- [ ] Swept, axis-separated AABB-vs-voxel resolution against solid terminal voxels: query the voxel range overlapping the player AABB and resolve each axis independently to prevent tunneling at speed
+
+*Tests*
+- [ ] Unit tests covering: global voxel-coordinate round-trip including negative coordinates and chunk seams; DDA raycast hits and face normals on a known grid; AABB collision resolution (no tunneling, correct grounding); dirty-flag set/clear; save/load round-trip equality; and a dirty chunk evicted then reloaded comparing equal
+
+- [ ] **Demo — Build, break, and persist:** `04-build-break-persist` — walk the streamed world under gravity with terminal-voxel collision, place and remove voxels with the mouse (targeted voxel highlighted, crosshair shown), then quit and relaunch to confirm modified chunks were saved and reload identically while untouched terrain regenerates from the plugin generator
 
 **M6 — Multi-Layer Support**
 - [ ] Two-layer project config working (one composite layer above one terminal layer)
