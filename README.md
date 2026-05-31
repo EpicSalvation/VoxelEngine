@@ -276,9 +276,22 @@ cmake --build build
 # Single-config:   ./build/03-plugin-driven-world
 # Multi-config:    ./build/Debug/03-plugin-driven-world.exe
 
+# Run build/break/persist (M5): fly down, press G to drop into the walking
+# player (gravity + collision), left/right-click to break/place voxels (1-9
+# pick the material), then quit (ESC) and relaunch to confirm your edits
+# reloaded. Edits are saved to a "voxelsave/" directory beside the working
+# directory you launch from.
+# Single-config:   ./build/04-build-break-persist
+# Multi-config:    ./build/Debug/04-build-break-persist.exe
+
 # Run the test suite
 ctest --test-dir build
 ```
+
+Full controls for `04-build-break-persist`: **WASD** move, **mouse** look,
+**F** toggles the mouse cursor, **G** toggles walk/fly, **Space/Shift** fly
+up/down (or **Space** to jump while walking), **left/right mouse** break/place,
+**1**–**9** select the build material, **ESC** quits.
 
 ---
 
