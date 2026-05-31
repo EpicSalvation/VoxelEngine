@@ -65,6 +65,14 @@ static const uint16_t kCubeIndices[36] = {
     1,5,6, 1,6,2,
 };
 
+// The 12 edges of the cube template, as line-list index pairs. Used to draw the
+// targeted-voxel highlight as a wireframe box.
+static const uint16_t kCubeLineIndices[24] = {
+    0,1, 1,2, 2,3, 3,0,   // +Z face loop
+    4,5, 5,6, 6,7, 7,4,   // -Z face loop
+    0,4, 1,5, 2,6, 3,7,   // verticals
+};
+
 bgfx::VertexLayout VoxelVertex::layout;
 
 void VoxelVertex::initLayout() {
@@ -77,9 +85,11 @@ void VoxelVertex::initLayout() {
 BgfxRenderer::BgfxRenderer()
     : program(BGFX_INVALID_HANDLE),
       ibo(BGFX_INVALID_HANDLE),
+      lineIbo(BGFX_INVALID_HANDLE),
       cameraRot{0.0f, 0.0f, 0.0f},
       viewWidth(800),
       viewHeight(600),
+      crosshair(false),
       initialized(false)
 {}
 
@@ -118,7 +128,8 @@ void BgfxRenderer::initialize(const platform::NativeWindowHandles& handles,
     bgfx::setViewRect(0, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
 
     VoxelVertex::initLayout();
-    ibo = bgfx::createIndexBuffer(bgfx::makeRef(kCubeIndices, sizeof(kCubeIndices)));
+    ibo     = bgfx::createIndexBuffer(bgfx::makeRef(kCubeIndices, sizeof(kCubeIndices)));
+    lineIbo = bgfx::createIndexBuffer(bgfx::makeRef(kCubeLineIndices, sizeof(kCubeLineIndices)));
 
     const bgfx::RendererType::Enum rendererType = bgfx::getRendererType();
     bgfx::ShaderHandle vsh = bgfx::createEmbeddedShader(s_embeddedShaders, rendererType, "vs_voxel");
@@ -213,8 +224,48 @@ void BgfxRenderer::render() {
         }
     }
 
+    // Targeted-voxel highlights: the cube template drawn as a line list, scaled to
+    // the voxel size and centered on the voxel. Depth-tested (LEQUAL) so edges on
+    // the block surface still show, with no depth write so the outline never
+    // occludes geometry. Drawn on view 0 after the opaque pass.
+    constexpr uint64_t kLineState =
+        BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_PT_LINES;
+    for (const auto& ph : pendingHighlights) {
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::allocTransientVertexBuffer(&tvb, 8, VoxelVertex::layout);
+        VoxelVertex* verts = reinterpret_cast<VoxelVertex*>(tvb.data);
+        std::memcpy(verts, kCubeTemplate, sizeof(kCubeTemplate));
+        for (int i = 0; i < 8; ++i)
+            verts[i].abgr = ph.abgr;
+
+        glm::vec3 lp = ph.center.toLocalFloat(cameraPos);
+        // Scale the unit (±0.5) template up to the voxel size, nudged out slightly
+        // so the wireframe sits just outside the block faces (avoids z-fighting).
+        float mtx[16];
+        bx::mtxSRT(mtx, ph.size * 1.02f, ph.size * 1.02f, ph.size * 1.02f,
+                   0.0f, 0.0f, 0.0f, lp.x, lp.y, lp.z);
+
+        if (bgfx::isValid(program)) {
+            bgfx::setState(kLineState);
+            bgfx::setTransform(mtx);
+            bgfx::setVertexBuffer(0, &tvb);
+            bgfx::setIndexBuffer(lineIbo);
+            bgfx::submit(0, program);
+        }
+    }
+
+    // Crosshair: a centered '+' via bgfx debug text (8x16 character cells).
+    bgfx::setDebug(crosshair ? BGFX_DEBUG_TEXT : BGFX_DEBUG_NONE);
+    if (crosshair) {
+        bgfx::dbgTextClear();
+        const uint16_t chX = static_cast<uint16_t>((viewWidth  / 8) / 2);
+        const uint16_t chY = static_cast<uint16_t>((viewHeight / 16) / 2);
+        bgfx::dbgTextPrintf(chX, chY, 0x0f, "+");
+    }
+
     pendingVoxels.clear();
     pendingChunks.clear();
+    pendingHighlights.clear();
     bgfx::frame();
 }
 
@@ -240,6 +291,10 @@ void BgfxRenderer::renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOri
     pendingChunks.push_back({chunkOrigin, mesh.vbh(), mesh.opaqueIbh(), mesh.translucentIbh()});
 }
 
+void BgfxRenderer::drawVoxelHighlight(const WorldCoord& center, float size, uint32_t abgr) {
+    pendingHighlights.push_back({center, size, abgr});
+}
+
 void BgfxRenderer::setViewport(int width, int height) {
     viewWidth  = static_cast<uint32_t>(width);
     viewHeight = static_cast<uint32_t>(height);
@@ -257,6 +312,7 @@ void BgfxRenderer::setCameraRotation(float pitch, float yaw, float roll) {
 
 void BgfxRenderer::cleanup() {
     if (bgfx::isValid(ibo))     { bgfx::destroy(ibo);     ibo     = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(lineIbo)) { bgfx::destroy(lineIbo); lineIbo = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(program)) { bgfx::destroy(program); program = BGFX_INVALID_HANDLE; }
 }
 

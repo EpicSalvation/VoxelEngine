@@ -361,12 +361,12 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] World-space single-voxel accessors on the chunked `World`: `getVoxel(WorldCoord)` returns the resolved voxel or `Voxel::empty()` when the owning chunk is not resident; `setVoxel(WorldCoord, const Voxel&)` writes only when the chunk is resident and returns whether it did (no load-on-demand — the player edits already-streamed voxels), kept distinct from the finite-grid `getVoxel(int,int,int)`
 
 *Place and remove terminal-layer voxels*
-- [ ] Voxel raycast by DDA grid traversal, in double precision, from the eye along the camera look vector (reconstructed from pitch/yaw as in the demos), walking chunk-to-chunk across the resident `ChunkStore`; returns the first solid terminal voxel hit, the hit-face normal, and the adjacent empty cell, bounded by a max reach distance
-- [ ] Remove clears the hit voxel to `Voxel::empty()`; place writes the selected material into the adjacent empty cell, guarded against placing inside the player's own AABB
-- [ ] Build material selected from the loaded-plugin material registry (`PluginManager::materials()`); a minimal cycle/hotbar selection is sufficient for the demo
-- [ ] Re-mesh the edited chunk after each modification — and any neighbor chunk sharing the edited face, since opaque border faces are emitted without cross-chunk culling (an edit on a chunk seam changes the neighbor's visible faces); reuse `ChunkMesh::build`
-- [ ] Fire the `on_voxel_modified` hook (`PluginManager::voxelModifiedHooks()`) on every edit with the old/new `Voxel` and world position — activating the surface declared in `plugin_api.h` and registered in M4 but never yet fired
-- [ ] Mouse-button input (place / remove) added to the demo input path; targeted-voxel highlight and a crosshair for aiming
+- [x] Voxel raycast by DDA grid traversal, in double precision, from the eye along the camera look vector, walking chunk-to-chunk across the resident `ChunkStore`; returns the first solid terminal voxel hit, the hit-face normal, and the adjacent empty cell, bounded by a max reach distance (`src/world/VoxelRaycast.{h,cpp}`, Amanatides & Woo; cells in non-resident chunks read as empty; covered by `tests/VoxelRaycastTest.cpp`)
+- [x] Remove clears the hit voxel to `Voxel::empty()`; place writes the selected material into the adjacent empty cell, guarded against placing into the cell the camera occupies (the full player-AABB guard arrives with the collision group below)
+- [x] Build material selected from the loaded-plugin material registry (`PluginManager::materials()`); keys 1-9 pick a registered material in the `04-build-break-persist` demo
+- [x] Re-mesh the edited chunk after each modification via `ChunkMesh::build`. Only the owning chunk is rebuilt: the mesher always emits opaque border faces (no cross-chunk culling, ARCHITECTURE §9), so the neighbor's coincident face is already present and an opaque seam edit needs no neighbor rebuild
+- [x] Fire the `on_voxel_modified` hook (`PluginManager::voxelModifiedHooks()`) on every edit with the old/new `Voxel` and world position — activating the surface declared in `plugin_api.h` and registered in M4 but never previously fired
+- [x] Mouse-button input (left break / right place) added to the demo input path; targeted-voxel wireframe highlight (`BgfxRenderer::drawVoxelHighlight`) and a centered crosshair (`setCrosshair`, bgfx debug text)
 
 *Dirty tracking at chunk granularity*
 - [ ] Chunk-granular dirty flag on `Chunk`, set by the world-space `setVoxel` and queryable; generator-produced but unmodified chunks stay clean
