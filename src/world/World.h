@@ -51,6 +51,12 @@ public:
     void   unloadChunk(ChunkCoord coord);
     const  Chunk* getChunk(ChunkCoord coord) const;
 
+    // Insert a pre-built chunk (e.g. loaded from disk), replacing any chunk
+    // already resident at its coord. Returns the raw pointer, or nullptr if the
+    // world is not chunked. Used by the persistence load path to prefer a saved
+    // chunk over running the layer generator.
+    Chunk* insertChunk(std::unique_ptr<Chunk> chunk);
+
     // World-space single-voxel access for the chunked path — the foundation for
     // picking, editing, and collision (M5). The voxel cell containing pos is
     // resolved via chunkmath::worldToVoxel + voxelToChunkLocal. These address an

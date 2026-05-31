@@ -373,10 +373,10 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] LOD eviction made dirty-aware: the `04-build-break-persist` eviction pass skips dirty chunks (`!world.isChunkDirty(c)`) so edits are never silently lost when the camera moves away. The persistence group below extends this to save-then-evict (dirty chunks are written to disk, then allowed to leave memory)
 
 *Persistence — save/load of dirty chunks*
-- [ ] Define an internal chunk save format: versioned header tied to the layer/voxel-size identity, compact voxel encoding (palette + run-length over `MaterialProperties`), one file (or packed region file) keyed by `ChunkCoord`; this is the engine's own save format, distinct from the M7 `.vox`/`.vxe` interop formats
-- [ ] Save path: write all dirty chunks to a per-world save directory on quit (optional periodic autosave); a world-save identity so a save can be matched back to its layer config
-- [ ] Load path: on chunk load, prefer a persisted dirty chunk over running the generator; clean chunks still regenerate deterministically (and re-run feature generators) on cache miss, while a loaded dirty chunk does **not** re-run feature generators (its edited state is authoritative)
-- [ ] Round-trip identity verified: a dirty chunk saved and reloaded is byte-for-byte equal to its in-memory state at save time
+- [x] Internal chunk save format (`src/io/ChunkPersistence.{h,cpp}`): `VXCK` magic + version header carrying the world identity (`voxel_size_m`, `chunk_size_voxels`) and `ChunkCoord`, then a deduplicated material **palette + run-length** encoding of the grid; one `c_<x>_<y>_<z>.vxc` file per chunk. The engine's own save format, distinct from the M7 `.vox`/`.vxe` interop formats
+- [x] Save path: `WorldSave::saveDirtyChunks` writes every dirty chunk to a per-world save directory and clears its dirty flag; the `04-build-break-persist` demo saves on quit and save-then-evicts dirty chunks leaving the view budget. The world identity is stamped into each file so a save can be matched back to its layer config
+- [x] Load path: on chunk load the demo prefers a saved chunk (`hasChunk`/`tryLoadChunk` → `World::insertChunk`) over running the generator; clean chunks still regenerate deterministically on cache miss, while a loaded chunk is authoritative and does **not** re-run the generator or feature generators
+- [x] Round-trip identity verified: `tests/ChunkPersistenceTest.cpp` checks codec and on-disk save/load are byte-for-byte equal to the in-memory grid, and that identity-mismatch, garbage, and truncated files are rejected without crashing
 
 *Collision against terminal-layer voxels*
 - [ ] Kinematic player body: `WorldCoord` position plus AABB extents, gravity, jump, and grounded state — a walk mode distinct from the existing free-fly camera (toggle between them), built on the world-space voxel accessor

@@ -35,6 +35,13 @@ void World::unloadChunk(ChunkCoord coord) {
     chunks_.erase(coord);
 }
 
+Chunk* World::insertChunk(std::unique_ptr<Chunk> chunk) {
+    if (!chunked_ || !chunk) return nullptr;
+    Chunk* raw = chunk.get();
+    chunks_[chunk->coord()] = std::move(chunk);
+    return raw;
+}
+
 const Chunk* World::getChunk(ChunkCoord coord) const {
     auto it = chunks_.find(coord);
     return it == chunks_.end() ? nullptr : it->second.get();

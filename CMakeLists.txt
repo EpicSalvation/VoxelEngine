@@ -93,6 +93,7 @@ endif()
 # see include/plugin_api.h).
 file(GLOB_RECURSE ENGINE_SOURCES
     src/core/*.cpp
+    src/io/*.cpp
     src/platform/*.cpp
     src/plugins/*.cpp
     src/renderer/*.cpp

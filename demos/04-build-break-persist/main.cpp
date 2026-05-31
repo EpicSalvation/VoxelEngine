@@ -1,15 +1,18 @@
 // M5 demo — build, break, and persist.
 //
-// This demo grows across the M5 task groups. Implemented so far (place/remove
-// group): a plugin-driven streaming world (the M4 base-terrain heightmap) that
-// the player can edit. A double-precision DDA raycast from the eye finds the
-// targeted voxel; it is outlined with a wireframe highlight and a crosshair marks
-// the aim point. Left mouse removes the targeted voxel, right mouse places the
-// selected material into the empty cell against the targeted face. Every edit
-// fires the on_voxel_modified plugin hook and re-meshes the affected chunk.
+// This demo grows across the M5 task groups. Implemented so far:
+//   - place/remove: a plugin-driven streaming world (the M4 base-terrain
+//     heightmap) the player can edit. A double-precision DDA raycast finds the
+//     targeted voxel (wireframe highlight + crosshair); left mouse breaks, right
+//     mouse places the selected material. Every edit fires on_voxel_modified and
+//     re-meshes the affected chunk.
+//   - persistence: edited (dirty) chunks are written to a save directory — on
+//     eviction (save-then-evict) and on quit. On relaunch the saved chunks load
+//     from disk in place of the generator, so edits survive across runs while
+//     untouched terrain regenerates deterministically.
 //
-// Still to come in later M5 groups: a walking player with terminal-voxel
-// collision (replacing the free-fly camera) and on-disk persistence of edits.
+// Still to come: a walking player with terminal-voxel collision (replacing the
+// free-fly camera).
 //
 // Controls: WASD move, Space/Shift up/down, mouse look, F toggles cursor,
 // left/right mouse break/place, 1-9 select build material, ESC quits.
@@ -17,6 +20,7 @@
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
 #include "core/PluginManager.h"
+#include "io/ChunkPersistence.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
 #include "renderer/ChunkMesh.h"
@@ -114,6 +118,12 @@ layers:
     World world(terrain);
     LODManager lod(layerConfig);
     lod.setVerticalBand(0, 0);
+
+    // Persistence: dirty chunks are saved here and reloaded on relaunch. The
+    // identity ties a save to this layer's voxel/chunk size.
+    persistence::WorldSave save("voxelsave",
+        persistence::WorldIdentity{terrain.voxel_size_m, terrain.chunk_size_voxels});
+    std::cout << "[main] Save directory: " << save.directory() << "\n";
 
     std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash> meshes;
 
@@ -231,21 +241,31 @@ layers:
         int loaded = 0;
         for (const ChunkCoord& c : lod.desiredChunks(center, "terrain")) {
             if (meshes.count(c)) continue;
+            // Prefer a saved (player-edited) chunk over generating it. A loaded
+            // chunk is authoritative — it does not re-run the generator or any
+            // feature generators.
+            if (!world.getChunk(c) && save.hasChunk(c)) {
+                if (auto disk = save.tryLoadChunk(c))
+                    world.insertChunk(std::move(disk));
+            }
             Chunk* chunk = world.loadChunk(c, generator, generatorUserData);
             if (!chunk) continue;
             meshes.emplace(c, ChunkMesh::build(*chunk));
             if (++loaded >= kLoadsPerFrame) break;
         }
 
-        // Evict chunks outside the view budget — but never a dirty (player-edited)
-        // chunk, so edits are not silently lost when the camera moves away. Once
-        // persistence lands (next M5 group) this becomes save-then-evict; until
-        // then dirty chunks stay resident.
+        // Evict chunks outside the view budget. A dirty chunk is saved before its
+        // in-memory copy is dropped (save-then-evict), so edits are never lost;
+        // clean chunks are dropped directly and regenerate on cache miss.
         std::vector<ChunkCoord> toEvict;
         for (const auto& kv : meshes)
-            if (lod.shouldEvict(center, kv.first, "terrain") && !world.isChunkDirty(kv.first))
+            if (lod.shouldEvict(center, kv.first, "terrain"))
                 toEvict.push_back(kv.first);
         for (const ChunkCoord& c : toEvict) {
+            if (world.isChunkDirty(c)) {
+                if (const Chunk* ch = world.getChunk(c)) save.saveChunk(*ch);
+                world.clearChunkDirty(c);
+            }
             meshes[c].destroy();
             meshes.erase(c);
             world.unloadChunk(c);
@@ -292,6 +312,11 @@ layers:
         }
         renderer.render();
     }
+
+    // Persist any edits still resident so they survive the next launch.
+    int savedOnQuit = save.saveDirtyChunks(world);
+    std::cout << "[main] Saved " << savedOnQuit << " edited chunk(s) to "
+              << save.directory() << "\n";
 
     for (auto& kv : meshes) kv.second.destroy();
     renderer.shutdown();

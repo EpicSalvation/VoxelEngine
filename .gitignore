@@ -81,3 +81,6 @@ Thumbs.db
 # ─── Test output (test *sources* under tests/ are tracked) ───────────
 test_detail.xml
 Testing/
+
+# ─── Demo save-game output (04-build-break-persist writes here) ──────
+voxelsave/
