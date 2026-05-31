@@ -46,7 +46,8 @@ private:
     struct PendingChunk {
         WorldCoord               origin;
         bgfx::VertexBufferHandle vbh;
-        bgfx::IndexBufferHandle  ibh;
+        bgfx::IndexBufferHandle  opaqueIbh;
+        bgfx::IndexBufferHandle  translucentIbh;
     };
 
     std::vector<PendingVoxel> pendingVoxels;

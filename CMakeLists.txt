@@ -187,6 +187,36 @@ if(VOXEL_BUILD_SHADERS)
   add_custom_target(voxel-shaders DEPENDS ${_voxel_shader_outputs})
 endif()
 
+# ─── Plugins ─────────────────────────────────────────────────────────
+# Runtime-loadable plugins, each built as a MODULE shared library from
+# plugins/<name>/plugin.cpp and loaded via PluginManager::loadPlugin at runtime.
+# Plugins link ZERO engine symbols (see docs/architecture.md §12): they see only
+# the public API in include/ — plus src/ for the in-tree Voxel definition a
+# generator fills — and receive a function-pointer table (PluginContext). All
+# plugin binaries land in one folder under the build tree. Adding a plugin is
+# just dropping in plugins/<name>/plugin.cpp — no edits here are needed.
+set(VOXEL_PLUGIN_OUTDIR ${CMAKE_BINARY_DIR}/plugins)
+file(GLOB _voxel_plugin_dirs RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/plugins
+     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/*)
+list(SORT _voxel_plugin_dirs)
+set(VOXEL_PLUGIN_TARGETS)
+foreach(_plug ${_voxel_plugin_dirs})
+  set(_plug_dir  ${CMAKE_CURRENT_SOURCE_DIR}/plugins/${_plug})
+  set(_plug_main ${_plug_dir}/plugin.cpp)
+  if(IS_DIRECTORY ${_plug_dir} AND EXISTS ${_plug_main})
+    add_library(${_plug} MODULE ${_plug_main})
+    target_include_directories(${_plug} PRIVATE include src)
+    target_link_libraries(${_plug} PRIVATE glm::glm)
+    # PREFIX "" so the artifact is e.g. water.so (not libwater.so) on every OS.
+    set_target_properties(${_plug} PROPERTIES
+      PREFIX ""
+      LIBRARY_OUTPUT_DIRECTORY ${VOXEL_PLUGIN_OUTDIR}
+      RUNTIME_OUTPUT_DIRECTORY ${VOXEL_PLUGIN_OUTDIR})
+    voxel_set_warnings(${_plug})
+    list(APPEND VOXEL_PLUGIN_TARGETS ${_plug})
+  endif()
+endforeach()
+
 # ─── Demos ───────────────────────────────────────────────────────────
 # The demos form a progressive series of reference examples, each a standalone
 # executable linking the engine library. Every immediate subdirectory of demos/
@@ -206,17 +236,57 @@ foreach(_demo ${_voxel_demo_dirs})
     target_link_libraries(${_demo} PRIVATE voxel-engine bgfx bx glfw)
     target_include_directories(${_demo} PRIVATE src)
     voxel_set_warnings(${_demo})
+    # The plugin-driven demo loads these from disk; build them first and inject
+    # their per-config paths. Harmless no-ops for demos that don't use them.
+    if(VOXEL_PLUGIN_TARGETS)
+      add_dependencies(${_demo} ${VOXEL_PLUGIN_TARGETS})
+    endif()
+    if(TARGET base-terrain)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_BASE_PLUGIN_PATH="$<TARGET_FILE:base-terrain>")
+    endif()
+    if(TARGET water)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_WATER_PLUGIN_PATH="$<TARGET_FILE:water>")
+    endif()
   endif()
 endforeach()
 
 # ─── Tests ───────────────────────────────────────────────────────────
 enable_testing()
 
+# Fixture plugins for the PluginManager disk-load tests — real MODULE shared
+# libraries built from tests/fixtures/*.cpp. Excluded from the test executable's
+# own sources below; their on-disk paths are injected as compile definitions.
+set(VOXEL_TEST_PLUGINS)
+foreach(_fx good badinit nosym)
+  set(_fx_src ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${_fx}_plugin.cpp)
+  if(EXISTS ${_fx_src})
+    add_library(test-plugin-${_fx} MODULE ${_fx_src})
+    target_include_directories(test-plugin-${_fx} PRIVATE include src)
+    target_link_libraries(test-plugin-${_fx} PRIVATE glm::glm)
+    set_target_properties(test-plugin-${_fx} PROPERTIES
+      PREFIX ""
+      LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test-plugins
+      RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test-plugins)
+    voxel_set_warnings(test-plugin-${_fx})
+    list(APPEND VOXEL_TEST_PLUGINS test-plugin-${_fx})
+  endif()
+endforeach()
+
 file(GLOB_RECURSE TEST_SOURCES tests/*.cpp)
+list(FILTER TEST_SOURCES EXCLUDE REGEX "/fixtures/")
 if(TEST_SOURCES)
   add_executable(voxel-engine-tests ${TEST_SOURCES})
   target_link_libraries(voxel-engine-tests PRIVATE voxel-engine gtest gtest_main)
   target_include_directories(voxel-engine-tests PRIVATE src)
   voxel_set_warnings(voxel-engine-tests)
+  if(VOXEL_TEST_PLUGINS)
+    add_dependencies(voxel-engine-tests ${VOXEL_TEST_PLUGINS})
+    target_compile_definitions(voxel-engine-tests PRIVATE
+      VOXEL_FIXTURE_GOOD="$<TARGET_FILE:test-plugin-good>"
+      VOXEL_FIXTURE_BADINIT="$<TARGET_FILE:test-plugin-badinit>"
+      VOXEL_FIXTURE_NOSYM="$<TARGET_FILE:test-plugin-nosym>")
+  endif()
   add_test(NAME AllTests COMMAND voxel-engine-tests)
 endif()

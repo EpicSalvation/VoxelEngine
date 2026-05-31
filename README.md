@@ -209,6 +209,9 @@ voxel-game-engine
 ├── demos                                # Progressive series of reference examples
 │   └── 01-single-voxel                  # M2: single voxel in space (auto-orbit / free-cam)
 │       └── main.cpp                      # Each demo/<NN-name>/main.cpp builds its own target
+├── plugins                              # Runtime-loadable plugins, each a MODULE shared lib
+│   ├── base-terrain/plugin.cpp          # Materials + terrain layer generator (the M3 world)
+│   └── water/plugin.cpp                 # Removable: water material + sea-level feature generator
 ├── tests
 │   └── LayerConfigTest.cpp               # Unit tests; link voxel-engine + GoogleTest
 ├── shaders                               # bgfx .sc shader sources + committed bytecode
@@ -254,6 +257,10 @@ standalone target named after its folder. Every `demos/<NN-name>/` with a
 or build one with `--target <NN-name>`. To add a demo, drop in a new
 `demos/<NN-name>/main.cpp`; no CMake edits are needed.
 
+The `plugins/` directory is discovered the same way: every `plugins/<name>/`
+with a `plugin.cpp` is built as a runtime-loadable shared library into
+`build/plugins/`. The `03-plugin-driven-world` demo loads them from there.
+
 ```bash
 git clone <repository-url>
 cd voxel-game-engine
@@ -263,6 +270,11 @@ cmake --build build
 # Run the first demo (single voxel in space).
 # Single-config generators (Make/Ninja):     ./build/01-single-voxel
 # Multi-config generators (Visual Studio):    ./build/Debug/01-single-voxel.exe
+
+# Run the plugin-driven world (M4): terrain + materials come from disk-loaded
+# plugins; press P to load/unload the water plugin and watch it flood/drain.
+# Single-config:   ./build/03-plugin-driven-world
+# Multi-config:    ./build/Debug/03-plugin-driven-world.exe
 
 # Run the test suite
 ctest --test-dir build
@@ -329,16 +341,16 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 **M4 — Plugin System**
 
-> **Partially complete.** The flat callback API (`include/plugin_api.h`) and the `PluginManager` registries are implemented and in active use — the example plugin's material and layer-generator registrations drive the M3 `02-streaming-terrain` demo end-to-end. Two gaps remain before M4 is done: (1) the disk-load path is implemented but never exercised by an actual shared-library plugin (the example plugin is compiled into the engine and wired in via `wireInPlugin`, not built as a `.so`/`.dll`), and (2) there is no runtime unload — `~PluginManager` only bulk-closes library handles at shutdown, with no per-plugin unload and no registry teardown. The plugin system also has no direct unit tests yet.
+> **Complete.** The flat callback API (`include/plugin_api.h`) and the `PluginManager` registries drive a fully plugin-built world. Two plugins are now built as real shared libraries under `plugins/` and loaded from disk at runtime: `base-terrain` (materials + the `terrain` layer generator — the M3 look) and `water` (a `water` material + a feature generator that floods empty voxels up to a fixed sea level). `PluginManager` gained per-plugin runtime unload: every registration is tagged with its owning plugin and torn down — before the library is closed, so no callback can dangle — on `unloadPlugin`. The `03-plugin-driven-world` demo loads the base plugin from disk and toggles the water plugin on/off live (press P), regenerating resident chunks so flat water appears and disappears in place; with water unloaded the world is byte-for-byte the base terrain. Direct unit tests cover the disk-load, error, and teardown paths.
 
 - [x] `PluginManager` loads plugins from disk: `loadPlugin` / `loadPluginsFromDirectory` via `LoadLibrary`/`dlopen`, resolves `voxel_plugin_init`, and calls it with a `PluginContext` (registration lambdas wired in `buildContext`)
-- [ ] Plugin **unloading**: currently only a bulk `FreeLibrary`/`dlclose` of all handles in `~PluginManager`; no per-plugin runtime unload and no teardown of the append-only registries (unloading a library while its callbacks remain registered would dangle)
-- [x] `plugin_api.h` stable for terminal-layer hooks: material registration, layer generator, voxel modification hook *(the `on_voxel_modified` surface exists but is not yet fired anywhere — voxel modification lands in M5; chunk-lifecycle hooks are now fired by the M3 streaming loop)*
-- [x] Example plugin registers materials (stone, grass) and a layer generator (terrain); documented as the canonical reference (`src/plugins/ExamplePlugin`, ARCHITECTURE.md §8) — but compiled into the engine and wired via `wireInPlugin`, **not yet built as a loadable shared library**
-- [x] Plugin load errors reported clearly at startup (cannot-open, missing `voxel_plugin_init`, non-zero init return) — implemented on the disk-load path, which is not yet exercised end-to-end
-- [ ] Build the example plugin as a real `.so`/`.dll` and load it through `loadPluginsFromDirectory`, exercising the disk-load + error-reporting paths
-- [ ] Direct unit tests for the plugin system: load-from-disk success/failure, missing-symbol and non-zero-init error paths, duplicate-material overwrite warning
-- [ ] **Demo — Plugin-driven world:** render a world whose materials and terrain come entirely from the example plugin's registered material and layer generator, and show that removing the plugin visibly changes the output *(the M3 `02-streaming-terrain` demo is already plugin-driven via the registered generator; the dedicated "remove the plugin to change the output" demo does not exist yet)*
+- [x] Plugin **unloading**: `unloadPlugin(PluginId)` erases all of a plugin's registry entries (every record carries an internal owner id, set around its `init` call) **before** `FreeLibrary`/`dlclose`, so a callback can never point into unloaded code; a failed/non-zero `init` rolls back any partial registrations the same way
+- [x] `plugin_api.h` stable for terminal-layer hooks: material registration, layer generator, feature generator, voxel modification hook *(the `on_voxel_modified` surface exists but is not yet fired anywhere — voxel modification lands in M5; chunk-lifecycle hooks are fired by the M3 streaming loop; feature generators are applied after the base layer generator in the M4 chunk path)*
+- [x] Example plugin registers materials (stone, grass) and a layer generator (terrain); documented as the canonical reference (`src/plugins/ExamplePlugin`, architecture.md §8). The disk-loaded `plugins/base-terrain` is its shared-library counterpart with identical generation math
+- [x] Plugin load errors reported clearly at startup (cannot-open, missing `voxel_plugin_init`, non-zero init return) — exercised end-to-end by the disk-load unit tests
+- [x] Build the example plugin as a real `.so`/`.dll` and load it through `loadPlugin` / `loadPluginsFromDirectory`, exercising the disk-load + error-reporting paths (`plugins/base-terrain`, `plugins/water`)
+- [x] Direct unit tests for the plugin system: load-from-disk success/failure, missing-symbol and non-zero-init error paths (with rollback), per-plugin unload teardown, duplicate-material overwrite warning (`tests/PluginManagerTest.cpp`, fixtures under `tests/fixtures/`)
+- [x] **Demo — Plugin-driven world:** `03-plugin-driven-world` — a world whose materials and terrain come entirely from disk-loaded plugins; press P to load/unload the `water` plugin at runtime and watch its standing water appear/disappear, with the world reverting exactly to the base-terrain (M3) output on removal
 
 **M5 — Player Interaction**
 - [ ] Player can place and remove terminal-layer voxels

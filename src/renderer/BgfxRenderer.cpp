@@ -150,8 +150,18 @@ void BgfxRenderer::render() {
                 0.01f, 1000.0f,
                 bgfx::getCaps()->homogeneousDepth);
 
+    // Two views share the camera transform and the back buffer (with its depth):
+    //   view 0 — opaque geometry, depth write on (clears color+depth, set at init)
+    //   view 1 — translucent geometry, alpha-blended, depth test on / write off,
+    //            no cull, drawn after view 0 so water composites over the terrain.
+    // View 1 deliberately has no clear, so it keeps view 0's color and depth.
     bgfx::setViewTransform(0, view, proj);
     bgfx::setViewRect(0, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
+    bgfx::setViewTransform(1, view, proj);
+    bgfx::setViewRect(1, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
+
+    constexpr uint64_t kTranslucentState =
+        BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_BLEND_ALPHA;
 
     bgfx::touch(0);
 
@@ -178,19 +188,29 @@ void BgfxRenderer::render() {
             bgfx::submit(0, program);
     }
 
-    // Per-chunk static meshes: one draw call each, placed via a floating-origin
-    // model transform of the chunk's world origin (see ARCHITECTURE.md §9).
+    // Per-chunk static meshes: one draw call per non-empty batch, placed via a
+    // floating-origin model transform of the chunk's world origin (ARCHITECTURE
+    // §9). Opaque batch on view 0; translucent (water) batch on view 1.
     for (const auto& pc : pendingChunks) {
         glm::vec3 lo = pc.origin.toLocalFloat(cameraPos);
         float mtx[16];
         bx::mtxTranslate(mtx, lo.x, lo.y, lo.z);
 
-        bgfx::setState(BGFX_STATE_DEFAULT);
-        bgfx::setTransform(mtx);
-        bgfx::setVertexBuffer(0, pc.vbh);
-        bgfx::setIndexBuffer(pc.ibh);
-        if (bgfx::isValid(program))
+        if (bgfx::isValid(pc.opaqueIbh) && bgfx::isValid(program)) {
+            bgfx::setState(BGFX_STATE_DEFAULT);
+            bgfx::setTransform(mtx);
+            bgfx::setVertexBuffer(0, pc.vbh);
+            bgfx::setIndexBuffer(pc.opaqueIbh);
             bgfx::submit(0, program);
+        }
+
+        if (bgfx::isValid(pc.translucentIbh) && bgfx::isValid(program)) {
+            bgfx::setState(kTranslucentState);
+            bgfx::setTransform(mtx);
+            bgfx::setVertexBuffer(0, pc.vbh);
+            bgfx::setIndexBuffer(pc.translucentIbh);
+            bgfx::submit(1, program);
+        }
     }
 
     pendingVoxels.clear();
@@ -217,7 +237,7 @@ void BgfxRenderer::renderWorld(const World& world) {
 
 void BgfxRenderer::renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin) {
     if (mesh.empty()) return;
-    pendingChunks.push_back({chunkOrigin, mesh.vbh(), mesh.ibh()});
+    pendingChunks.push_back({chunkOrigin, mesh.vbh(), mesh.opaqueIbh(), mesh.translucentIbh()});
 }
 
 void BgfxRenderer::setViewport(int width, int height) {

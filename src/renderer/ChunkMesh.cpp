@@ -6,27 +6,41 @@
 
 ChunkMesh ChunkMesh::build(const Chunk& chunk) {
     std::vector<MeshVertex> verts;
-    std::vector<uint32_t>   idx;
-    buildChunkMeshData(chunk, verts, idx);
+    std::vector<uint32_t>   opaqueIdx;
+    std::vector<uint32_t>   translucentIdx;
+    buildChunkMeshData(chunk, verts, opaqueIdx, translucentIdx);
 
     ChunkMesh mesh;
-    if (idx.empty())
+    if (verts.empty())
         return mesh;  // empty mesh; no buffers created
 
-    // Copy into bgfx-owned memory so the local vectors can be freed immediately.
+    // One vertex buffer shared by both index batches. Copy into bgfx-owned
+    // memory so the local vectors can be freed immediately.
     const bgfx::Memory* vmem =
         bgfx::copy(verts.data(), static_cast<uint32_t>(verts.size() * sizeof(MeshVertex)));
-    const bgfx::Memory* imem =
-        bgfx::copy(idx.data(), static_cast<uint32_t>(idx.size() * sizeof(uint32_t)));
-
     mesh.vbh_ = bgfx::createVertexBuffer(vmem, VoxelVertex::layout);
-    mesh.ibh_ = bgfx::createIndexBuffer(imem, BGFX_BUFFER_INDEX32);
-    mesh.indexCount_ = static_cast<uint32_t>(idx.size());
+
+    if (!opaqueIdx.empty()) {
+        const bgfx::Memory* imem =
+            bgfx::copy(opaqueIdx.data(), static_cast<uint32_t>(opaqueIdx.size() * sizeof(uint32_t)));
+        mesh.opaqueIbh_   = bgfx::createIndexBuffer(imem, BGFX_BUFFER_INDEX32);
+        mesh.opaqueCount_ = static_cast<uint32_t>(opaqueIdx.size());
+    }
+
+    if (!translucentIdx.empty()) {
+        const bgfx::Memory* imem =
+            bgfx::copy(translucentIdx.data(), static_cast<uint32_t>(translucentIdx.size() * sizeof(uint32_t)));
+        mesh.translucentIbh_   = bgfx::createIndexBuffer(imem, BGFX_BUFFER_INDEX32);
+        mesh.translucentCount_ = static_cast<uint32_t>(translucentIdx.size());
+    }
+
     return mesh;
 }
 
 void ChunkMesh::destroy() {
-    if (bgfx::isValid(vbh_)) { bgfx::destroy(vbh_); vbh_ = BGFX_INVALID_HANDLE; }
-    if (bgfx::isValid(ibh_)) { bgfx::destroy(ibh_); ibh_ = BGFX_INVALID_HANDLE; }
-    indexCount_ = 0;
+    if (bgfx::isValid(vbh_))            { bgfx::destroy(vbh_);            vbh_            = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(opaqueIbh_))      { bgfx::destroy(opaqueIbh_);      opaqueIbh_      = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(translucentIbh_)) { bgfx::destroy(translucentIbh_); translucentIbh_ = BGFX_INVALID_HANDLE; }
+    opaqueCount_      = 0;
+    translucentCount_ = 0;
 }

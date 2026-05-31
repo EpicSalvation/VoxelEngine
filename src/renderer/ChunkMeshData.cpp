@@ -31,10 +31,11 @@ constexpr Face kFaces[6] = {
     {  1,  0,  0, {1, 5, 6, 1, 6, 2} },  // +X
 };
 
+bool inBounds(int n, int x, int y, int z) {
+    return x >= 0 && x < n && y >= 0 && y < n && z >= 0 && z < n;
+}
+
 bool solidAt(const Chunk& chunk, int x, int y, int z) {
-    const int n = chunk.size();
-    if (x < 0 || x >= n || y < 0 || y >= n || z < 0 || z >= n)
-        return false;  // outside the chunk: treat as empty so border faces are drawn
     return !chunk.at(x, y, z).isEmpty();
 }
 
@@ -42,9 +43,11 @@ bool solidAt(const Chunk& chunk, int x, int y, int z) {
 
 void buildChunkMeshData(const Chunk& chunk,
                         std::vector<MeshVertex>& out_vertices,
-                        std::vector<uint32_t>&   out_indices) {
+                        std::vector<uint32_t>&   out_opaque_indices,
+                        std::vector<uint32_t>&   out_translucent_indices) {
     out_vertices.clear();
-    out_indices.clear();
+    out_opaque_indices.clear();
+    out_translucent_indices.clear();
 
     const int n = chunk.size();
     for (int z = 0; z < n; ++z) {
@@ -53,16 +56,29 @@ void buildChunkMeshData(const Chunk& chunk,
                 const Voxel& v = chunk.at(x, y, z);
                 if (v.isEmpty()) continue;
 
-                const uint32_t color = palette::color(v.material.palette_index);
+                const uint32_t color       = palette::color(v.material.palette_index);
+                const bool     translucent = palette::isTranslucent(v.material.palette_index);
+                std::vector<uint32_t>& indices =
+                    translucent ? out_translucent_indices : out_opaque_indices;
 
                 for (const Face& f : kFaces) {
-                    // Cull only against solid in-chunk neighbors; emit at borders.
-                    if (solidAt(chunk, x + f.dx, y + f.dy, z + f.dz))
-                        continue;
+                    const int nx = x + f.dx, ny = y + f.dy, nz = z + f.dz;
+
+                    if (inBounds(n, nx, ny, nz)) {
+                        // Cull against a solid in-chunk neighbor.
+                        if (solidAt(chunk, nx, ny, nz))
+                            continue;
+                    } else {
+                        // Border: opaque voxels emit the face (no cross-chunk
+                        // lookup); translucent voxels assume the medium continues
+                        // and skip it, so water does not wall up at chunk seams.
+                        if (translucent)
+                            continue;
+                    }
 
                     for (int i = 0; i < 6; ++i) {
                         const int* c = kCorner[f.tri[i]];
-                        out_indices.push_back(static_cast<uint32_t>(out_vertices.size()));
+                        indices.push_back(static_cast<uint32_t>(out_vertices.size()));
                         out_vertices.push_back(MeshVertex{
                             static_cast<float>(x + c[0]),
                             static_cast<float>(y + c[1]),

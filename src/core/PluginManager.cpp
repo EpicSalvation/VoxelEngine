@@ -24,18 +24,29 @@ static void* platformDlSym(void* h, const char* sym)       { return dlsym(h, sym
 static void  platformDlClose(void* h)                      { dlclose(h); }
 #endif
 
+namespace {
+// Erase every entry of `vec` whose owner == id. Used by unloadPlugin to tear
+// down a single plugin's registrations across all registries uniformly.
+template <typename Vec>
+void eraseOwned(Vec& vec, PluginId id) {
+    vec.erase(std::remove_if(vec.begin(), vec.end(),
+                             [id](const auto& e) { return e.owner == id; }),
+              vec.end());
+}
+}  // namespace
+
 PluginManager::PluginManager() {}
 
 PluginManager::~PluginManager() {
-    for (void* handle : handles_)
-        if (handle) platformDlClose(handle);
+    for (const LoadedPlugin& p : loaded_)
+        if (p.handle) platformDlClose(p.handle);
 }
 
-bool PluginManager::loadPlugin(const std::string& path) {
+PluginId PluginManager::loadPlugin(const std::string& path) {
     void* handle = platformDlOpen(path.c_str());
     if (!handle) {
         std::cerr << "[PluginManager] Cannot open " << path << ": " << platformDlError() << "\n";
-        return false;
+        return kInvalidPluginId;
     }
 
     auto* init = reinterpret_cast<VoxelPluginInitFn*>(
@@ -44,21 +55,35 @@ bool PluginManager::loadPlugin(const std::string& path) {
         std::cerr << "[PluginManager] " << path << " does not export '"
                   << VOXEL_PLUGIN_INIT_SYMBOL << "': " << platformDlError() << "\n";
         platformDlClose(handle);
-        return false;
+        return kInvalidPluginId;
     }
 
+    const PluginId id = nextPluginId_++;
     PluginContext ctx = buildContext();
+    currentOwner_ = id;
     int result = init(&ctx);
+    currentOwner_ = kInvalidPluginId;
     if (result != 0) {
         std::cerr << "[PluginManager] Plugin init failed for " << path
                   << " (returned " << result << ")\n";
+        // init may have registered some callbacks before failing; remove them
+        // before closing the library so none dangle.
+        eraseOwned(layerGenerators_,    id);
+        eraseOwned(featureGenerators_,  id);
+        eraseOwned(materials_,          id);
+        eraseOwned(voxelModifiedHooks_, id);
+        eraseOwned(structuralEventHooks_, id);
+        eraseOwned(chunkCreatedHooks_,  id);
+        eraseOwned(chunkEvictedHooks_,  id);
+        eraseOwned(importers_,          id);
+        eraseOwned(exporters_,          id);
         platformDlClose(handle);
-        return false;
+        return kInvalidPluginId;
     }
 
-    handles_.push_back(handle);
-    std::cout << "[PluginManager] Loaded: " << path << "\n";
-    return true;
+    loaded_.push_back({id, handle});
+    std::cout << "[PluginManager] Loaded: " << path << " (id " << id << ")\n";
+    return id;
 }
 
 void PluginManager::loadPluginsFromDirectory(const std::string& dirPath) {
@@ -82,11 +107,52 @@ void PluginManager::loadPluginsFromDirectory(const std::string& dirPath) {
     }
 }
 
-void PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
+PluginId PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
+    const PluginId id = nextPluginId_++;
     PluginContext ctx = buildContext();
+    currentOwner_ = id;
     int result = initFn(&ctx);
-    if (result != 0)
+    currentOwner_ = kInvalidPluginId;
+    if (result != 0) {
         std::cerr << "[PluginManager] Wired-in plugin init returned " << result << "\n";
+        eraseOwned(layerGenerators_,    id);
+        eraseOwned(featureGenerators_,  id);
+        eraseOwned(materials_,          id);
+        eraseOwned(voxelModifiedHooks_, id);
+        eraseOwned(structuralEventHooks_, id);
+        eraseOwned(chunkCreatedHooks_,  id);
+        eraseOwned(chunkEvictedHooks_,  id);
+        eraseOwned(importers_,          id);
+        eraseOwned(exporters_,          id);
+        return kInvalidPluginId;
+    }
+    loaded_.push_back({id, nullptr});
+    return id;
+}
+
+bool PluginManager::unloadPlugin(PluginId id) {
+    auto it = std::find_if(loaded_.begin(), loaded_.end(),
+                           [id](const LoadedPlugin& p) { return p.id == id; });
+    if (it == loaded_.end())
+        return false;
+
+    // Remove every registration owned by this plugin BEFORE closing the library,
+    // so no engine subsystem can invoke a callback that points into unloaded code.
+    eraseOwned(layerGenerators_,      id);
+    eraseOwned(featureGenerators_,    id);
+    eraseOwned(materials_,            id);
+    eraseOwned(voxelModifiedHooks_,   id);
+    eraseOwned(structuralEventHooks_, id);
+    eraseOwned(chunkCreatedHooks_,    id);
+    eraseOwned(chunkEvictedHooks_,    id);
+    eraseOwned(importers_,            id);
+    eraseOwned(exporters_,            id);
+
+    void* handle = it->handle;
+    loaded_.erase(it);
+    if (handle) platformDlClose(handle);
+    std::cout << "[PluginManager] Unloaded plugin id " << id << "\n";
+    return true;
 }
 
 PluginContext PluginManager::buildContext() {
@@ -95,12 +161,14 @@ PluginContext PluginManager::buildContext() {
 
     ctx.register_layer_generator = [](PluginContext* c, const char* name,
                                        LayerGeneratorFn fn, void* ud) {
-        static_cast<PluginManager*>(c->engine_data)->layerGenerators_.push_back({name, fn, ud});
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->layerGenerators_.push_back({name, fn, ud, mgr->currentOwner_});
     };
 
     ctx.register_feature_generator = [](PluginContext* c, const char* id,
                                          FeatureGeneratorFn fn, void* ud) {
-        static_cast<PluginManager*>(c->engine_data)->featureGenerators_.push_back({id, fn, ud});
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->featureGenerators_.push_back({id, fn, ud, mgr->currentOwner_});
     };
 
     ctx.register_material = [](PluginContext* c, const char* id, MaterialProperties props) {
@@ -113,35 +181,42 @@ PluginContext PluginManager::buildContext() {
             std::cerr << "[PluginManager] Warning: material '" << id
                       << "' already registered; overwriting.\n";
             it->props = props;
+            it->owner = mgr->currentOwner_;
         } else {
-            mats.push_back({id, props});
+            mats.push_back({id, props, mgr->currentOwner_});
         }
     };
 
     ctx.register_on_voxel_modified = [](PluginContext* c, OnVoxelModifiedFn fn, void* ud) {
-        static_cast<PluginManager*>(c->engine_data)->voxelModifiedHooks_.push_back({fn, ud});
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->voxelModifiedHooks_.push_back({fn, ud, mgr->currentOwner_});
     };
 
     ctx.register_on_structural_event = [](PluginContext* c, OnStructuralEventFn fn, void* ud) {
-        static_cast<PluginManager*>(c->engine_data)->structuralEventHooks_.push_back({fn, ud});
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->structuralEventHooks_.push_back({fn, ud, mgr->currentOwner_});
     };
 
     ctx.register_on_chunk_created = [](PluginContext* c, const char* name,
                                         ChunkLifecycleFn fn, void* ud) {
-        static_cast<PluginManager*>(c->engine_data)->chunkCreatedHooks_.push_back({name, fn, ud});
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->chunkCreatedHooks_.push_back({name, fn, ud, mgr->currentOwner_});
     };
 
     ctx.register_on_chunk_evicted = [](PluginContext* c, const char* name,
                                         ChunkLifecycleFn fn, void* ud) {
-        static_cast<PluginManager*>(c->engine_data)->chunkEvictedHooks_.push_back({name, fn, ud});
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->chunkEvictedHooks_.push_back({name, fn, ud, mgr->currentOwner_});
     };
 
     ctx.register_importer = [](PluginContext* c, const char* ext, ImporterFn fn, void* ud) {
-        static_cast<PluginManager*>(c->engine_data)->importers_.push_back({ext, fn, ud});
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->importers_.push_back({ext, fn, ud, mgr->currentOwner_});
     };
 
     ctx.register_exporter = [](PluginContext* c, const char* ext, ExporterFn fn, void* ud) {
-        static_cast<PluginManager*>(c->engine_data)->exporters_.push_back({ext, fn, ud});
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->exporters_.push_back({ext, fn, ud, mgr->currentOwner_});
     };
 
     return ctx;

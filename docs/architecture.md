@@ -275,6 +275,20 @@ See `include/plugin_api.h` for full signatures and `src/plugins/ExamplePlugin` f
 
 Plugins are loaded in declaration order from the project config. Hook registrations from earlier plugins are visible to later plugins. If two plugins register the same feature generator ID, the second registration overwrites the first with a logged warning.
 
+### Loading, Unloading, and Registry Ownership
+
+`loadPlugin` resolves `voxel_plugin_init` from the shared library, calls it with a fresh `PluginContext`, and returns a `PluginId` (or `kInvalidPluginId` on any failure: cannot-open, missing symbol, or non-zero init). `wireInPlugin` does the same for a plugin compiled into the executable, with no library handle. The example plugin (`src/plugins/ExamplePlugin`) is wired in for the M3 demo; the `plugins/base-terrain` and `plugins/water` libraries are the disk-loaded form used by the M4 demo.
+
+Every registry record carries the **owner** `PluginId` of the plugin that registered it. The owner is set on `PluginManager` around each `init` call, so the `register_*` lambdas tag whatever they append. This is what makes per-plugin unload possible without an API change — the owner is engine-internal and never exposed through `PluginContext`.
+
+`unloadPlugin(id)` erases every registry entry owned by `id` **before** closing the library handle. Ordering is a correctness requirement, not a nicety: a registry still holding a function pointer into a `dlclose`d library would dangle the moment a subsystem invoked it. The same rollback runs when an `init` returns non-zero (it may have registered callbacks before failing) — partial registrations are removed before the library is closed.
+
+**Materials are copied into voxels by value** (`Voxel` holds a `MaterialProperties`, not a material-id reference). Unregistering a material therefore does not retroactively change voxels that already exist; the material registry is consulted only at generation time. A consumer that wants an unload to be *visible* must regenerate the affected chunks — the M4 demo does this by dropping and re-streaming resident chunks whenever the plugin set changes.
+
+### Feature Generators in the Terminal-Layer Path
+
+Feature generators (`register_feature_generator`) post-process an already-filled voxel grid. In the full design they are referenced by composition recipes (§6); for the terminal-layer M4 demo they are applied directly: after the base layer generator fills a chunk, each registered feature generator runs over it in registration order. The `water` plugin uses this to flood empty voxels up to a fixed sea level — additive, self-contained, and cleanly removable, since dropping the plugin removes its feature generator from the pass.
+
 ---
 
 ## 9. Renderer and LOD
@@ -302,6 +316,15 @@ Each layer has its own view distance and chunk budget, configured per-layer. A 1
 The renderer maintains the camera's current position as a `WorldCoord`. Before any geometry is submitted to the GPU, vertex positions are converted to camera-local space via `WorldCoord::toLocalFloat(camera_position)`. The result is a `glm::vec3` of small magnitude that fits safely in 32-bit float precision.
 
 **Do not submit `WorldCoord` values directly to the GPU.** Always go through `toLocalFloat`.
+
+### Opaque and Translucent Passes
+
+A material is translucent when its **palette entry's alpha byte is below `0xff`** (`palette::isTranslucent`); water is the first such entry. This single bit of data drives the whole transparency path without any per-material renderer code:
+
+- **Mesh build** (`buildChunkMeshData`) splits a chunk's faces into two index batches over one shared vertex buffer — opaque and translucent — by the voxel's palette alpha. Translucent voxels additionally **do not emit faces on a chunk border**: water continues across the seam, and emitting both chunks' boundary faces would double-blend into a visible grid of walls. (Opaque border faces are still always emitted, since there is no cross-chunk neighbor lookup and they are hidden back-to-back.)
+- **Submission** uses two bgfx views sharing the camera transform and the back buffer's depth: view 0 draws the opaque batch with `BGFX_STATE_DEFAULT` (depth write on); view 1 draws the translucent batch after it with alpha blend, depth **test** on but depth **write off**, and **no backface cull** (so a water surface reads from both above and below). View 1 does not clear, so it composites over view 0's color and tests against its depth.
+
+This keeps transparency a property of the data (palette alpha), not of any subsystem's special-casing: a plugin makes a material translucent simply by pointing it at a translucent palette index. Interior faces between like voxels are still culled, so a filled body of water renders only its outer shell.
 
 ### Immutable Layer Rendering
 
