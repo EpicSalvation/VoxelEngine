@@ -83,5 +83,25 @@ bool World::setVoxel(const WorldCoord& pos, const Voxel& voxel) {
     auto it = chunks_.find(lv.chunk);
     if (it == chunks_.end()) return false;
     it->second->at(lv.x, lv.y, lv.z) = voxel;
+    it->second->markDirty();
     return true;
+}
+
+bool World::isChunkDirty(ChunkCoord coord) const {
+    auto it = chunks_.find(coord);
+    return it != chunks_.end() && it->second->dirty();
+}
+
+std::vector<ChunkCoord> World::dirtyChunkCoords() const {
+    std::vector<ChunkCoord> out;
+    for (const auto& kv : chunks_)
+        if (kv.second->dirty())
+            out.push_back(kv.first);
+    return out;
+}
+
+void World::clearChunkDirty(ChunkCoord coord) {
+    auto it = chunks_.find(coord);
+    if (it != chunks_.end())
+        it->second->clearDirty();
 }

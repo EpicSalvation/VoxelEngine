@@ -369,8 +369,8 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] Mouse-button input (left break / right place) added to the demo input path; targeted-voxel wireframe highlight (`BgfxRenderer::drawVoxelHighlight`) and a centered crosshair (`setCrosshair`, bgfx debug text)
 
 *Dirty tracking at chunk granularity*
-- [ ] Chunk-granular dirty flag on `Chunk`, set by the world-space `setVoxel` and queryable; generator-produced but unmodified chunks stay clean
-- [ ] LOD eviction made dirty-aware: a dirty chunk is persisted before its in-memory copy is dropped (currently `unloadChunk` discards unconditionally), so player edits are never silently lost when the camera moves away
+- [x] Chunk-granular dirty flag on `Chunk` (`dirty()`/`markDirty()`/`clearDirty()`), set by the world-space `World::setVoxel` and queryable via `isChunkDirty`/`dirtyChunkCoords`/`clearChunkDirty`; generation through `Chunk::data()` stays clean, only post-generation edits dirty a chunk (`tests/ChunkDirtyTest.cpp`)
+- [x] LOD eviction made dirty-aware: the `04-build-break-persist` eviction pass skips dirty chunks (`!world.isChunkDirty(c)`) so edits are never silently lost when the camera moves away. The persistence group below extends this to save-then-evict (dirty chunks are written to disk, then allowed to leave memory)
 
 *Persistence — save/load of dirty chunks*
 - [ ] Define an internal chunk save format: versioned header tied to the layer/voxel-size identity, compact voxel encoding (palette + run-length over `MaterialProperties`), one file (or packed region file) keyed by `ChunkCoord`; this is the engine's own save format, distinct from the M7 `.vox`/`.vxe` interop formats

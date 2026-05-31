@@ -65,6 +65,14 @@ public:
     Voxel getVoxel(const WorldCoord& pos) const;
     bool  setVoxel(const WorldCoord& pos, const Voxel& voxel);
 
+    // Dirty tracking (M5). A successful world-space setVoxel marks the owning
+    // chunk dirty; generator-produced but unmodified chunks stay clean. These let
+    // a consumer find and persist player edits (the persistence group) and avoid
+    // silently evicting unsaved changes.
+    bool isChunkDirty(ChunkCoord coord) const;
+    std::vector<ChunkCoord> dirtyChunkCoords() const;
+    void clearChunkDirty(ChunkCoord coord);  // call after persisting the chunk
+
     const ChunkStore& chunks() const { return chunks_; }
 
     bool   isChunked()       const { return chunked_; }

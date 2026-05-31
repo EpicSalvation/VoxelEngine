@@ -52,11 +52,22 @@ public:
     ChunkCoord coord()  const { return coord_; }
     WorldCoord origin() const { return origin_; }   // world-space corner of the chunk
 
+    // Dirty tracking (M5). A chunk is dirty once a player/simulation edit has
+    // changed it from its generated state, and stays dirty until persisted.
+    // Generation (filling data() from a layer generator) leaves it clean; only
+    // post-generation writes — via World's world-space setVoxel — mark it dirty.
+    // Dirty tracking is chunk-granular by design (ARCHITECTURE §11): an edit
+    // marks the whole chunk, never individual voxels.
+    bool dirty()      const { return dirty_; }
+    void markDirty()        { dirty_ = true; }
+    void clearDirty()       { dirty_ = false; }
+
 private:
     ChunkCoord         coord_;
     int                size_;
     WorldCoord         origin_;
     std::vector<Voxel> voxels_;
+    bool               dirty_ = false;
 
     int idx(int x, int y, int z) const { return x + size_ * (y + size_ * z); }
 };

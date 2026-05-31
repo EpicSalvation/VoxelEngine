@@ -237,9 +237,13 @@ layers:
             if (++loaded >= kLoadsPerFrame) break;
         }
 
+        // Evict chunks outside the view budget — but never a dirty (player-edited)
+        // chunk, so edits are not silently lost when the camera moves away. Once
+        // persistence lands (next M5 group) this becomes save-then-evict; until
+        // then dirty chunks stay resident.
         std::vector<ChunkCoord> toEvict;
         for (const auto& kv : meshes)
-            if (lod.shouldEvict(center, kv.first, "terrain"))
+            if (lod.shouldEvict(center, kv.first, "terrain") && !world.isChunkDirty(kv.first))
                 toEvict.push_back(kv.first);
         for (const ChunkCoord& c : toEvict) {
             meshes[c].destroy();
