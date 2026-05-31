@@ -10,12 +10,13 @@
 //     eviction (save-then-evict) and on quit. On relaunch the saved chunks load
 //     from disk in place of the generator, so edits survive across runs while
 //     untouched terrain regenerates deterministically.
+//   - collision: press G to drop into a walking player — a kinematic AABB with
+//     gravity, jumping, and swept terminal-voxel collision (slides along walls,
+//     never tunnels). G again returns to the free-fly camera.
 //
-// Still to come: a walking player with terminal-voxel collision (replacing the
-// free-fly camera).
-//
-// Controls: WASD move, Space/Shift up/down, mouse look, F toggles cursor,
-// left/right mouse break/place, 1-9 select build material, ESC quits.
+// Controls: WASD move, mouse look, F toggles cursor, G toggles walk/fly,
+// Space/Shift up/down (fly) or jump (walk), left/right mouse break/place,
+// 1-9 select build material, ESC quits.
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
@@ -27,6 +28,7 @@
 #include "renderer/LODManager.h"
 #include "world/Chunk.h"
 #include "world/ChunkCoordMath.h"
+#include "world/VoxelCollision.h"
 #include "world/VoxelRaycast.h"
 #include "world/World.h"
 
@@ -44,9 +46,16 @@
 
 namespace {
 constexpr int    kLoadsPerFrame = 2;      // budget generated/meshed chunks per frame
-constexpr float  kMoveSpeed     = 24.0f;
+constexpr float  kFlySpeed      = 24.0f;  // free-fly camera speed
 constexpr float  kMouseSens     = 0.002f;
 constexpr double kReachM        = 8.0;    // how far the player can target a voxel
+
+// Walking player (walk mode).
+constexpr double kWalkSpeed = 6.0;        // m/s horizontal
+constexpr double kGravity   = 25.0;       // m/s^2
+constexpr double kJumpSpeed = 8.0;        // m/s initial upward
+constexpr double kEyeOffset = 0.7;        // eye height above the AABB center
+const glm::dvec3 kPlayerHalf(0.3, 0.9, 0.3);  // half-extents: 0.6 wide, 1.8 tall
 }  // namespace
 
 int main() {
@@ -163,8 +172,15 @@ layers:
     double     lastMouseX = 0.0, lastMouseY = 0.0;
     bool       firstMouse = true;
     bool       cursorCaptured = true;
-    bool       prevKeyF = false;
+    bool       prevKeyF = false, prevKeyG = false;
     bool       prevLeft = false, prevRight = false;
+
+    // Walking player state (active when walkMode is true). The eye (camPos) sits
+    // kEyeOffset above the AABB center.
+    bool       walkMode = false;
+    WorldCoord playerCenter(0.0, 0.0, 0.0);
+    double     vy = 0.0;       // vertical velocity
+    bool       grounded = false;
 
     GLFWwindow* glfwWin = window.glfwHandle();
     glfwSetInputMode(glfwWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -193,6 +209,20 @@ layers:
         }
         prevKeyF = curKeyF;
 
+        // G — toggle between the free-fly camera and the walking player.
+        bool curKeyG = (glfwGetKey(glfwWin, GLFW_KEY_G) == GLFW_PRESS);
+        if (curKeyG && !prevKeyG) {
+            walkMode = !walkMode;
+            if (walkMode) {
+                playerCenter = WorldCoord(camPos.value - glm::dvec3(0.0, kEyeOffset, 0.0));
+                vy = 0.0;
+                grounded = false;
+            }
+            std::cout << "[main] Mode: " << (walkMode ? "WALK (gravity + collision)"
+                                                      : "FLY") << "\n";
+        }
+        prevKeyG = curKeyG;
+
         // Material selection (1-9).
         for (int i = 0; i < 9 && i < static_cast<int>(materials.size()); ++i) {
             if (glfwGetKey(glfwWin, GLFW_KEY_1 + i) == GLFW_PRESS &&
@@ -218,21 +248,49 @@ layers:
             firstMouse = false;
         }
 
-        // WASD + Space/Shift — camera-relative horizontal, world-up vertical.
-        float sp = std::sin(pitch), cp = std::cos(pitch);
-        float sy = std::sin(yaw),   cy = std::cos(yaw);
-        glm::dvec3 fwd  {static_cast<double>(cp * sy), static_cast<double>(sp),
-                         static_cast<double>(cp * cy)};
-        glm::dvec3 right{static_cast<double>(cy), 0.0, static_cast<double>(-sy)};
-        glm::dvec3 delta{0.0, 0.0, 0.0};
-        double step = static_cast<double>(kMoveSpeed * dt);
-        if (glfwGetKey(glfwWin, GLFW_KEY_W)          == GLFW_PRESS) delta += fwd   * step;
-        if (glfwGetKey(glfwWin, GLFW_KEY_S)          == GLFW_PRESS) delta -= fwd   * step;
-        if (glfwGetKey(glfwWin, GLFW_KEY_A)          == GLFW_PRESS) delta -= right * step;
-        if (glfwGetKey(glfwWin, GLFW_KEY_D)          == GLFW_PRESS) delta += right * step;
-        if (glfwGetKey(glfwWin, GLFW_KEY_SPACE)      == GLFW_PRESS) delta.y += step;
-        if (glfwGetKey(glfwWin, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) delta.y -= step;
-        camPos = WorldCoord(camPos.value + delta);
+        const float sp = std::sin(pitch), cp = std::cos(pitch);
+        const float sy = std::sin(yaw),   cy = std::cos(yaw);
+
+        if (!walkMode) {
+            // Free-fly: camera-relative horizontal, world-up vertical.
+            glm::dvec3 fwd  {static_cast<double>(cp * sy), static_cast<double>(sp),
+                             static_cast<double>(cp * cy)};
+            glm::dvec3 right{static_cast<double>(cy), 0.0, static_cast<double>(-sy)};
+            glm::dvec3 delta{0.0, 0.0, 0.0};
+            double step = static_cast<double>(kFlySpeed * dt);
+            if (glfwGetKey(glfwWin, GLFW_KEY_W)          == GLFW_PRESS) delta += fwd   * step;
+            if (glfwGetKey(glfwWin, GLFW_KEY_S)          == GLFW_PRESS) delta -= fwd   * step;
+            if (glfwGetKey(glfwWin, GLFW_KEY_A)          == GLFW_PRESS) delta -= right * step;
+            if (glfwGetKey(glfwWin, GLFW_KEY_D)          == GLFW_PRESS) delta += right * step;
+            if (glfwGetKey(glfwWin, GLFW_KEY_SPACE)      == GLFW_PRESS) delta.y += step;
+            if (glfwGetKey(glfwWin, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) delta.y -= step;
+            camPos = WorldCoord(camPos.value + delta);
+        } else {
+            // Walking: horizontal movement on the yaw plane (pitch ignored), with
+            // gravity, jumping, and swept AABB collision against terminal voxels.
+            glm::dvec3 fwdH  {static_cast<double>(sy), 0.0, static_cast<double>(cy)};
+            glm::dvec3 rightH{static_cast<double>(cy), 0.0, static_cast<double>(-sy)};
+            glm::dvec3 wish{0.0, 0.0, 0.0};
+            if (glfwGetKey(glfwWin, GLFW_KEY_W) == GLFW_PRESS) wish += fwdH;
+            if (glfwGetKey(glfwWin, GLFW_KEY_S) == GLFW_PRESS) wish -= fwdH;
+            if (glfwGetKey(glfwWin, GLFW_KEY_A) == GLFW_PRESS) wish -= rightH;
+            if (glfwGetKey(glfwWin, GLFW_KEY_D) == GLFW_PRESS) wish += rightH;
+            if (glm::length(wish) > 0.0) wish = glm::normalize(wish);
+
+            if (glfwGetKey(glfwWin, GLFW_KEY_SPACE) == GLFW_PRESS && grounded)
+                vy = kJumpSpeed;
+            vy -= kGravity * static_cast<double>(dt);
+
+            glm::dvec3 delta = wish * (kWalkSpeed * static_cast<double>(dt));
+            delta.y += vy * static_cast<double>(dt);
+
+            voxelcollide::MoveResult mr =
+                voxelcollide::moveAABB(world, {playerCenter, kPlayerHalf}, delta);
+            playerCenter = mr.position;
+            grounded = mr.grounded;
+            if (mr.grounded || (mr.hitY && vy > 0.0)) vy = 0.0;  // stop on floor/ceiling
+            camPos = WorldCoord(playerCenter.value + glm::dvec3(0.0, kEyeOffset, 0.0));
+        }
 
         // ── Stream chunks around the camera ──────────────────────────────
         ChunkCoord center =
@@ -287,12 +345,28 @@ layers:
             editVoxel(hit.voxel, Voxel::empty());  // break
         }
         if (hit.hit && curRight && !prevRight) {
-            // Don't place a block into the cell the camera occupies.
-            chunkmath::VoxelCoord camCell = chunkmath::worldToVoxel(camPos, world.voxelSizeM());
-            if (hit.adjacent != camCell) {
+            // Don't place a block into the space the player occupies: the full
+            // AABB in walk mode, or just the eye cell in fly mode.
+            const double vs = world.voxelSizeM();
+            const chunkmath::VoxelCoord t = hit.adjacent;
+            bool blockedByPlayer;
+            if (walkMode) {
+                glm::dvec3 cmin{static_cast<double>(t.x) * vs,
+                                static_cast<double>(t.y) * vs,
+                                static_cast<double>(t.z) * vs};
+                glm::dvec3 cmax = cmin + glm::dvec3(vs, vs, vs);
+                glm::dvec3 pmin = playerCenter.value - kPlayerHalf;
+                glm::dvec3 pmax = playerCenter.value + kPlayerHalf;
+                blockedByPlayer = (pmin.x < cmax.x && pmax.x > cmin.x &&
+                                   pmin.y < cmax.y && pmax.y > cmin.y &&
+                                   pmin.z < cmax.z && pmax.z > cmin.z);
+            } else {
+                blockedByPlayer = (t == chunkmath::worldToVoxel(camPos, vs));
+            }
+            if (!blockedByPlayer) {
                 Voxel placed;
                 placed.material = materials[selectedMaterial].props;
-                editVoxel(hit.adjacent, placed);
+                editVoxel(t, placed);
             }
         }
         prevLeft  = curLeft;

@@ -379,13 +379,13 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] Round-trip identity verified: `tests/ChunkPersistenceTest.cpp` checks codec and on-disk save/load are byte-for-byte equal to the in-memory grid, and that identity-mismatch, garbage, and truncated files are rejected without crashing
 
 *Collision against terminal-layer voxels*
-- [ ] Kinematic player body: `WorldCoord` position plus AABB extents, gravity, jump, and grounded state — a walk mode distinct from the existing free-fly camera (toggle between them), built on the world-space voxel accessor
-- [ ] Swept, axis-separated AABB-vs-voxel resolution against solid terminal voxels: query the voxel range overlapping the player AABB and resolve each axis independently to prevent tunneling at speed
+- [x] Kinematic player body: `WorldCoord` position plus AABB extents, gravity, jump, and grounded state — a walk mode (press G) distinct from the free-fly camera, built on the world-space voxel accessor (`04-build-break-persist`)
+- [x] Swept, axis-separated AABB-vs-voxel resolution against solid terminal voxels (`src/world/VoxelCollision.{h,cpp}`): substepped (≤ half a voxel per step) so it cannot tunnel at speed, resolving each axis independently so the box slides along surfaces; cells in non-resident chunks read as empty
 
 *Tests*
-- [ ] Unit tests covering: global voxel-coordinate round-trip including negative coordinates and chunk seams; DDA raycast hits and face normals on a known grid; AABB collision resolution (no tunneling, correct grounding); dirty-flag set/clear; save/load round-trip equality; and a dirty chunk evicted then reloaded comparing equal
+- [x] Unit tests covering: global voxel-coordinate round-trip including negative coordinates and chunk seams (`WorldVoxelAccessTest`); DDA raycast hits and face normals on a known grid (`VoxelRaycastTest`); AABB collision resolution — no tunneling, correct grounding, wall stop/slide, ceiling (`VoxelCollisionTest`); dirty-flag set/clear (`ChunkDirtyTest`); and save/load round-trip equality including evict-then-reload identity (`ChunkPersistenceTest`)
 
-- [ ] **Demo — Build, break, and persist:** `04-build-break-persist` — walk the streamed world under gravity with terminal-voxel collision, place and remove voxels with the mouse (targeted voxel highlighted, crosshair shown), then quit and relaunch to confirm modified chunks were saved and reload identically while untouched terrain regenerates from the plugin generator
+- [x] **Demo — Build, break, and persist:** `04-build-break-persist` — press G to walk the streamed world under gravity with terminal-voxel collision, place and remove voxels with the mouse (targeted voxel highlighted, crosshair shown), then quit and relaunch to confirm modified chunks were saved and reload identically while untouched terrain regenerates from the plugin generator
 
 **M6 — Multi-Layer Support**
 - [ ] Two-layer project config working (one composite layer above one terminal layer)
