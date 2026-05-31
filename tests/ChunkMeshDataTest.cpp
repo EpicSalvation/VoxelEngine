@@ -124,3 +124,32 @@ TEST(ChunkMeshData, WaterOnTerrainEmitsOnlyTopAndExposedSides) {
     // the four side neighbors are empty interior (emit) → 5 faces.
     EXPECT_EQ(translucent.size(), static_cast<size_t>(5 * kVertsPerFace));  // 30
 }
+
+TEST(ChunkMeshData, OpaqueFaceUnderWaterIsStillEmitted) {
+    // An opaque block with water directly above keeps its top face: a translucent
+    // neighbor does not occlude an opaque face, so the block shows through water
+    // instead of going transparent.
+    Chunk chunk(ChunkCoord{0, 0, 0}, 4, WorldCoord());
+    chunk.at(1, 1, 1) = solid();
+    chunk.at(1, 2, 1) = water();  // water directly above, interior column
+    std::vector<MeshVertex> verts;
+    std::vector<uint32_t> opaque, translucent;
+    buildChunkMeshData(chunk, verts, opaque, translucent);
+
+    // Solid keeps all six faces — its +Y toward the water is NOT culled.
+    EXPECT_EQ(opaque.size(), static_cast<size_t>(kFacesPerCube * kVertsPerFace));  // 36
+    // Water still culls its -Y against the solid below; other five faces emit.
+    EXPECT_EQ(translucent.size(), static_cast<size_t>(5 * kVertsPerFace));  // 30
+}
+
+TEST(ChunkMeshData, OpaqueNeighborStillCullsOpaqueFace) {
+    // Regression: opaque-opaque shared faces are still culled (only translucent
+    // neighbors are treated as non-occluding).
+    Chunk chunk(ChunkCoord{0, 0, 0}, 4, WorldCoord());
+    chunk.at(1, 1, 1) = solid();
+    chunk.at(1, 2, 1) = solid();
+    std::vector<MeshVertex> verts;
+    std::vector<uint32_t> opaque, translucent;
+    buildChunkMeshData(chunk, verts, opaque, translucent);
+    EXPECT_EQ(opaque.size(), static_cast<size_t>((kFacesPerCube - 1) * 2 * kVertsPerFace));  // 60
+}

@@ -41,10 +41,6 @@ bool inBounds(int n, int x, int y, int z) {
     return x >= 0 && x < n && y >= 0 && y < n && z >= 0 && z < n;
 }
 
-bool solidAt(const Chunk& chunk, int x, int y, int z) {
-    return !chunk.at(x, y, z).isEmpty();
-}
-
 // Scale the RGB channels of an ABGR color by `f`, leaving alpha unchanged.
 uint32_t shadeColor(uint32_t abgr, float f) {
     auto ch = [f](uint32_t c) -> uint32_t {
@@ -84,9 +80,20 @@ void buildChunkMeshData(const Chunk& chunk,
                     const int nx = x + f.dx, ny = y + f.dy, nz = z + f.dz;
 
                     if (inBounds(n, nx, ny, nz)) {
-                        // Cull against a solid in-chunk neighbor.
-                        if (solidAt(chunk, nx, ny, nz))
-                            continue;
+                        // Cull this face only if the in-chunk neighbor actually
+                        // occludes it. An opaque neighbor hides anything behind it.
+                        // A translucent neighbor (water) hides another translucent
+                        // face (water interior) but NOT an opaque face — a grass or
+                        // stone top sitting under water must still render and show
+                        // through it. So: water voxels cull against any non-empty
+                        // neighbor; opaque voxels cull only against an opaque one.
+                        const Voxel& nb = chunk.at(nx, ny, nz);
+                        if (!nb.isEmpty()) {
+                            const bool nbTranslucent =
+                                palette::isTranslucent(nb.material.palette_index);
+                            if (translucent || !nbTranslucent)
+                                continue;
+                        }
                     } else {
                         // Border: opaque voxels emit the face (no cross-chunk
                         // lookup); translucent voxels assume the medium continues
