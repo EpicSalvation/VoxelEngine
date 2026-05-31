@@ -4,8 +4,9 @@
 namespace {
 
 // The eight corners of a unit voxel as 0/1 offsets, indexed to match the cube
-// template winding in BgfxRenderer (so chunk meshes and per-voxel cubes agree
-// on front/back faces under BGFX_STATE_DEFAULT's CW culling).
+// template winding in BgfxRenderer (so chunk meshes and per-voxel cubes agree on
+// front/back faces). Faces are wound CCW-outward; the renderer culls CCW (the
+// interior) for opaque geometry — see the kOpaqueState note in BgfxRenderer.cpp.
 constexpr int kCorner[8][3] = {
     {0, 0, 1},  // 0
     {1, 0, 1},  // 1

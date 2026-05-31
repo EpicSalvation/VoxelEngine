@@ -171,6 +171,17 @@ void BgfxRenderer::render() {
     bgfx::setViewTransform(1, view, proj);
     bgfx::setViewRect(1, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
 
+    // Opaque geometry. Our voxel faces are wound CCW with outward normals; under
+    // bx's left-handed view/projection that makes the OUTWARD face the one bgfx
+    // sees as back-facing, so BGFX_STATE_DEFAULT (which culls CW) would cull the
+    // visible exterior and draw the hidden interior. With flat per-voxel color
+    // that inversion is invisible on a convex single voxel (inside of the back
+    // face is pixel-identical to outside of the front face) but shows up on the
+    // terrain surface as see-through tops. Cull CCW (the interior) instead so the
+    // exterior faces are kept. See docs/ARCHITECTURE.md §9.
+    constexpr uint64_t kOpaqueState =
+        (BGFX_STATE_DEFAULT & ~BGFX_STATE_CULL_MASK) | BGFX_STATE_CULL_CCW;
+
     constexpr uint64_t kTranslucentState =
         BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_BLEND_ALPHA;
 
@@ -191,7 +202,7 @@ void BgfxRenderer::render() {
         float mtx[16];
         bx::mtxTranslate(mtx, lp.x, lp.y, lp.z);
 
-        bgfx::setState(BGFX_STATE_DEFAULT);
+        bgfx::setState(kOpaqueState);
         bgfx::setTransform(mtx);
         bgfx::setVertexBuffer(0, &tvb);
         bgfx::setIndexBuffer(ibo);
@@ -208,7 +219,7 @@ void BgfxRenderer::render() {
         bx::mtxTranslate(mtx, lo.x, lo.y, lo.z);
 
         if (bgfx::isValid(pc.opaqueIbh) && bgfx::isValid(program)) {
-            bgfx::setState(BGFX_STATE_DEFAULT);
+            bgfx::setState(kOpaqueState);
             bgfx::setTransform(mtx);
             bgfx::setVertexBuffer(0, pc.vbh);
             bgfx::setIndexBuffer(pc.opaqueIbh);
