@@ -19,17 +19,22 @@ constexpr int kCorner[8][3] = {
 };
 
 struct Face {
-    int dx, dy, dz;    // neighbor direction; face is drawn when that neighbor is empty
-    int tri[6];        // two triangles (six corner indices), template winding
+    int   dx, dy, dz;  // neighbor direction; face is drawn when that neighbor is empty
+    int   tri[6];      // two triangles (six corner indices), template winding
+    float shade;       // per-face brightness, baked into vertex color (see below)
 };
 
+// Fixed directional shading (no real lighting): top faces full brightness, sides
+// dimmer, bottom darkest, with N/S (Z) and E/W (X) at different levels so all
+// four sides are distinguishable. This gives flat-colored terrain enough contrast
+// to read its shape. Values follow the familiar Minecraft-style ramp.
 constexpr Face kFaces[6] = {
-    {  0,  0,  1, {0, 1, 2, 0, 2, 3} },  // +Z
-    {  0,  0, -1, {4, 6, 5, 4, 7, 6} },  // -Z
-    {  0, -1,  0, {0, 4, 5, 0, 5, 1} },  // -Y
-    {  0,  1,  0, {2, 6, 7, 2, 7, 3} },  // +Y
-    { -1,  0,  0, {0, 3, 7, 0, 7, 4} },  // -X
-    {  1,  0,  0, {1, 5, 6, 1, 6, 2} },  // +X
+    {  0,  0,  1, {0, 1, 2, 0, 2, 3}, 0.8f },  // +Z
+    {  0,  0, -1, {4, 6, 5, 4, 7, 6}, 0.8f },  // -Z
+    {  0, -1,  0, {0, 4, 5, 0, 5, 1}, 0.5f },  // -Y (bottom)
+    {  0,  1,  0, {2, 6, 7, 2, 7, 3}, 1.0f },  // +Y (top)
+    { -1,  0,  0, {0, 3, 7, 0, 7, 4}, 0.6f },  // -X
+    {  1,  0,  0, {1, 5, 6, 1, 6, 2}, 0.6f },  // +X
 };
 
 bool inBounds(int n, int x, int y, int z) {
@@ -38,6 +43,19 @@ bool inBounds(int n, int x, int y, int z) {
 
 bool solidAt(const Chunk& chunk, int x, int y, int z) {
     return !chunk.at(x, y, z).isEmpty();
+}
+
+// Scale the RGB channels of an ABGR color by `f`, leaving alpha unchanged.
+uint32_t shadeColor(uint32_t abgr, float f) {
+    auto ch = [f](uint32_t c) -> uint32_t {
+        const float v = static_cast<float>(c) * f;
+        return static_cast<uint32_t>(v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v));
+    };
+    const uint32_t r = ch(abgr & 0xff);
+    const uint32_t g = ch((abgr >> 8) & 0xff);
+    const uint32_t b = ch((abgr >> 16) & 0xff);
+    const uint32_t a = (abgr >> 24) & 0xff;
+    return r | (g << 8) | (b << 16) | (a << 24);
 }
 
 }  // namespace
@@ -77,6 +95,9 @@ void buildChunkMeshData(const Chunk& chunk,
                             continue;
                     }
 
+                    // Bake directional shading into the face color so flat-colored
+                    // terrain reads its shape (top brightest, sides/bottom darker).
+                    const uint32_t faceColor = shadeColor(color, f.shade);
                     for (int i = 0; i < 6; ++i) {
                         const int* c = kCorner[f.tri[i]];
                         indices.push_back(static_cast<uint32_t>(out_vertices.size()));
@@ -84,7 +105,7 @@ void buildChunkMeshData(const Chunk& chunk,
                             static_cast<float>(x + c[0]),
                             static_cast<float>(y + c[1]),
                             static_cast<float>(z + c[2]),
-                            color,
+                            faceColor,
                         });
                     }
                 }
