@@ -51,6 +51,20 @@ public:
     void   unloadChunk(ChunkCoord coord);
     const  Chunk* getChunk(ChunkCoord coord) const;
 
+    // World-space single-voxel access for the chunked path — the foundation for
+    // picking, editing, and collision (M5). The voxel cell containing pos is
+    // resolved via chunkmath::worldToVoxel + voxelToChunkLocal. These address an
+    // arbitrary WorldCoord and are intentionally distinct from the finite-grid
+    // getVoxel/setVoxel(int,int,int) above.
+    //
+    // getVoxel returns Voxel::empty() when the world is not chunked or the owning
+    // chunk is not resident (silent — these run in hot picking/collision loops).
+    // setVoxel writes only if the owning chunk is resident, returning true; it is
+    // a no-op returning false otherwise (it does not load or generate a chunk —
+    // the player edits voxels that are already streamed in).
+    Voxel getVoxel(const WorldCoord& pos) const;
+    bool  setVoxel(const WorldCoord& pos, const Voxel& voxel);
+
     const ChunkStore& chunks() const { return chunks_; }
 
     bool   isChunked()       const { return chunked_; }

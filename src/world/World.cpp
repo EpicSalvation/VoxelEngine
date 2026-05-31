@@ -66,3 +66,22 @@ void World::setVoxel(int x, int y, int z, const Voxel& voxel) {
     }
     voxels_[idx(x, y, z)] = voxel;
 }
+
+Voxel World::getVoxel(const WorldCoord& pos) const {
+    if (!chunked_) return Voxel::empty();
+    const chunkmath::VoxelCoord v = chunkmath::worldToVoxel(pos, voxelSizeM_);
+    const chunkmath::LocalVoxel lv = chunkmath::voxelToChunkLocal(v, chunkSizeVoxels_);
+    const Chunk* chunk = getChunk(lv.chunk);
+    if (!chunk) return Voxel::empty();
+    return chunk->at(lv.x, lv.y, lv.z);
+}
+
+bool World::setVoxel(const WorldCoord& pos, const Voxel& voxel) {
+    if (!chunked_) return false;
+    const chunkmath::VoxelCoord v = chunkmath::worldToVoxel(pos, voxelSizeM_);
+    const chunkmath::LocalVoxel lv = chunkmath::voxelToChunkLocal(v, chunkSizeVoxels_);
+    auto it = chunks_.find(lv.chunk);
+    if (it == chunks_.end()) return false;
+    it->second->at(lv.x, lv.y, lv.z) = voxel;
+    return true;
+}
