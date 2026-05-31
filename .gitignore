@@ -65,9 +65,10 @@ PACKAGE.*
 *.ilk
 *.exp
 
-# ─── IDE / editor ────────────────────────────────────────────────────
+# ─── IDE / editor / agent tooling ────────────────────────────────────
 .idea/
 .vscode/
+.claude/
 *.swp
 *~
 
