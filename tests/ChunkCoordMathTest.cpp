@@ -44,3 +44,40 @@ TEST(ChunkCoordMath, RespectsVoxelSizeAndChunkSize) {
     WorldCoord o = chunkOrigin(ChunkCoord{2, 0, 0}, 2.0, 16);
     EXPECT_DOUBLE_EQ(o.value.x, 64.0);
 }
+
+// Cross-layer voxel mapping (M6) --------------------------------------------
+
+TEST(ChunkCoordMath, LayerRatioIsTheWholeSizeQuotient) {
+    EXPECT_EQ(chunkmath::layerRatio(32.0, 1.0), 32);
+    EXPECT_EQ(chunkmath::layerRatio(100.0, 1.0), 100);
+    EXPECT_EQ(chunkmath::layerRatio(8.0, 2.0), 4);
+    // Tolerates floating-point representation error around a whole quotient.
+    EXPECT_EQ(chunkmath::layerRatio(1.0, 0.1), 10);
+}
+
+TEST(ChunkCoordMath, ChildVoxelMinIsParentTimesRatio) {
+    const int64_t r = 4;
+    EXPECT_EQ(chunkmath::childVoxelMin(chunkmath::VoxelCoord{0, 0, 0}, r),
+              (chunkmath::VoxelCoord{0, 0, 0}));
+    EXPECT_EQ(chunkmath::childVoxelMin(chunkmath::VoxelCoord{1, 2, 3}, r),
+              (chunkmath::VoxelCoord{4, 8, 12}));
+    EXPECT_EQ(chunkmath::childVoxelMin(chunkmath::VoxelCoord{-1, 0, 2}, r),
+              (chunkmath::VoxelCoord{-4, 0, 8}));
+}
+
+TEST(ChunkCoordMath, ChildToParentInvertsAcrossTheChildBlock) {
+    const int64_t r = 4;
+    // Every child voxel inside a parent's ratio^3 block maps back to that parent,
+    // including on the negative side of the origin.
+    for (chunkmath::VoxelCoord parent : {chunkmath::VoxelCoord{0, 0, 0},
+                                         chunkmath::VoxelCoord{2, -3, 5},
+                                         chunkmath::VoxelCoord{-1, -1, -1}}) {
+        const chunkmath::VoxelCoord base = chunkmath::childVoxelMin(parent, r);
+        for (int64_t dz = 0; dz < r; ++dz)
+            for (int64_t dy = 0; dy < r; ++dy)
+                for (int64_t dx = 0; dx < r; ++dx) {
+                    const chunkmath::VoxelCoord child{base.x + dx, base.y + dy, base.z + dz};
+                    EXPECT_EQ(chunkmath::childToParentVoxel(child, r), parent);
+                }
+    }
+}

@@ -34,8 +34,11 @@ public:
     void renderWorld(const World& world);
 
     // Submit a pre-built chunk mesh, placed via a floating-origin model transform
-    // of the chunk's world-space origin. Reuses the voxel shader program.
-    void renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin);
+    // of the chunk's world-space origin. Reuses the voxel shader program. The mesh
+    // is in chunk-local units (1 voxel == 1 unit); voxelSizeM scales it to the
+    // layer's world scale, so composite/immutable layers render at their own size.
+    void renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin,
+                     double voxelSizeM = 1.0);
 
     // Submit a wireframe box centered at a world-space position, drawn as lines
     // over the scene (depth-tested, no depth write) — used to outline the voxel
@@ -54,6 +57,7 @@ private:
 
     struct PendingChunk {
         WorldCoord               origin;
+        double                   voxelSizeM;
         bgfx::VertexBufferHandle vbh;
         bgfx::IndexBufferHandle  opaqueIbh;
         bgfx::IndexBufferHandle  translucentIbh;

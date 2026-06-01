@@ -57,6 +57,19 @@ struct VoxelCoord {
     bool operator!=(const VoxelCoord& rhs) const { return !(*this == rhs); }
 };
 
+// Hash for using VoxelCoord as an unordered_map/set key. Mixes the three 64-bit
+// components (no allocation, no ordering dependence) — same scheme as
+// ChunkCoordHash, widened to 64-bit lanes.
+struct VoxelCoordHash {
+    std::size_t operator()(const VoxelCoord& v) const noexcept {
+        uint64_t h = static_cast<uint64_t>(v.x);
+        h = h * 0x9E3779B97F4A7C15ull + static_cast<uint64_t>(v.y);
+        h = h * 0x9E3779B97F4A7C15ull + static_cast<uint64_t>(v.z);
+        h ^= h >> 32;
+        return static_cast<std::size_t>(h);
+    }
+};
+
 // A global voxel decomposed into its owning chunk and the local index within
 // that chunk. Local coordinates are always in [0, chunkSizeVoxels) and map
 // directly onto Chunk::at(x, y, z).
@@ -127,6 +140,37 @@ inline VoxelCoord chunkLocalToVoxel(const ChunkCoord& c, int lx, int ly, int lz,
         static_cast<int64_t>(c.y) * n + ly,
         static_cast<int64_t>(c.z) * n + lz,
     };
+}
+
+// ── Cross-layer voxel mapping (M6) ─────────────────────────────────────────
+//
+// A composite (parent) layer's voxels are coarser than its decompose_to (child)
+// layer's. All layers share the world origin, so the two voxel grids are nested:
+// one parent voxel tiles exactly into ratio³ child voxels, where ratio is the
+// whole-number size quotient the LayerConfig validator guarantees (parent size
+// is an integer multiple of child size, ratio >= 2).
+
+// How many child voxels span one parent voxel along an axis. Rounds the size
+// quotient to the nearest integer — the config guarantees it is already whole;
+// rounding only absorbs floating-point representation error (e.g. 32.0 / 1.0).
+inline int64_t layerRatio(double parentVoxelSizeM, double childVoxelSizeM) {
+    return static_cast<int64_t>(std::llround(parentVoxelSizeM / childVoxelSizeM));
+}
+
+// Minimum (inclusive) child-layer voxel coordinate covered by a parent voxel.
+// The parent voxel spans [min, min + ratio) along each axis. Because the grids
+// share the origin, this is simply parent * ratio.
+inline VoxelCoord childVoxelMin(const VoxelCoord& parent, int64_t ratio) {
+    return VoxelCoord{parent.x * ratio, parent.y * ratio, parent.z * ratio};
+}
+
+// The parent-layer voxel that contains a given child-layer voxel. Inverse of
+// childVoxelMin (collapsing the ratio³ child block back to its parent). Floored
+// so it is correct on the negative side of the origin.
+inline VoxelCoord childToParentVoxel(const VoxelCoord& child, int64_t ratio) {
+    return VoxelCoord{floorDiv(child.x, ratio),
+                      floorDiv(child.y, ratio),
+                      floorDiv(child.z, ratio)};
 }
 
 }  // namespace chunkmath

@@ -215,8 +215,12 @@ void BgfxRenderer::render() {
     // §9). Opaque batch on view 0; translucent (water) batch on view 1.
     for (const auto& pc : pendingChunks) {
         glm::vec3 lo = pc.origin.toLocalFloat(cameraPos);
+        // model = translate(origin - camera) * scale(voxelSizeM): the mesh is in
+        // voxel units (1 voxel == 1 unit); scaling places composite/immutable
+        // layers at their own world size. Terminal (1 m) is unaffected.
+        const float s = static_cast<float>(pc.voxelSizeM);
         float mtx[16];
-        bx::mtxTranslate(mtx, lo.x, lo.y, lo.z);
+        bx::mtxSRT(mtx, s, s, s, 0.0f, 0.0f, 0.0f, lo.x, lo.y, lo.z);
 
         if (bgfx::isValid(pc.opaqueIbh) && bgfx::isValid(program)) {
             bgfx::setState(kOpaqueState);
@@ -297,9 +301,10 @@ void BgfxRenderer::renderWorld(const World& world) {
     }
 }
 
-void BgfxRenderer::renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin) {
+void BgfxRenderer::renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin,
+                               double voxelSizeM) {
     if (mesh.empty()) return;
-    pendingChunks.push_back({chunkOrigin, mesh.vbh(), mesh.opaqueIbh(), mesh.translucentIbh()});
+    pendingChunks.push_back({chunkOrigin, voxelSizeM, mesh.vbh(), mesh.opaqueIbh(), mesh.translucentIbh()});
 }
 
 void BgfxRenderer::drawVoxelHighlight(const WorldCoord& center, float size, uint32_t abgr) {

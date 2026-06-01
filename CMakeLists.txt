@@ -250,6 +250,10 @@ foreach(_demo ${_voxel_demo_dirs})
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_WATER_PLUGIN_PATH="$<TARGET_FILE:water>")
     endif()
+    if(TARGET layered-world)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_LAYERED_PLUGIN_PATH="$<TARGET_FILE:layered-world>")
+    endif()
   endif()
 endforeach()
 

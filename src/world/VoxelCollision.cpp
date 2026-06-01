@@ -26,7 +26,11 @@ bool anySolidInAABB(const World& world, const glm::dvec3& mn, const glm::dvec3& 
         for (int64_t y = loy; y <= hiy; ++y)
             for (int64_t x = lox; x <= hix; ++x) {
                 const WorldCoord c = chunkmath::voxelCenter(chunkmath::VoxelCoord{x, y, z}, vs);
-                if (!world.getVoxel(c).isEmpty()) return true;
+                // Sample every layer at its own scale: the player collides with
+                // composite blocks and the immutable backdrop, not just terminal
+                // voxels. The iteration grid is the primary (terminal) voxel size;
+                // coarser layers read solid across all the fine cells they cover.
+                if (world.anySolidAt(c)) return true;
             }
     return false;
 }

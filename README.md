@@ -211,7 +211,8 @@ voxel-game-engine
 │       └── main.cpp                      # Each demo/<NN-name>/main.cpp builds its own target
 ├── plugins                              # Runtime-loadable plugins, each a MODULE shared lib
 │   ├── base-terrain/plugin.cpp          # Materials + terrain layer generator (the M3 world)
-│   └── water/plugin.cpp                 # Removable: water material + sea-level feature generator
+│   ├── water/plugin.cpp                 # Removable: water material + sea-level feature generator
+│   └── layered-world/plugin.cpp         # M6: blocks/terrain/backdrop generators for three layers
 ├── tests
 │   └── LayerConfigTest.cpp               # Unit tests; link voxel-engine + GoogleTest
 ├── shaders                               # bgfx .sc shader sources + committed bytecode
@@ -284,6 +285,13 @@ cmake --build build
 # Single-config:   ./build/04-build-break-persist
 # Multi-config:    ./build/Debug/04-build-break-persist.exe
 
+# Run decompose-on-approach (M6): a three-layer world — composite blocks over a
+# terminal terrain child layer, beside an immutable backdrop. Fly toward the
+# coarse blocky terrain and watch macro voxels decompose into fine 1 m terrain;
+# press G to walk with collision across all layers.
+# Single-config:   ./build/05-decompose-on-approach
+# Multi-config:    ./build/Debug/05-decompose-on-approach.exe
+
 # Run the test suite
 ctest --test-dir build
 ```
@@ -292,6 +300,11 @@ Full controls for `04-build-break-persist`: **WASD** move, **mouse** look,
 **F** toggles the mouse cursor, **G** toggles walk/fly, **Space/Shift** fly
 up/down (or **Space** to jump while walking), **left/right mouse** break/place,
 **1**–**9** select the build material, **ESC** quits.
+
+Controls for `05-decompose-on-approach`: **WASD** move, **mouse** look,
+**Space/Shift** fly up/down (or **Space** to jump while walking), **G** toggles
+walk/fly (collision across all layers), **F** toggles the mouse cursor, **ESC**
+quits. Fly toward the coarse blocky terrain to decompose it into fine detail.
 
 ---
 
@@ -400,14 +413,37 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 - [x] **Demo — Build, break, and persist:** `04-build-break-persist` — press G to walk the streamed world under gravity with terminal-voxel collision, place and remove voxels with the mouse (targeted voxel highlighted, crosshair shown), then quit and relaunch to confirm modified chunks were saved and reload identically while untouched terrain regenerates from the plugin generator
 
-**M6 — Multi-Layer Support**
-- [ ] Two-layer project config working (one composite layer above one terminal layer)
-- [ ] Composite voxels render as solid atomic blocks before decomposition
-- [ ] On-demand decomposition triggers correctly when player interacts with a composite voxel
-- [ ] `DecompositionWorker` running on a thread pool with async pop-in; main thread never blocked
-- [ ] Decomposition determinism verified by test: same seed produces identical child grid across multiple runs
-- [ ] Immutable layer mode working: renders and collides, no decomposition, no persistence
-- [ ] **Demo — Decompose on approach:** a two-layer world where a large composite voxel renders as a solid block from afar and decomposes into its terminal child grid on demand as the player approaches, alongside an immutable backdrop layer that renders and collides but never decomposes
+**M6 — Multi-Layer Support** ✅
+
+> Multi-layer support is the first milestone to use more than one entry of the `LayerConfig` stack at runtime. Everything through M5 ran a single terminal `World`; M6 turns that into a **layer stack** — a composite layer of large atomic blocks above a terminal child layer, plus an independent immutable backdrop layer — and adds the **on-demand decomposition** that turns a composite voxel into its child layer's voxel grid as the player approaches. The `VoxelMode` enum and `LayerDef::decompose_to` already exist and are validated (`LayerConfig::validate`, architecture.md §2/§3); M6 is the first milestone where they drive behavior. The three subsystems named in the project structure but not yet present — `Layer`, `MacroVoxel`, and `DecompositionWorker` — are created here. No `plugin_api.h` change is needed: each layer is populated by a generator registered under its layer name (the existing per-layer hook), and the composition-**recipe** hook is deferred to M9 — for M6 a composite voxel decomposes by running its child (terminal) layer's generator over the macro-voxel's subvolume.
+
+*Layer stack — the shared foundation*
+- [x] Extract per-layer chunk management out of `World` into `src/world/Layer.{h,cpp}`: the `ChunkStore`, generator, and world-space `getVoxel`/`setVoxel` (the M3/M5 behavior) become a `Layer`, leaving the single-terminal-layer demos and tests behaving identically. `World` keeps the single-layer chunked API by forwarding to a *primary* layer (the terminal layer)
+- [x] Make `World` a multi-layer container built from the full `LayerConfig` (one `Layer` per `LayerDef`, looked up by `layer(name)`), resolving each composite layer's `decompose_to` to its child `Layer` via `childLayer()`. Adds `World::anySolidAt(pos)`, a cross-layer solid query sampling every layer at its own scale (used by collision so the player meets composite + immutable + terminal voxels)
+- [x] Layer-aware coordinate math: `ChunkCoordMath.h` gained `layerRatio`, `childVoxelMin`, and `childToParentVoxel` for the parent-voxel → child-layer-subvolume mapping (integer `voxel_size_parent / voxel_size_child` ratio), plus `VoxelCoordHash`; existing world↔voxel/chunk conversions already scale by `voxel_size_m`
+- [x] Drive `LODManager` per layer: each resident layer streams within its own `view_distance_chunks` budget independently (demo 05 streams `blocks`, `backdrop`, and decomposed `terrain` each on their own budget)
+
+*Composite voxels & atomic rendering*
+- [x] `src/world/MacroVoxel.h`: `DecompositionState` tracks each macro voxel's state (none / pending / decomposed) so a decomposed macro is not re-decomposed while resident, an in-flight one is not re-enqueued, and an undecomposed one renders as a solid atomic block
+- [x] Render undecomposed composite-layer chunks through the existing mesher: `BgfxRenderer::renderChunk(mesh, origin, voxel_size_m)` applies a `bx::mtxSRT` floating-origin model transform scaled by the layer's voxel size, so composite chunks mesh as large solid blocks at the correct world scale
+- [x] Swap representations on decomposition: when a macro voxel's child grid becomes resident the demo clears the macro voxel (the coarse block stops rendering and contributing to collision) and re-meshes the composite chunk; on eviction the child chunks are dropped and the macro voxel returns to the atomic state (`DecompositionState::clear`)
+
+*On-demand decomposition*
+- [x] `src/world/DecompositionWorker.{h,cpp}`: a `DecompositionJob` (macro coord + child chunks + child chunk/voxel size + generator) produces the child layer's voxel grid for the subvolume by running the child generator. Determinism is inherited from the pure generator (no `rand`/`time`/unordered-container iteration, architecture.md §4); the worker adds none, verified by repeated and concurrent runs
+- [x] Run decomposition on a thread pool with async pop-in: `enqueue` queues a job, `drain` returns completed child grids on the main thread (never blocking), and the demo inserts them into the child `Layer`'s `ChunkStore`. The atomic block keeps rendering until the result arrives
+- [x] Trigger decomposition on approach: each frame the demo enqueues undecomposed macro voxels within `kDecomposeRadiusM` of the camera (`DecompositionState::markPending` claims each exactly once). Direct-interaction picking stays on the terminal layer; composite picking is deferred to M9 recipes
+
+*Immutable layer*
+- [x] Immutable layer mode: chunks generated once and retained — generation leaves them clean, so they never dirty, are never a persistence candidate, and are never decomposed (the demo's eviction path drops them directly with no save)
+- [x] Collide against immutable voxels: `World::anySolidAt` samples the immutable layer, so the walking player (`VoxelCollision::moveAABB`) stands on the backdrop as well as terminal voxels. Picking/editing intentionally stays on the terminal layer (an immutable layer is, by definition, not editable)
+- [x] Submit immutable-layer geometry through the same scaled mesher at its own `voxel_size_m` (demo 05 renders the 2 m backdrop via `renderChunk(..., backdrop->voxelSizeM())`)
+
+*Tests*
+- [x] Decomposition determinism (`tests/DecompositionTest.cpp`): the same (generator, macro-voxel) yields a byte-for-byte identical child grid across repeated and concurrent runs, plus `DecompositionState` pending/decomposed bookkeeping
+- [x] Two-layer config validates (composite over terminal, integer ratio, valid `decompose_to`) and a malformed stack is rejected (`LayerConfigTest`); `tests/MultiLayerWorldTest.cpp` covers layer ordering, terminal-as-primary, `childLayer` resolution, and `anySolidAt`
+- [x] Layer-aware coordinate round-trip including the parent-voxel → child-subvolume mapping (`ChunkCoordMathTest`); an immutable-layer chunk never reports dirty after generation or after a coincident terminal-layer edit (`MultiLayerWorldTest`)
+
+- [x] **Demo — Decompose on approach:** `05-decompose-on-approach` — a three-layer world (composite `blocks` over a terminal `terrain` child layer, beside an immutable `backdrop`); large composite voxels render as solid blocks from afar and decompose into their terminal child grid with async pop-in as the player flies closer, while the immutable layer renders and collides but never decomposes. Run/controls in the demo header and the Setup section
 
 **M7 — Voxel Editor Interoperability**
 - [ ] `.vox` import assigns content to a specified layer at a specified world anchor

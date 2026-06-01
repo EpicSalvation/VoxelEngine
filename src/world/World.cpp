@@ -8,44 +8,109 @@ World::World(int width, int height, int depth)
 {}
 
 World::World(const LayerDef& layer)
-    : width_(0), height_(0), depth_(0),
-      chunked_(true),
-      voxelSizeM_(layer.voxel_size_m),
-      chunkSizeVoxels_(layer.chunk_size_voxels)
-{}
+    : width_(0), height_(0), depth_(0)
+{
+    layers_.push_back(std::make_unique<Layer>(layer));
+    primary_ = layers_.front().get();
+}
+
+World::World(const LayerConfig& config)
+    : width_(0), height_(0), depth_(0)
+{
+    for (const LayerDef& def : config.layers())
+        layers_.push_back(std::make_unique<Layer>(def));
+    // The single-layer forwarding API (edit, pick, collision substep scale,
+    // persistence) targets the terminal layer — the one the player modifies.
+    // Configs are ordered coarse→fine, so the terminal layer is not first; fall
+    // back to the first layer for a stack without a terminal layer.
+    for (auto& l : layers_)
+        if (l->mode() == VoxelMode::terminal) { primary_ = l.get(); break; }
+    if (!primary_ && !layers_.empty())
+        primary_ = layers_.front().get();
+}
+
+// ── Layer stack ────────────────────────────────────────────────────────────
+
+Layer* World::layer(const std::string& name) {
+    for (auto& l : layers_)
+        if (l->name() == name) return l.get();
+    return nullptr;
+}
+
+const Layer* World::layer(const std::string& name) const {
+    for (const auto& l : layers_)
+        if (l->name() == name) return l.get();
+    return nullptr;
+}
+
+Layer* World::childLayer(const Layer& parent) {
+    if (!parent.decomposeTo()) return nullptr;
+    return layer(*parent.decomposeTo());
+}
+
+const Layer* World::childLayer(const Layer& parent) const {
+    if (!parent.decomposeTo()) return nullptr;
+    return layer(*parent.decomposeTo());
+}
+
+bool World::anySolidAt(const WorldCoord& pos) const {
+    for (const auto& l : layers_)
+        if (!l->getVoxel(pos).isEmpty()) return true;
+    return false;
+}
+
+// ── Single-layer chunked API (forwards to the primary layer) ────────────────
 
 Chunk* World::loadChunk(ChunkCoord coord, LayerGeneratorFn generator, void* user_data) {
-    if (!chunked_) return nullptr;
-
-    auto it = chunks_.find(coord);
-    if (it != chunks_.end())
-        return it->second.get();
-
-    WorldCoord origin = chunkmath::chunkOrigin(coord, voxelSizeM_, chunkSizeVoxels_);
-    auto chunk = std::make_unique<Chunk>(coord, chunkSizeVoxels_, origin);
-    if (generator)
-        generator(origin, chunkSizeVoxels_, chunk->data(), user_data);
-
-    Chunk* raw = chunk.get();
-    chunks_.emplace(coord, std::move(chunk));
-    return raw;
+    return primary_ ? primary_->loadChunk(coord, generator, user_data) : nullptr;
 }
 
 void World::unloadChunk(ChunkCoord coord) {
-    chunks_.erase(coord);
+    if (primary_) primary_->unloadChunk(coord);
 }
 
 Chunk* World::insertChunk(std::unique_ptr<Chunk> chunk) {
-    if (!chunked_ || !chunk) return nullptr;
-    Chunk* raw = chunk.get();
-    chunks_[chunk->coord()] = std::move(chunk);
-    return raw;
+    return primary_ ? primary_->insertChunk(std::move(chunk)) : nullptr;
 }
 
 const Chunk* World::getChunk(ChunkCoord coord) const {
-    auto it = chunks_.find(coord);
-    return it == chunks_.end() ? nullptr : it->second.get();
+    return primary_ ? primary_->getChunk(coord) : nullptr;
 }
+
+Voxel World::getVoxel(const WorldCoord& pos) const {
+    return primary_ ? primary_->getVoxel(pos) : Voxel::empty();
+}
+
+bool World::setVoxel(const WorldCoord& pos, const Voxel& voxel) {
+    return primary_ ? primary_->setVoxel(pos, voxel) : false;
+}
+
+bool World::isChunkDirty(ChunkCoord coord) const {
+    return primary_ ? primary_->isChunkDirty(coord) : false;
+}
+
+std::vector<ChunkCoord> World::dirtyChunkCoords() const {
+    return primary_ ? primary_->dirtyChunkCoords() : std::vector<ChunkCoord>{};
+}
+
+void World::clearChunkDirty(ChunkCoord coord) {
+    if (primary_) primary_->clearChunkDirty(coord);
+}
+
+const World::ChunkStore& World::chunks() const {
+    static const ChunkStore kEmpty;
+    return primary_ ? primary_->chunks() : kEmpty;
+}
+
+double World::voxelSizeM() const {
+    return primary_ ? primary_->voxelSizeM() : 1.0;
+}
+
+int World::chunkSizeVoxels() const {
+    return primary_ ? primary_->chunkSizeVoxels() : 32;
+}
+
+// ── Finite flat-grid API (M1/M2) ────────────────────────────────────────────
 
 void World::generateWorld(LayerGeneratorFn generator, void* user_data) {
     if (!generator) return;
@@ -72,43 +137,4 @@ void World::setVoxel(int x, int y, int z, const Voxel& voxel) {
         return;
     }
     voxels_[idx(x, y, z)] = voxel;
-}
-
-Voxel World::getVoxel(const WorldCoord& pos) const {
-    if (!chunked_) return Voxel::empty();
-    const chunkmath::VoxelCoord v = chunkmath::worldToVoxel(pos, voxelSizeM_);
-    const chunkmath::LocalVoxel lv = chunkmath::voxelToChunkLocal(v, chunkSizeVoxels_);
-    const Chunk* chunk = getChunk(lv.chunk);
-    if (!chunk) return Voxel::empty();
-    return chunk->at(lv.x, lv.y, lv.z);
-}
-
-bool World::setVoxel(const WorldCoord& pos, const Voxel& voxel) {
-    if (!chunked_) return false;
-    const chunkmath::VoxelCoord v = chunkmath::worldToVoxel(pos, voxelSizeM_);
-    const chunkmath::LocalVoxel lv = chunkmath::voxelToChunkLocal(v, chunkSizeVoxels_);
-    auto it = chunks_.find(lv.chunk);
-    if (it == chunks_.end()) return false;
-    it->second->at(lv.x, lv.y, lv.z) = voxel;
-    it->second->markDirty();
-    return true;
-}
-
-bool World::isChunkDirty(ChunkCoord coord) const {
-    auto it = chunks_.find(coord);
-    return it != chunks_.end() && it->second->dirty();
-}
-
-std::vector<ChunkCoord> World::dirtyChunkCoords() const {
-    std::vector<ChunkCoord> out;
-    for (const auto& kv : chunks_)
-        if (kv.second->dirty())
-            out.push_back(kv.first);
-    return out;
-}
-
-void World::clearChunkDirty(ChunkCoord coord) {
-    auto it = chunks_.find(coord);
-    if (it != chunks_.end())
-        it->second->clearDirty();
 }
