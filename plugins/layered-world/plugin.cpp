@@ -23,6 +23,7 @@
 #include "plugin_api.h"
 #include "world/Voxel.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -130,17 +131,34 @@ void terrain_generator(WorldCoord chunk_origin, int grid_size, Voxel* out, void*
 }
 
 // Coarse composite blocks (8 m): a macro voxel is solid when its vertical span
-// overlaps the surface column at its center — a blocky stand-in that refines to
-// terrain_generator's output when decomposed.
+// overlaps the terrain anywhere in its footprint — a blocky stand-in that refines
+// to terrain_generator's output when decomposed.
+//
+// The coarse occupancy MUST be a conservative superset of the fine occupancy:
+// decomposition only runs on macro voxels this generator marks solid, so any fine
+// terrain voxel whose parent macro voxel is left empty is never generated, leaving
+// holes in the terrain on slopes. Sampling the surface only at the macro voxel's
+// center column (as an earlier version did) misses fine columns that rise higher
+// elsewhere in the 8 m footprint, so we take the MAX surface height over the same
+// 1 m columns terrain_generator will fill. Footprint columns are sampled at the
+// child layer's 1 m resolution and identical (x + 0.5) centering, so the bound is
+// exact: a macro voxel is solid iff its decomposition would contain ≥1 voxel.
 void blocks_generator(WorldCoord chunk_origin, int grid_size, Voxel* out, void* user_data) {
     const double vs = voxelSizeFrom(user_data);  // 8.0
     const MaterialProperties block = solid(kBlockIdx, 2200.0f);
+    const int    subs = std::max(1, static_cast<int>(std::llround(vs)));  // 1 m fine columns per edge
 
     for (int z = 0; z < grid_size; ++z)
         for (int x = 0; x < grid_size; ++x) {
-            const double worldX = chunk_origin.value.x + (x + 0.5) * vs;
-            const double worldZ = chunk_origin.value.z + (z + 0.5) * vs;
-            const double height = terrainHeightM(worldX, worldZ);
+            const double cellX0 = chunk_origin.value.x + x * vs;
+            const double cellZ0 = chunk_origin.value.z + z * vs;
+            double height = 0.0;
+            for (int sz = 0; sz < subs; ++sz)
+                for (int sx = 0; sx < subs; ++sx) {
+                    const double worldX = cellX0 + sx + 0.5;
+                    const double worldZ = cellZ0 + sz + 0.5;
+                    height = std::max(height, terrainHeightM(worldX, worldZ));
+                }
             for (int y = 0; y < grid_size; ++y) {
                 const double bottom = chunk_origin.value.y + y * vs;
                 const double top    = bottom + vs;
