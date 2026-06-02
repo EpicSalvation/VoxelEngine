@@ -53,8 +53,18 @@
 
 namespace {
 constexpr int    kStreamPerFrame    = 2;    // composite/backdrop chunks meshed per frame
-constexpr int    kDecomposePerFrame = 12;   // macro voxels enqueued per frame
-constexpr double kDecomposeRadiusM  = 96.0; // approach distance that triggers decomposition
+constexpr int    kDecomposePerFrame = 48;   // macro voxels enqueued per frame
+constexpr double kDecomposeRadiusM  = 144.0; // approach distance that triggers decomposition
+// Decomposed terrain is released (reverted to its coarse block) once it drifts
+// past this radius, so the resident terrain-mesh count stays bounded. Must be
+// > kDecomposeRadiusM (the gap is hysteresis so boundary terrain does not
+// thrash) yet small enough that resident terrain chunks stay under the
+// renderer's GPU static-buffer ceiling (bgfx caps static vertex/index buffers
+// at 4096 each; one per terrain chunk). Without this bound, terrain freed only
+// at the far composite view distance piles up past that ceiling while flying —
+// new chunks then get invalid GPU buffers and render as invisible-but-collidable
+// holes that never recover.
+constexpr double kTerrainKeepRadiusM = 160.0;
 constexpr float  kFlySpeed          = 32.0f;
 constexpr float  kMouseSens         = 0.002f;
 
@@ -171,6 +181,11 @@ layers:
 
     DecompositionState   decomp;
     DecompositionWorker  worker;  // hardware-sized thread pool
+
+    // A coarse block voxel, captured the first time one is decomposed, so terrain
+    // that leaves the keep radius can be reverted to its block (see below).
+    Voxel blockTemplate;
+    bool  haveBlockTemplate = false;
     std::cout << "[main] Decomposition worker threads: " << worker.threadCount() << "\n";
 
     MeshStore blocksMeshes;    // composite atomic blocks (rendered at 8 m)
@@ -393,11 +408,49 @@ layers:
                 chunkmath::voxelToChunkLocal(result.macro, blocks->chunkSizeVoxels());
             auto cit = blocks->chunks().find(lv.chunk);
             if (cit != blocks->chunks().end()) {
+                if (!haveBlockTemplate) {
+                    blockTemplate     = cit->second->at(lv.x, lv.y, lv.z);
+                    haveBlockTemplate = true;
+                }
                 cit->second->at(lv.x, lv.y, lv.z) = Voxel::empty();
                 compositeToRemesh.insert(lv.chunk);
             }
             decomp.markDecomposed(result.macro);
         }
+
+        // ── Release decomposed terrain that has drifted past the keep radius ──
+        // Revert it to its coarse block so the macro voxel still renders and
+        // collides (as a block) and re-decomposes when the camera returns. This
+        // bounds the resident terrain-mesh count; see kTerrainKeepRadiusM.
+        // For this demo's 8 m → 1 m stack a macro voxel and its terrain chunk
+        // share one coord, so the macro VoxelCoord is just the terrain chunk's.
+        std::vector<ChunkCoord> terrainToEvict;
+        for (const auto& kv : terrainMeshes) {
+            const chunkmath::VoxelCoord V{kv.first.x, kv.first.y, kv.first.z};
+            const WorldCoord ctr = chunkmath::voxelCenter(V, blocks->voxelSizeM());
+            if (glm::length(ctr.value - camPos.value) > kTerrainKeepRadiusM)
+                terrainToEvict.push_back(kv.first);
+        }
+        for (const ChunkCoord& tcc : terrainToEvict) {
+            auto it = terrainMeshes.find(tcc);
+            if (it != terrainMeshes.end()) {
+                it->second.destroy();
+                terrainMeshes.erase(it);
+            }
+            terrain->unloadChunk(tcc);
+            const chunkmath::VoxelCoord V{tcc.x, tcc.y, tcc.z};
+            decomp.clear(V);
+            if (haveBlockTemplate) {
+                const chunkmath::LocalVoxel lv =
+                    chunkmath::voxelToChunkLocal(V, blocks->chunkSizeVoxels());
+                auto cit = blocks->chunks().find(lv.chunk);
+                if (cit != blocks->chunks().end()) {
+                    cit->second->at(lv.x, lv.y, lv.z) = blockTemplate;
+                    compositeToRemesh.insert(lv.chunk);
+                }
+            }
+        }
+
         for (const ChunkCoord& c : compositeToRemesh) {
             const Chunk* chunk = blocks->getChunk(c);
             if (!chunk) continue;
