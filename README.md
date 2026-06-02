@@ -446,11 +446,32 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] **Demo — Decompose on approach:** `05-decompose-on-approach` — a three-layer world (composite `blocks` over a terminal `terrain` child layer, beside an immutable `backdrop`); large composite voxels render as solid blocks from afar and decompose into their terminal child grid with async pop-in as the player flies closer, while the immutable layer renders and collides but never decomposes. Run/controls in the demo header and the Setup section
 
 **M7 — Voxel Editor Interoperability**
-- [ ] `.vox` import assigns content to a specified layer at a specified world anchor
-- [ ] `.vox` export with automatic chunking for volumes larger than 256³
-- [ ] Lossy export fallback (extended data dropped, warning logged) working correctly
-- [ ] Tested against a real MagicaVoxel-exported file
-- [ ] **Demo — MagicaVoxel round-trip:** import a real `.vox` model to a chosen layer and world anchor, view and edit it in-engine, then export back to `.vox` — exercising auto-chunking for large volumes and the logged lossy fallback when extended data is dropped
+
+> M7 adds the two classes named in the project structure but not yet present — `VoxImporter` and `VoxExporter` — and wires them into the engine as built-in handlers for the `.vox` extension. The plugin import/export hooks (`register_importer`, `register_exporter`) and the `palette_index` bridge field already exist; M7 is the first milestone where they drive real file I/O. `.vox` is a single-layer, palette-indexed format with a 256³-per-object limit; the importer reassembles multi-object files at a caller-supplied layer and world anchor, while the exporter partitions oversized regions into multiple anchored objects. Extended material properties are out of scope for `.vox` — when they are present the engine falls back to palette-only export and logs a warning, a path that must be exercised by the demo and covered by a test.
+
+*`.vox` binary format parser*
+- [ ] `src/io/VoxImporter.{h,cpp}`: parse the MagicaVoxel `.vox` chunk tree (MAIN, SIZE, XYZI, RGBA); extract per-voxel palette indices and the 256-entry RGBA palette; fall back to the built-in MagicaVoxel default palette when the file contains no RGBA chunk
+- [ ] Parse transform nodes (nTRN) to reconstruct world-relative positions for multi-model `.vox` files so volumes spanning >256³ are assembled correctly at import time from their per-object anchor offsets
+- [ ] `VoxImporter::load(path, layer, anchor)`: populates `palette_index` on each target voxel and initializes other material properties from the palette entry's registered default property set (architecture.md §10 — no inference from color values)
+
+*`.vox` binary format writer*
+- [ ] `src/io/VoxExporter.{h,cpp}`: serialize a layer region to `.vox` binary; emit a single SIZE+XYZI object for regions ≤256 voxels in every axis
+- [ ] Auto-chunking: for regions exceeding 256 voxels in any axis, partition into 256³ sub-volumes and encode each chunk's world offset via nTRN transform nodes so MagicaVoxel and other compliant readers reconstruct the correct layout on re-import
+- [ ] Palette serialization: collect the distinct `palette_index` values present in the exported region and write them as an RGBA chunk; indices unused by any voxel in the region keep the default MagicaVoxel gray
+
+*Lossy export fallback and engine wiring*
+- [ ] Wire `VoxExporter` as the built-in fallback in the plugin dispatch path: if no plugin has registered a `.vox` exporter, the engine invokes `VoxExporter` directly, exporting only `palette_index` values and emitting `LOG_WARN("extended voxel properties dropped; register an exporter plugin to preserve them")`; the warning triggers whenever any voxel's non-palette properties differ from its palette-entry defaults
+- [ ] Register `VoxImporter` and `VoxExporter` as built-in handlers in `Engine::init()` via the existing `register_importer` / `register_exporter` hooks (no `plugin_api.h` change required); built-in handlers have lower priority than any plugin-registered handler for the same extension
+- [ ] Expose `Engine::importVox(path, layerName, anchor)` and `Engine::exportVox(layerName, region, path)` as the public call surface used by demos and tests
+
+*Tests*
+- [ ] `tests/VoxImportExportTest.cpp`: round-trip a minimal hand-crafted `.vox` byte sequence (8 voxels, 2 palette entries) and verify `palette_index` values survive import → export unchanged
+- [ ] Import into a named layer at a non-zero world anchor and verify each voxel's world-space position matches the anchor offset plus the in-file coordinate
+- [ ] Import a two-object `.vox` (two SIZE+XYZI chunks with distinct nTRN offsets) and verify both objects are placed at the correct world positions relative to the anchor
+- [ ] Export a 300×1×1 layer region and verify the output contains exactly two objects with nTRN offsets that split at the 256-voxel boundary (auto-chunking coverage)
+- [ ] Confirm the lossy warning is emitted (capture log output) when exporting a layer whose voxels carry non-default extended properties and no plugin exporter is registered
+
+- [ ] **Demo — MagicaVoxel round-trip:** `06-magicavoxel-round-trip` — bundle a small real MagicaVoxel-exported `.vox` file (`demos/06-magicavoxel-round-trip/assets/test_model.vox`); on startup import it to a named `editor` layer at world origin; render it through the existing mesher; support place/remove editing (same controls as prior demos); on a key press export the current `editor` layer back to `.vox` with a terminal log line confirming auto-chunking triggered and the lossy fallback warning if any extended properties are present
 
 ---
 
