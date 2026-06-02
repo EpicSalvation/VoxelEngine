@@ -149,6 +149,12 @@ The same recipe + (world_seed, voxel_position) inputs must always produce the sa
 
 Decomposition runs on a worker thread. The main thread receives a future and can render a placeholder (the atomic composite voxel's surface material) until the child grid is ready. Pop-in is intentional and expected — do not attempt to block the main thread waiting for decomposition.
 
+### Coarse Occupancy Must Superset Fine Occupancy
+
+Decomposition only generates a child grid for composite voxels the coarse layer marks **present**. A composite voxel the coarse generator left empty is never decomposed, so any detail its child layer would have produced inside that volume is never generated.
+
+Therefore **a composite layer's occupancy must be a conservative superset of its `decompose_to` child's occupancy**: every solid child voxel must fall within a solid parent. When both layers derive from a shared field (e.g. a height map), sample the coarse occupancy from the **extreme** of that field over the parent voxel's full footprint, not a single center sample — a center sample misses detail that rises into the voxel elsewhere in its footprint, which on slopes leaves holes where the fine surface crosses a coarse voxel boundary. Those holes are invisible, and because nothing decomposed there, also non-collidable (the player falls through). The layered-world `blocks_generator` had exactly this bug: it sampled the surface height at each macro voxel's center column and was fixed to take the max over the footprint.
+
 ---
 
 ## 5. Material Property System
@@ -310,6 +316,12 @@ bgfx is initialized in single-threaded mode (a `bgfx::renderFrame()` call preced
 Each layer has its own view distance and chunk budget, configured per-layer. A 100km layer needs very few visible chunks at any one time (the player can see maybe 3–4 in any direction). A 1m terminal layer needs many small chunks in a tight radius. Sharing a single view-distance setting across all layers would either waste memory on macro-layers or starve the terminal layer.
 
 `LODManager` maintains per-layer chunk visibility sets and evicts chunks that fall outside the view distance budget.
+
+### Decomposed-Mesh Budget
+
+Each resident chunk mesh costs GPU buffer handles — in the bgfx path, one static vertex buffer and one static index buffer — and **bgfx caps static vertex and index buffers at 4096 each** (`BGFX_CONFIG_MAX_{VERTEX,INDEX}_BUFFERS`). Decomposition multiplies chunk count: one coarse voxel becomes up to `(parent_size / child_size)³` worth of fine chunks. So **decomposed child meshes must be bounded on a tight radius around the camera, not merely retained out to the composite layer's (much larger) view distance** — otherwise flying across terrain accumulates child meshes without limit.
+
+The failure mode when the ceiling is exceeded is silent and nasty: `bgfx::createVertexBuffer`/`createIndexBuffer` return invalid handles, but `ChunkMesh::build` does not check validity and `ChunkMesh::empty()` is face-count-based, so the chunk yields a *non-empty* mesh holding *invalid* handles. The renderer queues it, then skips it at submit (the `bgfx::isValid` guard in `BgfxRenderer::render`). The chunk's voxel data is still resident in its layer, so **it collides while rendering nothing — invisible but solid — and never recovers**, because nothing rebuilds it. Bound the resident decomposed set so the handle count stays under the ceiling: demo 05 reverts terrain past a keep radius back to its coarse block, freeing the buffers and letting it re-decompose on re-approach. Durable lifts for larger radii are merging chunk meshes (fewer, larger buffers) or raising the bgfx config caps.
 
 ### Floating Origin
 
