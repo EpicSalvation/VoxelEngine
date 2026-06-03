@@ -382,29 +382,32 @@ TEST(VoxImportExport, AutoChunkingSplitsAt256) {
                               WorldCoord(0, 0, 0), WorldCoord(300, 1, 1)));
 
     // Parse the output and verify exactly two models with the correct nTRN offsets.
-    std::ifstream f(tmpOut, std::ios::binary | std::ios::ate);
-    ASSERT_TRUE(f.is_open());
-    const std::streamsize sz = f.tellg();
-    f.seekg(0);
-    std::vector<uint8_t> buf(static_cast<size_t>(sz));
-    ASSERT_TRUE(f.read(reinterpret_cast<char*>(buf.data()), sz));
+    // Scope ensures the ifstream is closed before std::filesystem::remove (required on Windows).
+    {
+        std::ifstream f(tmpOut, std::ios::binary | std::ios::ate);
+        ASSERT_TRUE(f.is_open());
+        const std::streamsize sz = f.tellg();
+        f.seekg(0);
+        std::vector<uint8_t> buf(static_cast<size_t>(sz));
+        ASSERT_TRUE(f.read(reinterpret_cast<char*>(buf.data()), sz));
 
-    vox::VoxFile parsed;
-    ASSERT_TRUE(vox::parse(buf.data(), buf.size(), parsed));
-    ASSERT_EQ(parsed.models.size(), 2u) << "expected exactly 2 models";
+        vox::VoxFile parsed;
+        ASSERT_TRUE(vox::parse(buf.data(), buf.size(), parsed));
+        ASSERT_EQ(parsed.models.size(), 2u) << "expected exactly 2 models";
 
-    // Model 0: size 256, model 1: size 44.
-    const auto& m0 = parsed.models[0];
-    const auto& m1 = parsed.models[1];
-    EXPECT_EQ(m0.sizeX, 256u);
-    EXPECT_EQ(m1.sizeX, 44u);
+        // Model 0: size 256, model 1: size 44.
+        const auto& m0 = parsed.models[0];
+        const auto& m1 = parsed.models[1];
+        EXPECT_EQ(m0.sizeX, 256u);
+        EXPECT_EQ(m1.sizeX, 44u);
 
-    // nTRN offsets: model 0 → tx = 0 + 256/2 = 128
-    //               model 1 → tx = 256 + 44/2 = 278
-    EXPECT_EQ(m0.offsetX, 128);
-    EXPECT_EQ(m1.offsetX, 278);
-    EXPECT_EQ(m0.offsetY, 0);
-    EXPECT_EQ(m1.offsetY, 0);
+        // nTRN offsets: model 0 → tx = 0 + 256/2 = 128
+        //               model 1 → tx = 256 + 44/2 = 278
+        EXPECT_EQ(m0.offsetX, 128);
+        EXPECT_EQ(m1.offsetX, 278);
+        EXPECT_EQ(m0.offsetY, 0);
+        EXPECT_EQ(m1.offsetY, 0);
+    }
 
     // Re-import and verify voxels 0 and 255 are in model 0, voxels 256..299 in model 1.
     LayerDef def2 = makeTerminalLayer(1.0, 32);
