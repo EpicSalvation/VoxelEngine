@@ -292,6 +292,13 @@ cmake --build build
 # Single-config:   ./build/05-decompose-on-approach
 # Multi-config:    ./build/Debug/05-decompose-on-approach.exe
 
+# Run MagicaVoxel round-trip (M7): a 4×4×4 coloured cube is auto-generated as
+# test_model.vox and imported into an "editor" layer; fly around, edit with
+# place/remove, then press E to export back to output.vox (auto-chunking and
+# lossy-property warning logged to the terminal if applicable).
+# Single-config:   ./build/06-magicavoxel-round-trip
+# Multi-config:    ./build/Debug/06-magicavoxel-round-trip.exe
+
 # Run the test suite
 ctest --test-dir build
 ```
@@ -305,6 +312,11 @@ Controls for `05-decompose-on-approach`: **WASD** move, **mouse** look,
 **Space/Shift** fly up/down (or **Space** to jump while walking), **G** toggles
 walk/fly (collision across all layers), **F** toggles the mouse cursor, **ESC**
 quits. Fly toward the coarse blocky terrain to decompose it into fine detail.
+
+Controls for `06-magicavoxel-round-trip`: **WASD** move, **mouse** look,
+**Space/Shift** fly up/down, **left/right mouse** break/place, **1**–**9**
+select palette material, **E** export the current editor layer to `output.vox`,
+**F** toggles the mouse cursor, **ESC** quits.
 
 ---
 
@@ -445,7 +457,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 - [x] **Demo — Decompose on approach:** `05-decompose-on-approach` — a three-layer world (composite `blocks` over a terminal `terrain` child layer, beside an immutable `backdrop`); large composite voxels render as solid blocks from afar and decompose into their terminal child grid with async pop-in as the player flies closer, while the immutable layer renders and collides but never decomposes. Run/controls in the demo header and the Setup section
 
-**M7 — Voxel Editor Interoperability**
+**M7 — Voxel Editor Interoperability** ✅
 
 > M7 adds the two classes named in the project structure but not yet present — `VoxImporter` and `VoxExporter` — and wires them into the engine as built-in handlers for the `.vox` extension. The plugin import/export hooks (`register_importer`, `register_exporter`) and the `palette_index` bridge field already exist; M7 is the first milestone where they drive real file I/O. `.vox` is a single-layer, palette-indexed format with a 256³-per-object limit; the importer reassembles multi-object files at a caller-supplied layer and world anchor, while the exporter partitions oversized regions into multiple anchored objects. Extended material properties are out of scope for `.vox` — when they are present the engine falls back to palette-only export and logs a warning, a path that must be exercised by the demo and covered by a test.
 
@@ -460,18 +472,18 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] Palette serialization: collect the distinct `palette_index` values present in the exported region and write them as an RGBA chunk using the built-in MagicaVoxel default colors; indices unused by any voxel in the region keep a neutral gray
 
 *Lossy export fallback and engine wiring*
-- [ ] Wire `VoxExporter` as the built-in fallback in the plugin dispatch path: if no plugin has registered a `.vox` exporter, the engine invokes `VoxExporter` directly, exporting only `palette_index` values and emitting `LOG_WARN("extended voxel properties dropped; register an exporter plugin to preserve them")`; the warning triggers whenever any voxel's non-palette properties differ from its palette-entry defaults
-- [ ] Register `VoxImporter` and `VoxExporter` as built-in handlers in `Engine::init()` via the existing `register_importer` / `register_exporter` hooks (no `plugin_api.h` change required); built-in handlers have lower priority than any plugin-registered handler for the same extension
-- [ ] Expose `Engine::importVox(path, layerName, anchor)` and `Engine::exportVox(layerName, region, path)` as the public call surface used by demos and tests
+- [x] Wire `VoxExporter` as the built-in fallback in the plugin dispatch path: if no plugin has registered a `.vox` exporter, the engine invokes `VoxExporter` directly, exporting only `palette_index` values and emitting `LOG_WARN("extended voxel properties dropped; register an exporter plugin to preserve them")`; the warning triggers whenever any voxel's non-palette properties differ from their defaults *(implemented in `Engine::exportVox`; warning captured by `Log::setWarnHandler`; `src/core/Logger.{h,cpp}` provides the test-redirectable warn channel)*
+- [x] Register `VoxImporter` and `VoxExporter` as built-in handlers in `Engine::init()` via the existing `register_importer` / `register_exporter` hooks (no `plugin_api.h` change required); built-in handlers have lower priority than any plugin-registered handler for the same extension *(`PluginManager::registerBuiltinHandlers()` inserts marker entries with `isBuiltin=true`; `Engine::init()` calls it; dispatch in `importVox`/`exportVox` skips built-in entries when a plugin handler exists)*
+- [x] Expose `Engine::importVox(path, layerName, anchor)` and `Engine::exportVox(layerName, region, path)` as the public call surface used by demos and tests *(added to `src/core/Engine.{h,cpp}`; engine stores `PluginManager*` and `World*` set by `Engine::init()`)*
 
 *Tests*
 - [x] `tests/VoxImportExportTest.cpp`: round-trip a minimal hand-crafted `.vox` byte sequence and verify `palette_index` values survive import → export → re-import unchanged
 - [x] Import into a named layer at a non-zero world anchor and verify each voxel's world-space position matches the anchor offset plus the in-file coordinate
 - [x] Import a two-object `.vox` (two SIZE+XYZI chunks with distinct nTRN offsets) and verify both objects are placed at the correct world positions relative to the anchor
 - [x] Export a 300×1×1 layer region and verify the output contains exactly two objects with nTRN offsets that split at the 256-voxel boundary (auto-chunking coverage)
-- [ ] Confirm the lossy warning is emitted (capture log output) when exporting a layer whose voxels carry non-default extended properties and no plugin exporter is registered
+- [x] Confirm the lossy warning is emitted (capture log output) when exporting a layer whose voxels carry non-default extended properties and no plugin exporter is registered (`VoxLossyWarning.EmitsWarnWhenExtendedPropertiesPresent`; companion test verifies no spurious warning when only `palette_index` is set)
 
-- [ ] **Demo — MagicaVoxel round-trip:** `06-magicavoxel-round-trip` — bundle a small real MagicaVoxel-exported `.vox` file (`demos/06-magicavoxel-round-trip/assets/test_model.vox`); on startup import it to a named `editor` layer at world origin; render it through the existing mesher; support place/remove editing (same controls as prior demos); on a key press export the current `editor` layer back to `.vox` with a terminal log line confirming auto-chunking triggered and the lossy fallback warning if any extended properties are present
+- [x] **Demo — MagicaVoxel round-trip:** `06-magicavoxel-round-trip` — generates a 4×4×4 coloured cube as `demos/06-magicavoxel-round-trip/assets/test_model.vox` if absent; on startup imports it to the `editor` layer at world origin via `Engine::importVox`; renders it through the existing mesher; supports place/remove editing (same controls as prior demos); press **E** to export the current `editor` layer back to `output.vox` with terminal log lines confirming whether auto-chunking triggered and whether the lossy-property warning fired
 
 ---
 
