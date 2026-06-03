@@ -57,6 +57,7 @@ struct RegisteredImporter {
     ImporterFn  fn;
     void*       user_data;
     PluginId    owner;
+    bool        isBuiltin = false;  // built-in handlers have lower dispatch priority
 };
 
 struct RegisteredExporter {
@@ -64,6 +65,7 @@ struct RegisteredExporter {
     ExporterFn  fn;
     void*       user_data;
     PluginId    owner;
+    bool        isBuiltin = false;  // built-in handlers have lower dispatch priority
 };
 
 // Loads plugins from disk and maintains the callback registries that engine
@@ -83,6 +85,12 @@ public:
 
     // Load all shared libraries in dirPath matching the platform extension.
     void loadPluginsFromDirectory(const std::string& dirPath);
+
+    // Register the engine's built-in .vox import/export handlers. Built-in
+    // handlers appear in importers()/exporters() with isBuiltin=true and are
+    // skipped by the Engine dispatch when a plugin-registered handler exists.
+    // Called by Engine::init() before any plugins are loaded.
+    void registerBuiltinHandlers();
 
     // Wire in a plugin that is compiled directly into the executable rather than loaded
     // as a .so. Useful for the example plugin and for testing without a .so build step.

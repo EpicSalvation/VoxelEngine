@@ -4,6 +4,12 @@
 #include <iostream>
 #include <string>
 
+// Built-in .vox import/export handlers are registered via marker records so the
+// Engine dispatch can distinguish them from plugin-registered handlers.
+// kBuiltinOwnerId is a reserved PluginId that is never allocated to a real plugin
+// (real IDs start at 1 and advance via nextPluginId_).
+static constexpr PluginId kBuiltinOwnerId = 0xFFFFFFFFu;
+
 #ifdef _WIN32
 #  include <windows.h>
 static std::string platformDlError() {
@@ -153,6 +159,15 @@ bool PluginManager::unloadPlugin(PluginId id) {
     if (handle) platformDlClose(handle);
     std::cout << "[PluginManager] Unloaded plugin id " << id << "\n";
     return true;
+}
+
+void PluginManager::registerBuiltinHandlers() {
+    // Register marker entries for the built-in .vox importer and exporter.
+    // fn and user_data are null — the Engine dispatch never calls them; it
+    // recognises these entries by isBuiltin=true and invokes VoxImporter /
+    // VoxExporter directly instead.
+    importers_.push_back({"vox", nullptr, nullptr, kBuiltinOwnerId, true});
+    exporters_.push_back({"vox", nullptr, nullptr, kBuiltinOwnerId, true});
 }
 
 PluginContext PluginManager::buildContext() {

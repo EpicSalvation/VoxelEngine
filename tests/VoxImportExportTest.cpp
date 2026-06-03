@@ -8,13 +8,19 @@
 //     world positions relative to the anchor.
 //   - Auto-chunking export: a 300×1×1 region produces exactly two objects with
 //     nTRN offsets that split at the 256-voxel boundary.
+//   - Lossy-property warning: Engine::exportVox emits LOG_WARN when a layer
+//     contains voxels with non-default extended properties and no plugin exporter
+//     is registered.
 
 #include "io/VoxImporter.h"
 #include "io/VoxExporter.h"
 #include "world/Layer.h"
 #include "world/ChunkCoordMath.h"
+#include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
+#include "world/World.h"
 
 #include <gtest/gtest.h>
 
@@ -22,6 +28,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -425,6 +432,89 @@ TEST(VoxImportExport, AutoChunkingSplitsAt256) {
         EXPECT_EQ(v.material.palette_index, 3)
             << "palette_index wrong at x=" << x;
     }
+
+    std::filesystem::remove(tmpOut);
+}
+
+// ── Lossy-property warning ─────────────────────────────────────────────────────
+//
+// Engine::exportVox must emit a LOG_WARN when:
+//   - No plugin exporter is registered for ".vox" (only the built-in fallback).
+//   - At least one voxel in the export region carries non-default extended
+//     properties (density, structural_strength, thermal_conductivity, porosity,
+//     or hardness != 0.0f) that the .vox format cannot represent.
+
+TEST(VoxLossyWarning, EmitsWarnWhenExtendedPropertiesPresent) {
+    LayerDef def = makeTerminalLayer(1.0, 32);
+    World world(def);
+
+    Layer* layer = world.primaryLayer();
+    ASSERT_NE(layer, nullptr);
+    layer->loadChunk({0, 0, 0}, nullptr);
+    Voxel v;
+    v.material.palette_index       = 1;
+    v.material.density             = 2500.0f;  // non-default: .vox cannot store this
+    v.material.structural_strength = 1.0f;
+    layer->setVoxel(WorldCoord(0.5, 0.5, 0.5), v);
+
+    PluginManager pm;
+    Engine engine;
+    engine.init(pm, world);
+
+    std::vector<std::string> warnings;
+    Log::setWarnHandler([&warnings](const char* msg) {
+        warnings.emplace_back(msg);
+    });
+
+    auto tmpOut = std::filesystem::temp_directory_path() / "lossy_warn_test.vox";
+    bool ok = engine.exportVox("editor",
+                               WorldCoord(0, 0, 0),
+                               WorldCoord(32, 32, 32),
+                               tmpOut.string());
+    EXPECT_TRUE(ok);
+    Log::setWarnHandler(nullptr);
+
+    bool found = false;
+    for (const auto& w : warnings)
+        if (w.find("extended voxel properties dropped") != std::string::npos)
+            found = true;
+    EXPECT_TRUE(found) << "Expected lossy-property warning was not emitted.";
+
+    std::filesystem::remove(tmpOut);
+}
+
+TEST(VoxLossyWarning, NoWarnWhenOnlyPalettePropertiesSet) {
+    LayerDef def = makeTerminalLayer(1.0, 32);
+    World world(def);
+
+    Layer* layer = world.primaryLayer();
+    ASSERT_NE(layer, nullptr);
+    layer->loadChunk({0, 0, 0}, nullptr);
+    Voxel v;
+    v.material.palette_index = 2;
+    // All extended properties stay at their defaults (0.0f).
+    layer->setVoxel(WorldCoord(0.5, 0.5, 0.5), v);
+
+    PluginManager pm;
+    Engine engine;
+    engine.init(pm, world);
+
+    std::vector<std::string> warnings;
+    Log::setWarnHandler([&warnings](const char* msg) {
+        warnings.emplace_back(msg);
+    });
+
+    auto tmpOut = std::filesystem::temp_directory_path() / "no_warn_test.vox";
+    bool ok = engine.exportVox("editor",
+                               WorldCoord(0, 0, 0),
+                               WorldCoord(32, 32, 32),
+                               tmpOut.string());
+    EXPECT_TRUE(ok);
+    Log::setWarnHandler(nullptr);
+
+    for (const auto& w : warnings)
+        EXPECT_EQ(w.find("extended voxel properties dropped"), std::string::npos)
+            << "Unexpected lossy warning when only palette_index was set.";
 
     std::filesystem::remove(tmpOut);
 }
