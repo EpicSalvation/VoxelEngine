@@ -133,7 +133,7 @@ layers:
     Engine engine;
     engine.init(pluginManager, world);
 
-    std::cout << "[main] Importing " << assetVox << " …\n";
+    std::cout << "[main] Importing " << assetVox << " ...\n";
     if (!engine.importVox(assetVox, "editor", WorldCoord(0, 0, 0))) {
         std::cerr << "[main] Fatal: .vox import failed.\n";
         return 1;
@@ -191,7 +191,7 @@ layers:
     auto prevTime = std::chrono::high_resolution_clock::now();
 
     std::cout << "[main] WASD + mouse = fly  |  left/right mouse = break/place\n"
-                 "[main] 1–9 = material  |  E = export to output.vox  |  F = cursor  |  ESC = quit\n";
+                 "[main] 1-9 = material  |  E = export to output.vox  |  F = cursor  |  ESC = quit\n";
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     while (!window.shouldClose()) {
@@ -218,7 +218,7 @@ layers:
         // Export on E.
         bool curE = (glfwGetKey(glfwWin, GLFW_KEY_E) == GLFW_PRESS);
         if (curE && !prevKeyE) {
-            std::cout << "[main] Exporting editor layer to " << outputVox << " …\n";
+            std::cout << "[main] Exporting editor layer to " << outputVox << " ...\n";
 
             bool lossyWarned = false;
             bool autoChunked = false;
@@ -258,10 +258,10 @@ layers:
             Log::setWarnHandler(nullptr);
 
             if (ok) {
-                std::cout << "[main] Export complete → " << outputVox << "\n";
+                std::cout << "[main] Export complete -> " << outputVox << "\n";
                 std::cout << "[main] Auto-chunking: "
-                          << (autoChunked ? "YES — region exceeded 256 voxels per axis."
-                                          : "no — region fits in a single 256³ object.")
+                          << (autoChunked ? "YES - region exceeded 256 voxels per axis."
+                                          : "no - region fits in a single 256^3 object.")
                           << "\n";
                 if (lossyWarned)
                     std::cout << "[main] Lossy-property warning: extended properties dropped.\n";

@@ -152,7 +152,7 @@ layers:
 
     std::cout << "[main] Plugin-driven world. WASD + mouse to fly, Space/Shift up/down, "
                  "F toggles cursor, P toggles the water plugin, ESC quits.\n"
-                 "[main] Water plugin is OFF — press P to load it.\n";
+                 "[main] Water plugin is OFF - press P to load it.\n";
 
     while (!window.shouldClose()) {
         window.pollEvents();

@@ -110,7 +110,7 @@ layers:
     size_t selectedMaterial = 0;
     std::cout << "[main] Build materials (press the number to select):\n";
     for (size_t i = 0; i < materials.size() && i < 9; ++i)
-        std::cout << "       " << (i + 1) << " — " << materials[i].material_id << "\n";
+        std::cout << "       " << (i + 1) << " - " << materials[i].material_id << "\n";
 
     Engine engine;
     engine.start();
