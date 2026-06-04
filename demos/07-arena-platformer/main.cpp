@@ -1,4 +1,4 @@
-// M7b demo — arena platformer (Groups 1+2: world generation and decomposition).
+// M7b demo — arena platformer (Groups 1-3: world generation, decomposition, and platformer mechanics).
 //
 // A five-layer walled arena exercises the full M1–M6 feature set at once:
 //
@@ -18,8 +18,21 @@
 // A feature generator stamps gold key-marker voxels above each non-goal platform;
 // these are applied to detail chunks after base generation (M4 hook).
 //
+// Platformer mechanics (Group 3):
+//   - Walk mode: kinematic body with gravity, jumping, and swept AABB collision
+//     across all five layers (the M5 kinematic body, wired to World::anySolidAt).
+//   - Free-fly camera (F): floating-origin submission keeps sub-meter precision
+//     across the full 500 m arena (M2).
+//   - Build/break: left mouse breaks a 1 m detail voxel, right mouse places the
+//     selected material (1–9). Edited chunks are re-meshed immediately and fire
+//     on_voxel_modified. The DDA raycast targets only resident detail layer voxels.
+//   - Persistence: dirty detail chunks are saved to "arena-save/" on eviction and
+//     on quit. On relaunch saved chunks are preferred over re-generating from the
+//     detail generator, so player-built bridges survive across sessions.
+//
 // Controls: WASD move, mouse look, Space/Shift fly up/down (or jump in walk mode),
-// G = walk (gravity + cross-layer AABB collision), F = cursor, ESC quits.
+// G = walk (gravity + cross-layer AABB collision), F = cursor, left mouse = break,
+// right mouse = place, 1–9 = material, ESC quits.
 //
 // Run from the build directory:
 //   ./build/07-arena-platformer
@@ -28,6 +41,7 @@
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
 #include "core/PluginManager.h"
+#include "io/ChunkPersistence.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
 #include "renderer/ChunkMesh.h"
@@ -37,6 +51,7 @@
 #include "world/DecompositionWorker.h"
 #include "world/MacroVoxel.h"
 #include "world/VoxelCollision.h"
+#include "world/VoxelRaycast.h"
 #include "world/World.h"
 
 #include <GLFW/glfw3.h>
@@ -72,6 +87,9 @@ constexpr double kGravity    = 25.0;
 constexpr double kJumpSpeed  =  9.0;
 constexpr double kEyeOffset  =  0.7;
 const glm::dvec3 kPlayerHalf(0.3, 0.9, 0.3);
+
+// ── Build / edit constants ────────────────────────────────────────────────────
+constexpr double kReachM = 8.0;  // how far the player can target a detail voxel
 
 using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
 
@@ -170,6 +188,17 @@ layers:
         return 1;
     }
 
+    // Build-material palette: every registered material is selectable (keys 1-9).
+    const auto& materials = pluginManager.materials();
+    if (materials.empty()) {
+        std::cerr << "[main] Fatal: no materials registered by the arena plugin.\n";
+        return 1;
+    }
+    size_t selectedMaterial = 0;
+    std::cout << "[main] Build materials (press the number to select):\n";
+    for (size_t i = 0; i < materials.size() && i < 9; ++i)
+        std::cout << "       " << (i + 1) << " - " << materials[i].material_id << "\n";
+
     // ── Engine + window + renderer ────────────────────────────────────────────
     Engine engine;
     engine.start();
@@ -193,6 +222,15 @@ layers:
         std::cerr << "[main] Fatal: expected all five arena layers.\n";
         return 1;
     }
+
+    // ── Persistence: dirty detail chunks survive across launches ─────────────
+    // The "detail" layer is the terminal layer and the only one the player edits.
+    // Dirty chunks are saved on eviction (save-then-evict) and on quit.
+    const LayerDef* detailDef = layerConfig.findLayer("detail");
+    persistence::WorldSave detailSave(
+        "arena-save",
+        persistence::WorldIdentity{detailDef->voxel_size_m, detailDef->chunk_size_voxels});
+    std::cout << "[main] Save directory: " << detailSave.directory() << "\n";
 
     // ── LOD + decomposition ───────────────────────────────────────────────────
     LODManager lod(layerConfig);
@@ -227,6 +265,31 @@ layers:
                      chunk.data(), f.user_data);
     };
 
+    // ── Detail layer edit helpers ─────────────────────────────────────────────
+    // Rebuild the GPU mesh for a detail chunk after an edit.
+    auto remeshDetailChunk = [&](const ChunkCoord& cc) {
+        const Chunk* chunk = detail->getChunk(cc);
+        if (!chunk) return;
+        auto it = detailMeshes.find(cc);
+        if (it != detailMeshes.end()) {
+            it->second.destroy();
+            it->second = ChunkMesh::build(*chunk);
+        } else {
+            detailMeshes.emplace(cc, ChunkMesh::build(*chunk));
+        }
+    };
+
+    // Write a voxel in the detail layer, fire on_voxel_modified, and re-mesh.
+    // No-op if the chunk is not resident (setVoxel returns false).
+    auto editDetailVoxel = [&](const chunkmath::VoxelCoord& vc, const Voxel& newVox) {
+        const WorldCoord center = chunkmath::voxelCenter(vc, detail->voxelSizeM());
+        const Voxel oldVox = world.getVoxel(center);
+        if (!world.setVoxel(center, newVox)) return;
+        for (const auto& h : pluginManager.voxelModifiedHooks())
+            if (h.fn) h.fn(center, &oldVox, &newVox, h.user_data);
+        remeshDetailChunk(chunkmath::voxelToChunkLocal(vc, detail->chunkSizeVoxels()).chunk);
+    };
+
     // ── Camera / player state ─────────────────────────────────────────────────
     float      pitch = -0.25f, yaw = 0.0f;
     // Start inside the arena, near the ground, facing the central platform.
@@ -235,6 +298,7 @@ layers:
     bool       firstMouse = true;
     bool       cursorCaptured = true;
     bool       prevKeyF = false, prevKeyG = false;
+    bool       prevLeft = false, prevRight = false;
 
     bool       walkMode = false;
     WorldCoord playerCenter(0.0, 0.0, 0.0);
@@ -250,8 +314,10 @@ layers:
                  "ramparts (20m) + terraces (10m) + props (2m) + detail (1m).\n"
                  "[main] WASD + mouse to fly, Space/Shift up/down, G = walk "
                  "(cross-layer collision), F = cursor, ESC quits.\n"
-                 "[main] Fly toward the stone platforms to watch them decompose "
-                 "into grass-topped 1 m detail.\n";
+                 "[main] Left mouse = break detail voxel, right mouse = place, "
+                 "1-9 = select material.\n"
+                 "[main] Fly toward platforms to decompose them; build bridges to "
+                 "cross gaps. Edits save to arena-save/ and survive relaunch.\n";
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -286,6 +352,16 @@ layers:
                       << "\n";
         }
         prevKeyG = curKeyG;
+
+        // Material selection (1-9): choose what the right mouse places.
+        for (int i = 0; i < 9 && i < static_cast<int>(materials.size()); ++i) {
+            if (glfwGetKey(glfwWin, GLFW_KEY_1 + i) == GLFW_PRESS &&
+                selectedMaterial != static_cast<size_t>(i)) {
+                selectedMaterial = static_cast<size_t>(i);
+                std::cout << "[main] Selected material: "
+                          << materials[selectedMaterial].material_id << "\n";
+            }
+        }
 
         // Mouse look.
         if (cursorCaptured) {
@@ -384,6 +460,12 @@ layers:
                                         it->second.destroy();
                                         detailMeshes.erase(it);
                                     }
+                                    // Save dirty detail child before eviction.
+                                    if (world.isChunkDirty(dc)) {
+                                        if (const Chunk* ch = world.getChunk(dc))
+                                            detailSave.saveChunk(*ch);
+                                        world.clearChunkDirty(dc);
+                                    }
                                     detail->unloadChunk(dc);
                                 }
                                 decomp.clear(V);
@@ -430,14 +512,25 @@ layers:
         }
 
         // ── Integrate completed decomposition results ─────────────────────────
+        // For each generated detail chunk, prefer a player-saved version over the
+        // freshly generated one — so player bridges survive across sessions.
         std::unordered_set<ChunkCoord, ChunkCoordHash> terracesToRemesh;
         for (DecompositionResult& result : worker.drain()) {
             for (auto& chunkPtr : result.chunks) {
                 const ChunkCoord dc = chunkPtr->coord();
+                // Prefer a saved (player-edited) chunk over the generator output.
+                bool fromSave = false;
+                if (detailSave.hasChunk(dc)) {
+                    if (auto saved = detailSave.tryLoadChunk(dc)) {
+                        chunkPtr  = std::move(saved);
+                        fromSave  = true;
+                    }
+                }
                 Chunk* inserted = detail->insertChunk(std::move(chunkPtr));
                 if (!inserted) continue;
-                // Apply feature generators (key-spot markers) after base generation.
-                applyFeatures(*inserted);
+                // Apply feature generators only to freshly generated chunks —
+                // saved chunks already incorporate the player's edits.
+                if (!fromSave) applyFeatures(*inserted);
                 auto it = detailMeshes.find(dc);
                 if (it != detailMeshes.end()) {
                     it->second.destroy();
@@ -463,8 +556,9 @@ layers:
         }
 
         // ── Release detail chunks that have drifted past the keep radius ──────
-        // Revert the parent terrace macro voxel to its solid block so it still
-        // renders and collides (as a coarse block) and re-decomposes on approach.
+        // Save dirty chunks before dropping them, then revert the parent terrace
+        // macro voxel to its solid block so it still renders/collides and
+        // re-decomposes on approach.
         std::vector<ChunkCoord> detailToEvict;
         for (const auto& kv : detailMeshes) {
             // For terraces(10m)/detail(10m chunks), the macro VoxelCoord equals
@@ -475,6 +569,12 @@ layers:
                 detailToEvict.push_back(kv.first);
         }
         for (const ChunkCoord& dc : detailToEvict) {
+            // Save-then-evict: write the chunk to disk before dropping it so player
+            // edits are never lost when the camera moves away.
+            if (world.isChunkDirty(dc)) {
+                if (const Chunk* ch = world.getChunk(dc)) detailSave.saveChunk(*ch);
+                world.clearChunkDirty(dc);
+            }
             auto it = detailMeshes.find(dc);
             if (it != detailMeshes.end()) {
                 it->second.destroy();
@@ -504,6 +604,47 @@ layers:
                 it->second = ChunkMesh::build(*chunk);
             }
         }
+
+        // ── Targeting and edits (detail layer) ───────────────────────────────
+        // The DDA raycast targets resident 1 m detail voxels only (primary layer).
+        // The player can break and place voxels to bridge gaps or make shortcuts.
+        glm::dvec3 lookDir{double(cp * sy), double(sp), double(cp * cy)};
+        voxelcast::RayHit hit = voxelcast::raycast(world, camPos, lookDir, kReachM);
+        if (hit.hit)
+            renderer.drawVoxelHighlight(
+                chunkmath::voxelCenter(hit.voxel, detail->voxelSizeM()),
+                static_cast<float>(detail->voxelSizeM()));
+
+        bool curLeft  = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS);
+        bool curRight = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
+
+        if (hit.hit && curLeft && !prevLeft) {
+            editDetailVoxel(hit.voxel, Voxel::empty());  // break
+        }
+        if (hit.hit && curRight && !prevRight) {
+            // Guard against placing into the space the player occupies.
+            const double vs = detail->voxelSizeM();
+            const chunkmath::VoxelCoord t = hit.adjacent;
+            bool blockedByPlayer;
+            if (walkMode) {
+                glm::dvec3 cmin{double(t.x) * vs, double(t.y) * vs, double(t.z) * vs};
+                glm::dvec3 cmax = cmin + glm::dvec3(vs, vs, vs);
+                glm::dvec3 pmin = playerCenter.value - kPlayerHalf;
+                glm::dvec3 pmax = playerCenter.value + kPlayerHalf;
+                blockedByPlayer = (pmin.x < cmax.x && pmax.x > cmin.x &&
+                                   pmin.y < cmax.y && pmax.y > cmin.y &&
+                                   pmin.z < cmax.z && pmax.z > cmin.z);
+            } else {
+                blockedByPlayer = (t == chunkmath::worldToVoxel(camPos, vs));
+            }
+            if (!blockedByPlayer) {
+                Voxel placed;
+                placed.material = materials[selectedMaterial].props;
+                editDetailVoxel(t, placed);
+            }
+        }
+        prevLeft  = curLeft;
+        prevRight = curRight;
 
         // ── Resize ────────────────────────────────────────────────────────────
         int w, h;
@@ -540,6 +681,12 @@ layers:
 
     std::cout << "[main] Decomposed terrace macro voxels this session: "
               << decomp.decomposedCount() << "\n";
+
+    // Persist any edited detail chunks still in memory so they survive the next launch.
+    int savedOnQuit = detailSave.saveDirtyChunks(world);
+    if (savedOnQuit > 0)
+        std::cout << "[main] Saved " << savedOnQuit << " edited detail chunk(s) to "
+                  << detailSave.directory() << "\n";
 
     for (auto& kv : foundationMeshes) kv.second.destroy();
     for (auto& kv : rampartsMeshes)   kv.second.destroy();
