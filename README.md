@@ -299,6 +299,13 @@ cmake --build build
 # Single-config:   ./build/06-magicavoxel-round-trip
 # Multi-config:    ./build/Debug/06-magicavoxel-round-trip.exe
 
+# Run the arena platformer (M7b): spawn in a five-layer 500 m walled arena.
+# Gold key stakes are imported .vox models; walk into each to collect it (G to
+# enable walk mode), then reach the goal totem to win. Press P to toggle lava
+# hazards on the platforms, E to export your built region to arena-export.vox.
+# Single-config:   ./build/07-arena-platformer
+# Multi-config:    ./build/Debug/07-arena-platformer.exe
+
 # Run the test suite
 ctest --test-dir build
 ```
@@ -317,6 +324,13 @@ Controls for `06-magicavoxel-round-trip`: **WASD** move, **mouse** look,
 **Space/Shift** fly up/down, **left/right mouse** break/place, **1**–**9**
 select palette material, **E** export the current editor layer to `output.vox`,
 **F** toggles the mouse cursor, **ESC** quits.
+
+Controls for `07-arena-platformer`: **WASD** move, **mouse** look, **G** toggles
+walk/fly (cross-layer collision + gravity), **Space** jump (walk) or fly up,
+**Shift** fly down, **left/right mouse** break/place, **1**–**9** select
+material, **P** toggles lava hazards on platforms, **E** exports the detail layer
+to `arena-export.vox`, **F** toggles the mouse cursor, **ESC** quits. Walk into
+gold key stakes to collect them; reach the goal totem with all four keys to win.
 
 ---
 
@@ -486,7 +500,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 - [x] **Demo — MagicaVoxel round-trip:** `06-magicavoxel-round-trip` — generates a 4×4×4 coloured cube as `demos/06-magicavoxel-round-trip/assets/test_model.vox` if absent; on startup imports it to the `editor` layer at world origin via `Engine::importVox`; renders it through the existing mesher; supports place/remove editing (same controls as prior demos); press **E** to export the current `editor` layer back to `output.vox` with terminal log lines confirming whether auto-chunking triggered and whether the lossy-property warning fired
 
-**M7b — MVP Capstone: Arena Platformer**
+**M7b — MVP Capstone: Arena Platformer** ✅
 
 > M7b adds no new engine subsystems — it is the integration milestone that proves the Phase 1 MVP by building a small but complete **3D platformer** inside a 500 m arena, deliberately exercising every M1–M7 capability at once. The arena is a five-layer stack: a single 500 m **immutable** voxel whose top face is the floor, a 20 m **immutable** perimeter wall with landmark towers, 10 m **composite** platforms that decompose on approach into the 1 m **terminal** build layer, and 2 m **immutable** props between. Decomposition stays single-step (a 10 m platform → its 1 m child grid, per M6); the deep lazy 500→20→10→2→1 cascade is intentionally left to M10. The objective is *collect-the-keys-then-reach-the-goal*: the scattered keys and the goal totem are MagicaVoxel `.vox` models imported with their authored colors. All new code lives in one new demo (`07-arena-platformer`) and two new plugins (`arena`, `hazards`) — no engine or `plugin_api.h` change is required.
 
@@ -508,17 +522,17 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] Player edits persist across runs (chunk-granular dirty tracking + `WorldSave`), so a built bridge is still there on relaunch
 
 *Game objective — collect keys, reach the goal (demo logic + M7)*
-- [ ] Keys and the goal totem are imported `.vox` models (`Engine::importVox`) placed at world anchors and rendered with their authored palette colors (the M7 color round-trip)
-- [ ] Collect-then-finish loop: walking through a key's trigger volume collects it; reaching the goal totem with all keys collected logs victory; falling off or touching a hazard respawns the player at the start
-- [ ] Live `hazards` plugin load/unload (P) adds/removes lava pools at runtime, reverting the arena exactly when unloaded (the M4 live-toggle pattern)
-- [ ] Export (E) the player-built region of the `detail` layer back to `.vox` via `Engine::exportVox`; exporting the full 500-voxel-wide arena exercises auto-chunking (>256 voxels/axis) and the lossy-property warning path
+- [x] Keys and the goal totem are imported `.vox` models (`Engine::importVox`) placed at world anchors and rendered with their authored palette colors (the M7 color round-trip)
+- [x] Collect-then-finish loop: walking through a key's trigger volume collects it; reaching the goal totem with all keys collected logs victory; falling off or touching a hazard respawns the player at the start
+- [x] Live `hazards` plugin load/unload (P) adds/removes lava pools at runtime, reverting the arena exactly when unloaded (the M4 live-toggle pattern)
+- [x] Export (E) the player-built region of the `detail` layer back to `.vox` via `Engine::exportVox`; exporting the full 500-voxel-wide arena exercises auto-chunking (>256 voxels/axis) and the lossy-property warning path
 
 *Tests*
-- [ ] The five-layer arena config validates (integer ratios, modes, `decompose_to`) and a deliberately malformed variant is rejected (`LayerConfig::validate`)
-- [ ] Arena generators are deterministic (same layer + coord → identical grid) and the single-step `terraces`→`detail` decomposition is byte-for-byte stable (reuses the M6 determinism harness)
-- [ ] Headless unit tests for the game logic that does not need a window: key-collection state machine, win condition (all keys + goal reached), respawn trigger, and persistence round-trip of a player-built platform
+- [x] The five-layer arena config validates (integer ratios, modes, `decompose_to`) and a deliberately malformed variant is rejected (`LayerConfig::validate`)
+- [x] Arena generators are deterministic (same layer + coord → identical grid) and the single-step `terraces`→`detail` decomposition is byte-for-byte stable (reuses the M6 determinism harness)
+- [x] Headless unit tests for the game logic that does not need a window: key-collection state machine, win condition (all keys + goal reached), respawn trigger, and persistence round-trip of a player-built platform
 
-- [ ] **Demo — Arena platformer:** `07-arena-platformer` — spawn on the floor of a walled 500 m arena, collect the scattered `.vox` keys and reach the imported goal totem by traversing platforms that decompose from coarse blocks into fine 1 m detail as you approach; walk with gravity and collision across all five layers (G), build/break to make your own route (mouse, 1–9), toggle lava hazards (P), survey from free-fly (F), and export your modified arena to `.vox` (E)
+- [x] **Demo — Arena platformer:** `07-arena-platformer` — spawn on the floor of a walled 500 m arena, collect the scattered `.vox` keys and reach the imported goal totem by traversing platforms that decompose from coarse blocks into fine 1 m detail as you approach; walk with gravity and collision across all five layers (G), build/break to make your own route (mouse, 1–9), toggle lava hazards (P), survey from free-fly (F), and export your modified arena to `.vox` (E)
 
 ---
 
