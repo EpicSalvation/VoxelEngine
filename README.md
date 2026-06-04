@@ -491,21 +491,21 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 > M7b adds no new engine subsystems — it is the integration milestone that proves the Phase 1 MVP by building a small but complete **3D platformer** inside a 500 m arena, deliberately exercising every M1–M7 capability at once. The arena is a five-layer stack: a single 500 m **immutable** voxel whose top face is the floor, a 20 m **immutable** perimeter wall with landmark towers, 10 m **composite** platforms that decompose on approach into the 1 m **terminal** build layer, and 2 m **immutable** props between. Decomposition stays single-step (a 10 m platform → its 1 m child grid, per M6); the deep lazy 500→20→10→2→1 cascade is intentionally left to M10. The objective is *collect-the-keys-then-reach-the-goal*: the scattered keys and the goal totem are MagicaVoxel `.vox` models imported with their authored colors. All new code lives in one new demo (`07-arena-platformer`) and two new plugins (`arena`, `hazards`) — no engine or `plugin_api.h` change is required.
 
 *Arena world — layer stack, generation, and materials (M1, M3, M4)*
-- [ ] Five-layer `LayerConfig` (`foundation` 500 m immutable / `ramparts` 20 m immutable / `terraces` 10 m composite → `detail` / `props` 2 m immutable / `detail` 1 m terminal); integer ratios 25:1, 2:1, 5:1, 2:1 validated at startup, demonstrating the validator on a real multi-scale stack
-- [ ] New `arena` plugin registers a layer generator per layer (floor slab, perimeter wall + towers, coarse terraces, small props, fine detail) and the arena materials (stone, grass, hazard-lava, goal-gold), all deterministic (no `rand`/`time`/unordered iteration, architecture.md §4)
-- [ ] The 1 m `detail` layer streams within its `view_distance_chunks` budget around the player (a 500 m arena at 1 m is ~125 M voxels — streaming is mandatory, not optional); every layer drives `LODManager` on its own budget
-- [ ] A feature generator stamps key pickups and platform decorations onto the generated platforms (the M4 feature-generator hook, applied after the base layer generator)
+- [x] Five-layer `LayerConfig` (`foundation` 500 m immutable / `ramparts` 20 m immutable / `terraces` 10 m composite → `detail` / `props` 2 m immutable / `detail` 1 m terminal); integer ratios 25:1, 2:1, 5:1, 2:1 validated at startup, demonstrating the validator on a real multi-scale stack
+- [x] New `arena` plugin registers a layer generator per layer (floor slab, perimeter wall + towers, coarse terraces, small props, fine detail) and the arena materials (stone, grass, hazard-lava, goal-gold), all deterministic (no `rand`/`time`/unordered iteration, architecture.md §4)
+- [x] The 1 m `detail` layer streams within its `view_distance_chunks` budget around the player (a 500 m arena at 1 m is ~125 M voxels — streaming is mandatory, not optional); every layer drives `LODManager` on its own budget
+- [x] A feature generator stamps key pickups and platform decorations onto the generated platforms (the M4 feature-generator hook, applied after the base layer generator)
 
 *Multi-scale world — decomposition, modes, and collision (M6)*
-- [ ] Drive single-step decomposition on approach in the demo: `terraces` macro voxels within a radius are enqueued to `DecompositionWorker` and drained on the main thread into the `detail` layer (the proven M6 path); distant terraces render as 10 m blocks via the scaled `renderChunk`
-- [ ] Cross-layer collision via `World::anySolidAt`: the kinematic player stands on the 500 m floor, the 20 m ramparts, the 2 m props, and 1 m platforms simultaneously, each sampled at its own scale
-- [ ] Immutable floor / walls / props render and collide but never decompose, dirty, or persist; only `detail` edits are persistent
+- [x] Drive single-step decomposition on approach in the demo: `terraces` macro voxels within a radius are enqueued to `DecompositionWorker` and drained on the main thread into the `detail` layer (the proven M6 path); distant terraces render as 10 m blocks via the scaled `renderChunk`
+- [x] Cross-layer collision via `World::anySolidAt`: the kinematic player stands on the 500 m floor, the 20 m ramparts, the 2 m props, and 1 m platforms simultaneously, each sampled at its own scale
+- [x] Immutable floor / walls / props render and collide but never decompose, dirty, or persist; only `detail` edits are persistent
 
 *Platformer mechanics (M2, M5)*
-- [ ] Walk mode with gravity, jump, and grounded state (the M5 kinematic body) is the core traversal; swept axis-separated AABB collision lands the player on platforms and stops them at walls
-- [ ] Free-fly camera (F) to survey the course; floating-origin submission keeps sub-meter precision 250 m+ from the arena center (M2)
-- [ ] Build/break on the `detail` layer (raycast + `setVoxel`, 1–9 material select) lets the player bridge gaps or make shortcuts; edited chunks re-mesh and fire `on_voxel_modified`
-- [ ] Player edits persist across runs (chunk-granular dirty tracking + `WorldSave`), so a built bridge is still there on relaunch
+- [x] Walk mode with gravity, jump, and grounded state (the M5 kinematic body) is the core traversal; swept axis-separated AABB collision lands the player on platforms and stops them at walls
+- [x] Free-fly camera (F) to survey the course; floating-origin submission keeps sub-meter precision 250 m+ from the arena center (M2)
+- [x] Build/break on the `detail` layer (raycast + `setVoxel`, 1–9 material select) lets the player bridge gaps or make shortcuts; edited chunks re-mesh and fire `on_voxel_modified`
+- [x] Player edits persist across runs (chunk-granular dirty tracking + `WorldSave`), so a built bridge is still there on relaunch
 
 *Game objective — collect keys, reach the goal (demo logic + M7)*
 - [ ] Keys and the goal totem are imported `.vox` models (`Engine::importVox`) placed at world anchors and rendered with their authored palette colors (the M7 color round-trip)
