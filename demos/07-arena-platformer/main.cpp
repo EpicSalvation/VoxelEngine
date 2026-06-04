@@ -1,6 +1,7 @@
-// M7b demo — arena platformer (Groups 1-3: world generation, decomposition, and platformer mechanics).
+// M7b demo — arena platformer (all groups: world generation, decomposition,
+// platformer mechanics, and game objective).
 //
-// A five-layer walled arena exercises the full M1–M6 feature set at once:
+// A five-layer walled arena exercises the full M1–M7 feature set at once:
 //
 //   "foundation"  500 m immutable — solid stone floor covering the 500×500 m arena.
 //   "ramparts"     20 m immutable — 40 m-thick perimeter walls, 100 m tall.
@@ -11,37 +12,35 @@
 //
 // Layer ratio chain: 25:1, 2:1, 5:1, 2:1 — all validated at startup.
 //
-// Five-layer cross-layer collision: World::anySolidAt samples all five layers so
-// the player stands on the 500 m floor, the 20 m walls, the 2 m columns, and the
-// 1 m/10 m platform surfaces simultaneously (G to toggle walk/fly).
-//
-// A feature generator stamps gold key-marker voxels above each non-goal platform;
-// these are applied to detail chunks after base generation (M4 hook).
-//
-// Platformer mechanics (Group 3):
-//   - Walk mode: kinematic body with gravity, jumping, and swept AABB collision
-//     across all five layers (the M5 kinematic body, wired to World::anySolidAt).
-//   - Free-fly camera (F): floating-origin submission keeps sub-meter precision
-//     across the full 500 m arena (M2).
-//   - Build/break: left mouse breaks a 1 m detail voxel, right mouse places the
-//     selected material (1–9). Edited chunks are re-meshed immediately and fire
-//     on_voxel_modified. The DDA raycast targets only resident detail layer voxels.
-//   - Persistence: dirty detail chunks are saved to "arena-save/" on eviction and
-//     on quit. On relaunch saved chunks are preferred over re-generating from the
-//     detail generator, so player-built bridges survive across sessions.
+// Game objective (Group 4 / M7):
+//   - Four key totems and a goal totem are imported .vox models placed at their
+//     world anchors above each non-goal platform (Engine::importVox, M7 color
+//     round-trip).  Keys render with their authored gold palette colors.
+//   - Walk through a key's 2 m trigger volume to collect it; a collected key's
+//     voxels are cleared from the detail layer.  Reach the goal totem with all
+//     four keys collected to log victory.
+//   - Fall below the arena floor or touch a lava voxel to respawn at the start.
+//   - Press P to load/unload the hazards plugin: lava pools appear on the top
+//     surface of each platform and vanish when unloaded (M4 live-toggle pattern).
+//   - Press E to export the detail layer to arena-export.vox via Engine::exportVox;
+//     the 500-voxel-wide region exercises auto-chunking (>256/axis) and the
+//     lossy-property warning path.
 //
 // Controls: WASD move, mouse look, Space/Shift fly up/down (or jump in walk mode),
 // G = walk (gravity + cross-layer AABB collision), F = cursor, left mouse = break,
-// right mouse = place, 1–9 = material, ESC quits.
+// right mouse = place, 1–9 = material, P = toggle lava hazards, E = export, ESC quits.
 //
 // Run from the build directory:
 //   ./build/07-arena-platformer
 // Fly toward the stone platforms to see them decompose into grass-topped 1 m detail.
+// Walk into a gold key stake to collect it, then reach the goal totem to win.
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
 #include "core/PluginManager.h"
 #include "io/ChunkPersistence.h"
+#include "io/VoxExporter.h"
+#include "io/VoxImporter.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
 #include "renderer/ChunkMesh.h"
@@ -59,6 +58,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -67,6 +67,12 @@
 
 #ifndef VOXEL_ARENA_PLUGIN_PATH
 #  define VOXEL_ARENA_PLUGIN_PATH ""
+#endif
+#ifndef VOXEL_HAZARDS_PLUGIN_PATH
+#  define VOXEL_HAZARDS_PLUGIN_PATH ""
+#endif
+#ifndef DEMO_ASSET_DIR
+#  define DEMO_ASSET_DIR ""
 #endif
 
 namespace {
@@ -91,7 +97,105 @@ const glm::dvec3 kPlayerHalf(0.3, 0.9, 0.3);
 // ── Build / edit constants ────────────────────────────────────────────────────
 constexpr double kReachM = 8.0;  // how far the player can target a detail voxel
 
+// ── Palette index constants (must match arena plugin) ────────────────────────
+constexpr uint8_t kLavaIdx = 9;
+
+// ── Spawn / respawn position ─────────────────────────────────────────────────
+const glm::dvec3 kSpawnPos(250.0, 5.0, 80.0);
+
+// ── Key and goal totem world anchors ─────────────────────────────────────────
+// Each key is a 1×2×1 gold stake placed just above the top surface of its
+// platform (y = platform.y_max).  Anchors are the bottom-left-front corner of
+// the model in world space.
+//
+//   Platform 1 (NW, y=[20,30)): key stake at y=30 → anchor y=30
+//   Platform 2 (NE, y=[30,40)): key stake at y=40 → anchor y=40
+//   Platform 3 (SE, y=[40,50)): key stake at y=50 → anchor y=50
+//   Platform 4 (SW, y=[50,60)): key stake at y=60 → anchor y=60
+//
+// The goal totem (3×5×3) sits atop the goal tower (platform 5, y=[60,70)).
+constexpr double kKeyAnchorData[4][3] = {
+    { 119.5, 30.0, 119.5 },   // NW key
+    { 379.5, 40.0, 119.5 },   // NE key
+    { 379.5, 50.0, 379.5 },   // SE key
+    { 119.5, 60.0, 379.5 },   // SW key
+};
+constexpr double kGoalAnchorData[3] = { 248.5, 70.0, 248.5 };
+
 using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
+
+// ── Asset generation ─────────────────────────────────────────────────────────
+
+// Generate a 1×2×1 gold key stake .vox file.
+// Uses palette index 12 (goal-gold, yellow) so the authored color round-trips
+// correctly through Engine::importVox → palette::setColor → Engine::exportVox.
+bool generateKeyAsset(const std::string& path) {
+    LayerDef def;
+    def.name              = "key";
+    def.voxel_size_m      = 1.0;
+    def.mode              = VoxelMode::terminal;
+    def.chunk_size_voxels = 4;
+    def.view_distance_chunks = 1;
+
+    World w(def);
+    Layer* lay = w.layer("key");
+    if (!lay) return false;
+    lay->loadChunk({0, 0, 0}, nullptr);
+
+    Voxel gold;
+    gold.material.palette_index       = 12;  // goal-gold
+    gold.material.density             = 100.0f;
+    gold.material.structural_strength = 1.0f;
+    gold.material.hardness            = 0.2f;
+    lay->setVoxel(WorldCoord(0.5, 0.5, 0.5), gold);
+    lay->setVoxel(WorldCoord(0.5, 1.5, 0.5), gold);
+
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+    VoxExporter exporter;
+    return exporter.save(path, *lay, WorldCoord(0.0, 0.0, 0.0), WorldCoord(1.0, 2.0, 1.0));
+}
+
+// Generate a 3×5×3 goal totem .vox file.
+// Body uses palette index 14 (brick-red props), apex uses index 12 (gold).
+bool generateGoalAsset(const std::string& path) {
+    LayerDef def;
+    def.name              = "goal";
+    def.voxel_size_m      = 1.0;
+    def.mode              = VoxelMode::terminal;
+    def.chunk_size_voxels = 8;
+    def.view_distance_chunks = 1;
+
+    World w(def);
+    Layer* lay = w.layer("goal");
+    if (!lay) return false;
+    lay->loadChunk({0, 0, 0}, nullptr);
+
+    Voxel body;
+    body.material.palette_index       = 14;  // props (brick-red)
+    body.material.density             = 1800.0f;
+    body.material.structural_strength = 1.0f;
+    body.material.hardness            = 0.8f;
+
+    Voxel apex;
+    apex.material.palette_index       = 12;  // goal-gold
+    apex.material.density             = 100.0f;
+    apex.material.structural_strength = 1.0f;
+    apex.material.hardness            = 0.2f;
+
+    // 3×4×3 body column
+    for (int y = 0; y < 4; ++y)
+        for (int z = 0; z < 3; ++z)
+            for (int x = 0; x < 3; ++x)
+                lay->setVoxel(WorldCoord(x + 0.5, y + 0.5, z + 0.5), body);
+    // Gold apex (centre top)
+    lay->setVoxel(WorldCoord(1.5, 4.5, 1.5), apex);
+
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+    VoxExporter exporter;
+    return exporter.save(path, *lay, WorldCoord(0.0, 0.0, 0.0), WorldCoord(3.0, 5.0, 3.0));
+}
+
+// ── Helper ────────────────────────────────────────────────────────────────────
 
 // Returns the detail-layer child chunks that cover one terrace macro voxel.
 // With terraces at 10 m and detail chunks at 10 m (chunk_size=10, vs=1),
@@ -201,15 +305,6 @@ layers:
 
     // ── Engine + window + renderer ────────────────────────────────────────────
     Engine engine;
-    engine.start();
-
-    platform::Window window(1280, 720, "VoxelEngine — M7b Arena Platformer");
-    BgfxRenderer renderer;
-    int fbW, fbH;
-    window.framebufferSize(fbW, fbH);
-    renderer.initialize(window.nativeHandles(),
-                        static_cast<uint32_t>(fbW), static_cast<uint32_t>(fbH));
-    renderer.setCrosshair(true);
 
     // ── World + layer handles ─────────────────────────────────────────────────
     World world(layerConfig);
@@ -223,9 +318,45 @@ layers:
         return 1;
     }
 
+    // Engine::init wires the plugin manager and world into the engine and registers
+    // the built-in VoxImporter / VoxExporter handlers needed by importVox/exportVox.
+    engine.init(pluginManager, world);
+    engine.start();
+
+    // ── Asset paths ───────────────────────────────────────────────────────────
+    const std::string assetDir =
+        (std::string(DEMO_ASSET_DIR)[0] != '\0') ? std::string(DEMO_ASSET_DIR) : ".";
+    const std::string keyVoxPath  = assetDir + "/key.vox";
+    const std::string goalVoxPath = assetDir + "/goal_totem.vox";
+
+    if (!std::filesystem::exists(keyVoxPath)) {
+        std::cout << "[main] Generating key asset: " << keyVoxPath << "\n";
+        if (!generateKeyAsset(keyVoxPath))
+            std::cerr << "[main] Warning: could not generate " << keyVoxPath << "\n";
+    }
+    if (!std::filesystem::exists(goalVoxPath)) {
+        std::cout << "[main] Generating goal totem asset: " << goalVoxPath << "\n";
+        if (!generateGoalAsset(goalVoxPath))
+            std::cerr << "[main] Warning: could not generate " << goalVoxPath << "\n";
+    }
+
+    // ── Import key and goal totem models into the detail layer ────────────────
+    // Each key is a 1×2×1 gold stake placed just above the corresponding
+    // platform's top surface.  VoxImporter creates the detail-layer chunk if it
+    // is not yet resident, places the model voxels, and marks the chunk dirty so
+    // it is persisted on the first eviction (the chunk keeps the key/goal models
+    // across sessions).
+    //
+    // Key chunks sit ABOVE the terrace platform Y ranges (their parent terrace
+    // macro voxel is empty), so they are never overwritten by the decomposition
+    // worker.  They are registered as "persistent" chunks so the per-frame
+    // eviction loop never drops them from memory.
+    for (const auto& a : kKeyAnchorData)
+        engine.importVox(keyVoxPath, "detail", WorldCoord(a[0], a[1], a[2]));
+    engine.importVox(goalVoxPath, "detail",
+                     WorldCoord(kGoalAnchorData[0], kGoalAnchorData[1], kGoalAnchorData[2]));
+
     // ── Persistence: dirty detail chunks survive across launches ─────────────
-    // The "detail" layer is the terminal layer and the only one the player edits.
-    // Dirty chunks are saved on eviction (save-then-evict) and on quit.
     const LayerDef* detailDef = layerConfig.findLayer("detail");
     persistence::WorldSave detailSave(
         "arena-save",
@@ -234,10 +365,6 @@ layers:
 
     // ── LOD + decomposition ───────────────────────────────────────────────────
     LODManager lod(layerConfig);
-    // y=-1 catches the foundation slab (500m voxels, chunk at y=-1 covers Y=[-2000,0)).
-    // y=0  catches the rampart walls, terrace blocks, and prop columns — all within one
-    // 160m/80m/16m chunk in the Y direction. Detail chunks are managed via decomposition
-    // only, so their vertical range is effectively unlimited in this band.
     lod.setVerticalBand(-1, 0);
 
     DecompositionState  decomp;
@@ -249,7 +376,19 @@ layers:
     MeshStore rampartsMeshes;
     MeshStore terracesMeshes;
     MeshStore propsMeshes;
-    MeshStore detailMeshes;     // populated via decomposition results
+    MeshStore detailMeshes;     // populated via decomposition results + key/goal import
+
+    // Chunks created by VoxImporter (keys/goal) — never evicted during normal play.
+    // These chunks sit above the terrace platforms and are invisible to the
+    // decomposition worker, so there is no overwrite risk from terrace decomposition.
+    std::unordered_set<ChunkCoord, ChunkCoordHash> persistentChunks;
+
+    // Build meshes for all chunks that VoxImporter created (they are the only
+    // dirty chunks present before the streaming loop begins).
+    for (const auto& [coord, chunkPtr] : detail->chunks()) {
+        detailMeshes.emplace(coord, ChunkMesh::build(*chunkPtr));
+        persistentChunks.insert(coord);
+    }
 
     // Template voxel captured from the first decomposed terrace, used to restore
     // macro voxels when decomposed detail drifts past kDetailKeepRadiusM.
@@ -257,7 +396,6 @@ layers:
     bool  haveTerraceTemplate = false;
 
     // ── Apply feature generators to a detail chunk ────────────────────────────
-    // Key-spot gold markers are stamped above each platform top surface.
     auto applyFeatures = [&](Chunk& chunk) {
         for (const auto& f : pluginManager.featureGenerators())
             if (f.fn)
@@ -266,7 +404,6 @@ layers:
     };
 
     // ── Detail layer edit helpers ─────────────────────────────────────────────
-    // Rebuild the GPU mesh for a detail chunk after an edit.
     auto remeshDetailChunk = [&](const ChunkCoord& cc) {
         const Chunk* chunk = detail->getChunk(cc);
         if (!chunk) return;
@@ -279,8 +416,6 @@ layers:
         }
     };
 
-    // Write a voxel in the detail layer, fire on_voxel_modified, and re-mesh.
-    // No-op if the chunk is not resident (setVoxel returns false).
     auto editDetailVoxel = [&](const chunkmath::VoxelCoord& vc, const Voxel& newVox) {
         const WorldCoord center = chunkmath::voxelCenter(vc, detail->voxelSizeM());
         const Voxel oldVox = world.getVoxel(center);
@@ -290,20 +425,35 @@ layers:
         remeshDetailChunk(chunkmath::voxelToChunkLocal(vc, detail->chunkSizeVoxels()).chunk);
     };
 
+    // ── Hazards plugin state ──────────────────────────────────────────────────
+    PluginId hazardsPluginId = kInvalidPluginId;
+
+    // ── Game objective state ──────────────────────────────────────────────────
+    bool keysCollected[4] = {};
+    bool gameWon          = false;
+
     // ── Camera / player state ─────────────────────────────────────────────────
     float      pitch = -0.25f, yaw = 0.0f;
-    // Start inside the arena, near the ground, facing the central platform.
-    WorldCoord camPos(250.0, 12.0, 80.0);
+    WorldCoord camPos(kSpawnPos);
     double     lastMX = 0.0, lastMY = 0.0;
     bool       firstMouse = true;
     bool       cursorCaptured = true;
     bool       prevKeyF = false, prevKeyG = false;
+    bool       prevKeyP = false, prevKeyE = false;
     bool       prevLeft = false, prevRight = false;
 
     bool       walkMode = false;
     WorldCoord playerCenter(0.0, 0.0, 0.0);
     double     vy = 0.0;
     bool       grounded = false;
+
+    platform::Window window(1280, 720, "VoxelEngine — M7b Arena Platformer");
+    BgfxRenderer renderer;
+    int fbW, fbH;
+    window.framebufferSize(fbW, fbH);
+    renderer.initialize(window.nativeHandles(),
+                        static_cast<uint32_t>(fbW), static_cast<uint32_t>(fbH));
+    renderer.setCrosshair(true);
 
     GLFWwindow* glfwWin = window.glfwHandle();
     glfwSetInputMode(glfwWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -317,7 +467,11 @@ layers:
                  "[main] Left mouse = break detail voxel, right mouse = place, "
                  "1-9 = select material.\n"
                  "[main] Fly toward platforms to decompose them; build bridges to "
-                 "cross gaps. Edits save to arena-save/ and survive relaunch.\n";
+                 "cross gaps. Edits save to arena-save/ and survive relaunch.\n"
+                 "[main] Collect the four gold key stakes (walk into them), then "
+                 "reach the goal totem to win.\n"
+                 "[main] P = toggle lava hazards on platforms, E = export detail "
+                 "layer to arena-export.vox.\n";
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -352,6 +506,79 @@ layers:
                       << "\n";
         }
         prevKeyG = curKeyG;
+
+        // P: toggle hazards plugin (lava pools on platform surfaces).
+        bool curKeyP = (glfwGetKey(glfwWin, GLFW_KEY_P) == GLFW_PRESS);
+        if (curKeyP && !prevKeyP) {
+            if (hazardsPluginId != kInvalidPluginId) {
+                pluginManager.unloadPlugin(hazardsPluginId);
+                hazardsPluginId = kInvalidPluginId;
+                std::cout << "[main] Hazards unloaded — arena regenerating clean.\n";
+            } else if (std::string(VOXEL_HAZARDS_PLUGIN_PATH)[0] != '\0') {
+                hazardsPluginId = pluginManager.loadPlugin(VOXEL_HAZARDS_PLUGIN_PATH);
+                if (hazardsPluginId != kInvalidPluginId)
+                    std::cout << "[main] Hazards loaded — lava pools on platforms on approach.\n";
+                else
+                    std::cerr << "[main] Warning: could not load hazards plugin.\n";
+            } else {
+                std::cerr << "[main] Warning: hazards plugin path not configured at build time.\n";
+            }
+            // Evict all non-persistent detail chunks so they regenerate fresh with
+            // or without the hazard feature, reverting the arena exactly (M4 pattern).
+            {
+                std::vector<ChunkCoord> toEvict;
+                for (const auto& kv : detailMeshes)
+                    if (!persistentChunks.count(kv.first))
+                        toEvict.push_back(kv.first);
+                std::unordered_set<ChunkCoord, ChunkCoordHash> toRemesh;
+                for (const ChunkCoord& dc : toEvict) {
+                    if (world.isChunkDirty(dc)) {
+                        if (const Chunk* ch = world.getChunk(dc)) detailSave.saveChunk(*ch);
+                        world.clearChunkDirty(dc);
+                    }
+                    auto it = detailMeshes.find(dc);
+                    if (it != detailMeshes.end()) { it->second.destroy(); detailMeshes.erase(it); }
+                    detail->unloadChunk(dc);
+                    const chunkmath::VoxelCoord V{dc.x, dc.y, dc.z};
+                    const bool wasDecomposed = decomp.isDecomposed(V);
+                    decomp.clear(V);
+                    if (wasDecomposed && haveTerraceTemplate) {
+                        const chunkmath::LocalVoxel lv =
+                            chunkmath::voxelToChunkLocal(V, terraces->chunkSizeVoxels());
+                        auto cit = terraces->chunks().find(lv.chunk);
+                        if (cit != terraces->chunks().end()) {
+                            cit->second->at(lv.x, lv.y, lv.z) = terraceTemplate;
+                            toRemesh.insert(lv.chunk);
+                        }
+                    }
+                }
+                for (const ChunkCoord& c : toRemesh) {
+                    const Chunk* chunk = terraces->getChunk(c);
+                    if (!chunk) continue;
+                    auto it = terracesMeshes.find(c);
+                    if (it != terracesMeshes.end()) {
+                        it->second.destroy();
+                        it->second = ChunkMesh::build(*chunk);
+                    }
+                }
+            }
+        }
+        prevKeyP = curKeyP;
+
+        // E: export the detail layer to arena-export.vox.
+        // The 500-voxel-wide region (>256 per axis) exercises auto-chunking and
+        // the lossy-property warning path (arena voxels carry non-default density).
+        bool curKeyE = (glfwGetKey(glfwWin, GLFW_KEY_E) == GLFW_PRESS);
+        if (curKeyE && !prevKeyE) {
+            const std::string exportPath = "arena-export.vox";
+            std::cout << "[main] Exporting detail layer to " << exportPath << " …\n";
+            engine.exportVox("detail",
+                             WorldCoord(0.0, 0.0, 0.0), WorldCoord(500.0, 80.0, 500.0),
+                             exportPath);
+            std::cout << "[main] Export done. (500×80×500 → auto-chunked; "
+                         "extended properties → lossy-property warning logged)\n";
+        }
+        prevKeyE = curKeyE;
 
         // Material selection (1-9): choose what the right mouse places.
         for (int i = 0; i < 9 && i < static_cast<int>(materials.size()); ++i) {
@@ -413,10 +640,78 @@ layers:
             camPos = WorldCoord(playerCenter.value + glm::dvec3(0.0, kEyeOffset, 0.0));
         }
 
+        // ── Game-objective logic (walk mode only) ─────────────────────────────
+        if (walkMode && !gameWon) {
+            // Key collection: check proximity to each uncollected key stake.
+            // Trigger volume is a 2×3×2 m box centred on the key stake.
+            int collectedCount = 0;
+            for (int i = 0; i < 4; ++i) {
+                if (keysCollected[i]) { ++collectedCount; continue; }
+                const glm::dvec3 keyCenter(
+                    kKeyAnchorData[i][0] + 0.5, // key model is 1 wide → centre at +0.5
+                    kKeyAnchorData[i][1] + 1.0, // key model is 2 tall → centre at +1.0
+                    kKeyAnchorData[i][2] + 0.5);
+                const glm::dvec3 d = playerCenter.value - keyCenter;
+                if (std::abs(d.x) < 2.0 && std::abs(d.y) < 3.0 && std::abs(d.z) < 2.0) {
+                    keysCollected[i] = true;
+                    ++collectedCount;
+                    // Clear the key stake voxels from the detail layer.
+                    world.setVoxel(WorldCoord(kKeyAnchorData[i][0] + 0.5,
+                                              kKeyAnchorData[i][1] + 0.5,
+                                              kKeyAnchorData[i][2] + 0.5), Voxel::empty());
+                    world.setVoxel(WorldCoord(kKeyAnchorData[i][0] + 0.5,
+                                              kKeyAnchorData[i][1] + 1.5,
+                                              kKeyAnchorData[i][2] + 0.5), Voxel::empty());
+                    // Rebuild mesh for the key chunk.
+                    const ChunkCoord kc = chunkmath::worldToChunk(
+                        WorldCoord(kKeyAnchorData[i][0] + 0.5,
+                                   kKeyAnchorData[i][1] + 0.5,
+                                   kKeyAnchorData[i][2] + 0.5),
+                        detail->voxelSizeM(), detail->chunkSizeVoxels());
+                    remeshDetailChunk(kc);
+                    const int remaining = 4 - collectedCount;
+                    std::cout << "[main] Key " << (i + 1)
+                              << " collected! " << remaining << " remaining.\n";
+                }
+            }
+
+            // Win condition: all keys collected + player near goal totem.
+            if (collectedCount == 4) {
+                const glm::dvec3 goalCenter(
+                    kGoalAnchorData[0] + 1.5,   // goal model is 3 wide → centre at +1.5
+                    kGoalAnchorData[1] + 2.5,   // goal model is 5 tall → centre at +2.5
+                    kGoalAnchorData[2] + 1.5);
+                const glm::dvec3 d = playerCenter.value - goalCenter;
+                if (std::abs(d.x) < 3.0 && std::abs(d.y) < 4.0 && std::abs(d.z) < 3.0) {
+                    gameWon = true;
+                    std::cout << "[main] *** VICTORY!  All keys collected and "
+                                 "goal totem reached! ***\n";
+                }
+            }
+
+            // Respawn: fall below the arena floor.
+            if (playerCenter.value.y < -5.0) {
+                playerCenter = WorldCoord(kSpawnPos);
+                camPos = WorldCoord(kSpawnPos + glm::dvec3(0.0, kEyeOffset, 0.0));
+                vy = 0.0; grounded = false;
+                std::cout << "[main] Respawned! (fell off the arena)\n";
+            }
+
+            // Respawn: touch a lava voxel (sampled just below the player's feet).
+            if (!gameWon) {
+                const WorldCoord feetSample(
+                    playerCenter.value - glm::dvec3(0.0, kPlayerHalf.y + 0.1, 0.0));
+                const Voxel underFeet = world.getVoxel(feetSample);
+                if (!underFeet.isEmpty() && underFeet.material.palette_index == kLavaIdx) {
+                    playerCenter = WorldCoord(kSpawnPos);
+                    camPos = WorldCoord(kSpawnPos + glm::dvec3(0.0, kEyeOffset, 0.0));
+                    vy = 0.0; grounded = false;
+                    std::cout << "[main] Respawned! (touched lava)\n";
+                }
+            }
+        }
+
         // ── Stream immutable and composite layers around the camera ───────────
-        // Helper: load up to kStreamPerFrame new chunks per frame, evict chunks
-        // beyond the LOD budget. Immutable layers are evicted directly; the
-        // terraces layer also tears down any decomposed detail children on eviction.
         auto stream = [&](Layer* layer, const std::string& name, MeshStore& meshes,
                           const RegisteredLayerGenerator& gen) {
             const ChunkCoord center =
@@ -435,7 +730,6 @@ layers:
                 if (lod.shouldEvict(center, kv.first, name)) toEvict.push_back(kv.first);
             for (const ChunkCoord& c : toEvict) {
                 if (isTerraces) {
-                    // Skip eviction if any macro voxel in this chunk has a pending job.
                     const int csz = layer->chunkSizeVoxels();
                     bool anyPending = false;
                     for (int z = 0; z < csz && !anyPending; ++z)
@@ -445,7 +739,6 @@ layers:
                                         chunkmath::chunkLocalToVoxel(c, x, y, z, csz)))
                                     anyPending = true;
                     if (anyPending) continue;
-                    // Release decomposed detail children before evicting this chunk.
                     const int n = layer->chunkSizeVoxels();
                     for (int z = 0; z < n; ++z)
                         for (int y = 0; y < n; ++y)
@@ -455,12 +748,12 @@ layers:
                                 if (!decomp.isDecomposed(V)) continue;
                                 for (const ChunkCoord& dc :
                                          childChunksForMacro(V, *terraces, *detail)) {
+                                    if (persistentChunks.count(dc)) continue;
                                     auto it = detailMeshes.find(dc);
                                     if (it != detailMeshes.end()) {
                                         it->second.destroy();
                                         detailMeshes.erase(it);
                                     }
-                                    // Save dirty detail child before eviction.
                                     if (world.isChunkDirty(dc)) {
                                         if (const Chunk* ch = world.getChunk(dc))
                                             detailSave.saveChunk(*ch);
@@ -512,8 +805,6 @@ layers:
         }
 
         // ── Integrate completed decomposition results ─────────────────────────
-        // For each generated detail chunk, prefer a player-saved version over the
-        // freshly generated one — so player bridges survive across sessions.
         std::unordered_set<ChunkCoord, ChunkCoordHash> terracesToRemesh;
         for (DecompositionResult& result : worker.drain()) {
             for (auto& chunkPtr : result.chunks) {
@@ -526,10 +817,10 @@ layers:
                         fromSave  = true;
                     }
                 }
+                // Skip if a persistent chunk (key/goal model) already occupies this coord.
+                if (persistentChunks.count(dc)) continue;
                 Chunk* inserted = detail->insertChunk(std::move(chunkPtr));
                 if (!inserted) continue;
-                // Apply feature generators only to freshly generated chunks —
-                // saved chunks already incorporate the player's edits.
                 if (!fromSave) applyFeatures(*inserted);
                 auto it = detailMeshes.find(dc);
                 if (it != detailMeshes.end()) {
@@ -539,8 +830,7 @@ layers:
                     detailMeshes.emplace(dc, ChunkMesh::build(*inserted));
                 }
             }
-            // Clear the decomposed macro voxel so it stops rendering and colliding
-            // as a coarse block (the fine detail chunks now occupy that space).
+            // Clear the decomposed macro voxel so it stops rendering as a block.
             const chunkmath::LocalVoxel lv =
                 chunkmath::voxelToChunkLocal(result.macro, terraces->chunkSizeVoxels());
             auto cit = terraces->chunks().find(lv.chunk);
@@ -556,21 +846,15 @@ layers:
         }
 
         // ── Release detail chunks that have drifted past the keep radius ──────
-        // Save dirty chunks before dropping them, then revert the parent terrace
-        // macro voxel to its solid block so it still renders/collides and
-        // re-decomposes on approach.
         std::vector<ChunkCoord> detailToEvict;
         for (const auto& kv : detailMeshes) {
-            // For terraces(10m)/detail(10m chunks), the macro VoxelCoord equals
-            // the detail ChunkCoord (same 10m unit).
+            if (persistentChunks.count(kv.first)) continue;  // never evict key/goal chunks
             const chunkmath::VoxelCoord V{kv.first.x, kv.first.y, kv.first.z};
             const WorldCoord ctr = chunkmath::voxelCenter(V, terraces->voxelSizeM());
             if (glm::length(ctr.value - camPos.value) > kDetailKeepRadiusM)
                 detailToEvict.push_back(kv.first);
         }
         for (const ChunkCoord& dc : detailToEvict) {
-            // Save-then-evict: write the chunk to disk before dropping it so player
-            // edits are never lost when the camera moves away.
             if (world.isChunkDirty(dc)) {
                 if (const Chunk* ch = world.getChunk(dc)) detailSave.saveChunk(*ch);
                 world.clearChunkDirty(dc);
@@ -582,8 +866,10 @@ layers:
             }
             detail->unloadChunk(dc);
             const chunkmath::VoxelCoord V{dc.x, dc.y, dc.z};
+            // Only restore the terrace macro voxel if this chunk came from decomposition.
+            const bool wasDecomposed = decomp.isDecomposed(V);
             decomp.clear(V);
-            if (haveTerraceTemplate) {
+            if (wasDecomposed && haveTerraceTemplate) {
                 const chunkmath::LocalVoxel lv =
                     chunkmath::voxelToChunkLocal(V, terraces->chunkSizeVoxels());
                 auto cit = terraces->chunks().find(lv.chunk);
@@ -594,7 +880,6 @@ layers:
             }
         }
 
-        // Re-mesh terrace chunks whose macro voxel occupancy changed.
         for (const ChunkCoord& c : terracesToRemesh) {
             const Chunk* chunk = terraces->getChunk(c);
             if (!chunk) continue;
@@ -606,8 +891,6 @@ layers:
         }
 
         // ── Targeting and edits (detail layer) ───────────────────────────────
-        // The DDA raycast targets resident 1 m detail voxels only (primary layer).
-        // The player can break and place voxels to bridge gaps or make shortcuts.
         glm::dvec3 lookDir{double(cp * sy), double(sp), double(cp * cy)};
         voxelcast::RayHit hit = voxelcast::raycast(world, camPos, lookDir, kReachM);
         if (hit.hit)
@@ -622,7 +905,6 @@ layers:
             editDetailVoxel(hit.voxel, Voxel::empty());  // break
         }
         if (hit.hit && curRight && !prevRight) {
-            // Guard against placing into the space the player occupies.
             const double vs = detail->voxelSizeM();
             const chunkmath::VoxelCoord t = hit.adjacent;
             bool blockedByPlayer;
@@ -682,7 +964,7 @@ layers:
     std::cout << "[main] Decomposed terrace macro voxels this session: "
               << decomp.decomposedCount() << "\n";
 
-    // Persist any edited detail chunks still in memory so they survive the next launch.
+    // Persist any edited detail chunks still in memory.
     int savedOnQuit = detailSave.saveDirtyChunks(world);
     if (savedOnQuit > 0)
         std::cout << "[main] Saved " << savedOnQuit << " edited detail chunk(s) to "
