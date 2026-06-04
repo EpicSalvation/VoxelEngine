@@ -20,6 +20,7 @@
 #include "core/LayerConfig.h"
 #include "core/Logger.h"
 #include "core/PluginManager.h"
+#include "renderer/Palette.h"
 #include "world/World.h"
 
 #include <gtest/gtest.h>
@@ -286,6 +287,85 @@ TEST(VoxImportExport, RoundTripPreservesPaletteIndex) {
         }
     }
     EXPECT_EQ(compared, 8) << "expected 8 non-empty voxels";
+
+    std::filesystem::remove(tmpIn);
+    std::filesystem::remove(tmpOut);
+}
+
+// ── Color fidelity: a .vox file's authored colors survive import → render
+//    palette → export → re-parse, including a translucent (alpha < 255) entry.
+//
+// Import installs each used color index's RGBA into the engine's visual palette
+// (so voxels render with their authored colors), and export writes that palette
+// back out. This verifies both halves: palette::color after import, and the RGBA
+// chunk of the exported file.
+TEST(VoxImportExport, PreservesAuthoredColorsThroughRoundTrip) {
+    // Distinct colors unlike the default palette; index 3 is translucent.
+    const std::array<uint8_t, 4> c1 = {10, 20, 30, 255};
+    const std::array<uint8_t, 4> c2 = {40, 50, 60, 255};
+    const std::array<uint8_t, 4> c3 = {70, 80, 90, 128};  // translucent
+
+    std::array<std::array<uint8_t, 4>, 255> pal{};
+    for (auto& e : pal) e = {200, 200, 200, 255};
+    pal[0] = c1;  // palette index 1
+    pal[1] = c2;  // palette index 2
+    pal[2] = c3;  // palette index 3
+
+    // SIZE 3×1×1 (halfX=1, halfY=halfZ=0). With anchor=10 the three voxels land
+    // at voxel coords x=9,10,11 (y=z=10), so the export region is easy to bound.
+    std::vector<std::array<uint8_t, 4>> voxels = {{0,0,0,1}, {1,0,0,2}, {2,0,0,3}};
+    const auto rawVox = buildSingleModelVox(3, 1, 1, voxels, pal);
+    const auto tmpIn  = writeTmpFile(rawVox, "color_in.vox");
+    const auto tmpOut = std::filesystem::temp_directory_path() / "color_out.vox";
+
+    const WorldCoord anchor(10.0, 10.0, 10.0);
+    LayerDef def = makeTerminalLayer(1.0, 32);
+    Layer layer(def);
+    PluginManager pm;
+    VoxImporter importer;
+    ASSERT_TRUE(importer.load(tmpIn.string(), layer, anchor, pm));
+
+    // Pack an {r,g,b,a} test color into the engine's ABGR (0xAABBGGRR) word.
+    auto abgr = [](const std::array<uint8_t, 4>& c) {
+        return static_cast<uint32_t>(c[0])
+             | (static_cast<uint32_t>(c[1]) << 8)
+             | (static_cast<uint32_t>(c[2]) << 16)
+             | (static_cast<uint32_t>(c[3]) << 24);
+    };
+
+    // Half 1: import installed the authored colors into the render palette.
+    EXPECT_EQ(palette::color(1), abgr(c1));
+    EXPECT_EQ(palette::color(2), abgr(c2));
+    EXPECT_EQ(palette::color(3), abgr(c3));
+    EXPECT_TRUE(palette::isTranslucent(3)) << "alpha 128 entry should be translucent";
+
+    // Export the region covering the three voxels, then re-parse the raw bytes.
+    const WorldCoord exportMin(9.0, 10.0, 10.0);
+    const WorldCoord exportMax(12.0, 11.0, 11.0);
+    VoxExporter exporter;
+    ASSERT_TRUE(exporter.save(tmpOut.string(), layer, exportMin, exportMax));
+
+    std::ifstream f(tmpOut, std::ios::binary | std::ios::ate);
+    ASSERT_TRUE(f.good());
+    const std::streamsize sz = f.tellg();
+    f.seekg(0);
+    std::vector<uint8_t> outBytes(static_cast<size_t>(sz));
+    ASSERT_TRUE(f.read(reinterpret_cast<char*>(outBytes.data()), sz).good());
+    f.close();
+
+    vox::VoxFile parsed;
+    ASSERT_TRUE(vox::parse(outBytes.data(), outBytes.size(), parsed));
+
+    // Half 2: the exported RGBA chunk carries the same colors, alpha included.
+    auto expectColor = [&](int idx, const std::array<uint8_t, 4>& c) {
+        EXPECT_EQ(parsed.palette[idx].r, c[0]) << "R at index " << idx;
+        EXPECT_EQ(parsed.palette[idx].g, c[1]) << "G at index " << idx;
+        EXPECT_EQ(parsed.palette[idx].b, c[2]) << "B at index " << idx;
+        EXPECT_EQ(parsed.palette[idx].a, c[3]) << "A at index " << idx;
+    };
+    expectColor(1, c1);
+    expectColor(2, c2);
+    expectColor(3, c3);
 
     std::filesystem::remove(tmpIn);
     std::filesystem::remove(tmpOut);

@@ -387,7 +387,7 @@ Standard voxel editors (MagicaVoxel, Qubicle, Goxel) work with single-scale, pal
 
 ### `.vox` Import
 
-A `.vox` file is always imported into a specific layer at a specific world-space anchor. The importer populates `palette_index` for each voxel. Other material properties are initialized from the palette entry's default property set. The engine does not attempt to infer material properties from color values.
+A `.vox` file is always imported into a specific layer at a specific world-space anchor. The importer populates `palette_index` for each voxel and installs the file's authored RGBA colors into the engine's visual palette for the indices the model uses, so imported voxels render with — and re-export to — the colors they were drawn with (the palette is the index→color table in `src/renderer/Palette.h`; export reads it back). Other material *properties* are initialized from the palette entry's default property set; the engine does not infer material properties from color values — only the visual color is carried across.
 
 `.vox` volumes larger than 256³ are assembled from multiple objects using the anchor positions encoded in the file format.
 

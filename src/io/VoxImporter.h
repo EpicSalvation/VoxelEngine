@@ -54,6 +54,10 @@ bool parse(const uint8_t* data, size_t size, VoxFile& out);
 //     material whose palette_index matches; zero-defaults if none is registered
 //     (architecture.md §10 — no inference from color values)
 //
+// The file's authored RGBA colors are also installed into the engine's shared
+// visual palette (src/renderer/Palette.h) for the indices the model uses, so the
+// imported voxels render with — and re-export to — their original colors.
+//
 // Chunks that do not yet exist in the layer are created as empty before voxels
 // are written; all written chunks are marked dirty so they are persisted.
 // Returns true on success; logs to stderr on failure.

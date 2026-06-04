@@ -9,6 +9,7 @@
 #include "world/Layer.h"
 #include "world/ChunkCoordMath.h"
 #include "core/PluginManager.h"
+#include "renderer/Palette.h"
 #include "world/Voxel.h"
 
 // ── MagicaVoxel default palette (indices 1–255; index 0 = empty) ─────────────
@@ -344,6 +345,25 @@ bool VoxImporter::load(const std::string& path, Layer& layer,
     if (!vox::parse(buf.data(), buf.size(), file)) {
         std::fprintf(stderr, "VoxImporter: parse error '%s'\n", path.c_str());
         return false;
+    }
+
+    // Install the file's authored colors into the engine's visual palette for
+    // every color index this model uses, so imported voxels render with — and
+    // re-export to — the colors they were drawn with. The engine palette is
+    // index-based and shared (src/renderer/Palette.h); we touch only the indices
+    // this file references, leaving other entries at their engine defaults. This
+    // is the visual layer only; material *properties* are still taken from
+    // registered materials below, not inferred from color (architecture.md §10).
+    for (const auto& model : file.models) {
+        for (const auto& ve : model.voxels) {
+            if (ve.colorIndex == 0) continue;
+            const vox::RgbaColor& rc = file.palette[ve.colorIndex];
+            const uint32_t abgr = static_cast<uint32_t>(rc.r)
+                                | (static_cast<uint32_t>(rc.g) << 8)
+                                | (static_cast<uint32_t>(rc.b) << 16)
+                                | (static_cast<uint32_t>(rc.a) << 24);
+            palette::setColor(ve.colorIndex, abgr);
+        }
     }
 
     // Build palette_index → MaterialProperties lookup from registered materials.
