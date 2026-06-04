@@ -486,6 +486,40 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 - [x] **Demo — MagicaVoxel round-trip:** `06-magicavoxel-round-trip` — generates a 4×4×4 coloured cube as `demos/06-magicavoxel-round-trip/assets/test_model.vox` if absent; on startup imports it to the `editor` layer at world origin via `Engine::importVox`; renders it through the existing mesher; supports place/remove editing (same controls as prior demos); press **E** to export the current `editor` layer back to `output.vox` with terminal log lines confirming whether auto-chunking triggered and whether the lossy-property warning fired
 
+**M7b — MVP Capstone: Arena Platformer**
+
+> M7b adds no new engine subsystems — it is the integration milestone that proves the Phase 1 MVP by building a small but complete **3D platformer** inside a 500 m arena, deliberately exercising every M1–M7 capability at once. The arena is a five-layer stack: a single 500 m **immutable** voxel whose top face is the floor, a 20 m **immutable** perimeter wall with landmark towers, 10 m **composite** platforms that decompose on approach into the 1 m **terminal** build layer, and 2 m **immutable** props between. Decomposition stays single-step (a 10 m platform → its 1 m child grid, per M6); the deep lazy 500→20→10→2→1 cascade is intentionally left to M10. The objective is *collect-the-keys-then-reach-the-goal*: the scattered keys and the goal totem are MagicaVoxel `.vox` models imported with their authored colors. All new code lives in one new demo (`07-arena-platformer`) and two new plugins (`arena`, `hazards`) — no engine or `plugin_api.h` change is required.
+
+*Arena world — layer stack, generation, and materials (M1, M3, M4)*
+- [ ] Five-layer `LayerConfig` (`foundation` 500 m immutable / `ramparts` 20 m immutable / `terraces` 10 m composite → `detail` / `props` 2 m immutable / `detail` 1 m terminal); integer ratios 25:1, 2:1, 5:1, 2:1 validated at startup, demonstrating the validator on a real multi-scale stack
+- [ ] New `arena` plugin registers a layer generator per layer (floor slab, perimeter wall + towers, coarse terraces, small props, fine detail) and the arena materials (stone, grass, hazard-lava, goal-gold), all deterministic (no `rand`/`time`/unordered iteration, architecture.md §4)
+- [ ] The 1 m `detail` layer streams within its `view_distance_chunks` budget around the player (a 500 m arena at 1 m is ~125 M voxels — streaming is mandatory, not optional); every layer drives `LODManager` on its own budget
+- [ ] A feature generator stamps key pickups and platform decorations onto the generated platforms (the M4 feature-generator hook, applied after the base layer generator)
+
+*Multi-scale world — decomposition, modes, and collision (M6)*
+- [ ] Drive single-step decomposition on approach in the demo: `terraces` macro voxels within a radius are enqueued to `DecompositionWorker` and drained on the main thread into the `detail` layer (the proven M6 path); distant terraces render as 10 m blocks via the scaled `renderChunk`
+- [ ] Cross-layer collision via `World::anySolidAt`: the kinematic player stands on the 500 m floor, the 20 m ramparts, the 2 m props, and 1 m platforms simultaneously, each sampled at its own scale
+- [ ] Immutable floor / walls / props render and collide but never decompose, dirty, or persist; only `detail` edits are persistent
+
+*Platformer mechanics (M2, M5)*
+- [ ] Walk mode with gravity, jump, and grounded state (the M5 kinematic body) is the core traversal; swept axis-separated AABB collision lands the player on platforms and stops them at walls
+- [ ] Free-fly camera (F) to survey the course; floating-origin submission keeps sub-meter precision 250 m+ from the arena center (M2)
+- [ ] Build/break on the `detail` layer (raycast + `setVoxel`, 1–9 material select) lets the player bridge gaps or make shortcuts; edited chunks re-mesh and fire `on_voxel_modified`
+- [ ] Player edits persist across runs (chunk-granular dirty tracking + `WorldSave`), so a built bridge is still there on relaunch
+
+*Game objective — collect keys, reach the goal (demo logic + M7)*
+- [ ] Keys and the goal totem are imported `.vox` models (`Engine::importVox`) placed at world anchors and rendered with their authored palette colors (the M7 color round-trip)
+- [ ] Collect-then-finish loop: walking through a key's trigger volume collects it; reaching the goal totem with all keys collected logs victory; falling off or touching a hazard respawns the player at the start
+- [ ] Live `hazards` plugin load/unload (P) adds/removes lava pools at runtime, reverting the arena exactly when unloaded (the M4 live-toggle pattern)
+- [ ] Export (E) the player-built region of the `detail` layer back to `.vox` via `Engine::exportVox`; exporting the full 500-voxel-wide arena exercises auto-chunking (>256 voxels/axis) and the lossy-property warning path
+
+*Tests*
+- [ ] The five-layer arena config validates (integer ratios, modes, `decompose_to`) and a deliberately malformed variant is rejected (`LayerConfig::validate`)
+- [ ] Arena generators are deterministic (same layer + coord → identical grid) and the single-step `terraces`→`detail` decomposition is byte-for-byte stable (reuses the M6 determinism harness)
+- [ ] Headless unit tests for the game logic that does not need a window: key-collection state machine, win condition (all keys + goal reached), respawn trigger, and persistence round-trip of a player-built platform
+
+- [ ] **Demo — Arena platformer:** `07-arena-platformer` — spawn on the floor of a walled 500 m arena, collect the scattered `.vox` keys and reach the imported goal totem by traversing platforms that decompose from coarse blocks into fine 1 m detail as you approach; walk with gravity and collision across all five layers (G), build/break to make your own route (mouse, 1–9), toggle lava hazards (P), survey from free-fly (F), and export your modified arena to `.vox` (E)
+
 ---
 
 ### Phase 2 — 1.0 Release
