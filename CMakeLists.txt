@@ -254,6 +254,10 @@ foreach(_demo ${_voxel_demo_dirs})
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_LAYERED_PLUGIN_PATH="$<TARGET_FILE:layered-world>")
     endif()
+    if(TARGET arena)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_ARENA_PLUGIN_PATH="$<TARGET_FILE:arena>")
+    endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)
     if(EXISTS ${_demo_assets})
