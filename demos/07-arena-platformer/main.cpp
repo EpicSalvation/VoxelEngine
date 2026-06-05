@@ -221,6 +221,32 @@ std::vector<ChunkCoord> childChunksForMacro(const chunkmath::VoxelCoord& macro,
 }  // namespace
 
 int main() {
+    // ── Startup sequence (ORDER MATTERS) ──────────────────────────────────────
+    // The phases below must run in this exact order; several have hard
+    // dependencies on an earlier phase, and getting them out of order tends to
+    // fail silently (no error, no window — just a crash on launch).
+    //
+    //   1. Load layer config            — pure data, no dependencies.
+    //   2. Load plugins + look up gens   — needed before any world generation.
+    //   3. Engine::init + World          — wires plugins/world; registers the
+    //                                      built-in importers/exporters.
+    //   4. Import key/goal .vox models   — populates detail-layer chunks. CPU
+    //                                      only (voxel data); no GPU work yet.
+    //   5. Persistence / LOD / worker    — plain CPU objects.
+    //   6. Window + renderer.initialize  — *** bgfx::init happens HERE. ***
+    //   7. Build GPU meshes              — ChunkMesh::build allocates bgfx
+    //                                      vertex/index buffers, so it MUST run
+    //                                      after phase 6. Building any mesh
+    //                                      (including the imported key/goal
+    //                                      chunks) before bgfx::init dereferences
+    //                                      an uninitialized bgfx context and
+    //                                      crashes with an access violation
+    //                                      before the window ever appears.
+    //   8. Main loop                     — stream, decompose, edit, render.
+    //
+    // Rule of thumb: nothing that touches bgfx (any ChunkMesh::build / renderChunk
+    // / renderer.* call) may run before renderer.initialize() in phase 6.
+
     // ── Five-layer arena config ───────────────────────────────────────────────
     // Ratio chain: foundation(500)/ramparts(20)=25, ramparts(20)/terraces(10)=2,
     //              terraces(10)/props(2)=5, props(2)/detail(1)=2. All validated.
@@ -318,8 +344,9 @@ layers:
         return 1;
     }
 
-    // Engine::init wires the plugin manager and world into the engine and registers
-    // the built-in VoxImporter / VoxExporter handlers needed by importVox/exportVox.
+    // Phase 3: Engine::init wires the plugin manager and world into the engine and
+    // registers the built-in VoxImporter / VoxExporter handlers needed by
+    // importVox/exportVox.
     engine.init(pluginManager, world);
     engine.start();
 
@@ -340,7 +367,9 @@ layers:
             std::cerr << "[main] Warning: could not generate " << goalVoxPath << "\n";
     }
 
-    // ── Import key and goal totem models into the detail layer ────────────────
+    // ── Phase 4: Import key and goal totem models into the detail layer ───────
+    // Populates detail-layer chunks with voxel data only — no GPU meshes are
+    // built here (that is phase 7, after the renderer/bgfx exists).
     // Each key is a 1×2×1 gold stake placed just above the corresponding
     // platform's top surface.  VoxImporter creates the detail-layer chunk if it
     // is not yet resident, places the model voxels, and marks the chunk dirty so
@@ -383,12 +412,9 @@ layers:
     // decomposition worker, so there is no overwrite risk from terrace decomposition.
     std::unordered_set<ChunkCoord, ChunkCoordHash> persistentChunks;
 
-    // Build meshes for all chunks that VoxImporter created (they are the only
-    // dirty chunks present before the streaming loop begins).
-    for (const auto& [coord, chunkPtr] : detail->chunks()) {
-        detailMeshes.emplace(coord, ChunkMesh::build(*chunkPtr));
-        persistentChunks.insert(coord);
-    }
+    // NOTE: meshes for these imported chunks are built later, in phase 7 (after
+    // renderer.initialize() below) — ChunkMesh::build allocates bgfx buffers,
+    // which crashes if run before bgfx::init. Do NOT build them here.
 
     // Template voxel captured from the first decomposed terrace, used to restore
     // macro voxels when decomposed detail drifts past kDetailKeepRadiusM.
@@ -447,6 +473,8 @@ layers:
     double     vy = 0.0;
     bool       grounded = false;
 
+    // ── Phase 6: Window + renderer ── bgfx::init happens inside initialize() ──
+    // Every ChunkMesh::build / renderer.* call below depends on this having run.
     platform::Window window(1280, 720, "VoxelEngine — M7b Arena Platformer");
     BgfxRenderer renderer;
     int fbW, fbH;
@@ -454,6 +482,18 @@ layers:
     renderer.initialize(window.nativeHandles(),
                         static_cast<uint32_t>(fbW), static_cast<uint32_t>(fbH));
     renderer.setCrosshair(true);
+
+    // ── Phase 7: Build GPU meshes for the imported (key/goal) chunks ──────────
+    // This MUST come after phase 6: ChunkMesh::build allocates bgfx vertex/index
+    // buffers, so running it before bgfx::init dereferences an uninitialized bgfx
+    // context and crashes with an access violation — before the window appears,
+    // so it looks like the program "runs and closes" with no error and no window.
+    // (Every other mesh in this demo is built inside the main loop, i.e. after
+    // this point; these imported chunks are the only ones that exist pre-loop.)
+    for (const auto& [coord, chunkPtr] : detail->chunks()) {
+        detailMeshes.emplace(coord, ChunkMesh::build(*chunkPtr));
+        persistentChunks.insert(coord);
+    }
 
     GLFWwindow* glfwWin = window.glfwHandle();
     glfwSetInputMode(glfwWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
