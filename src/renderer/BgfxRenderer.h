@@ -4,6 +4,7 @@
 #include "../world/World.h"
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
+#include <string>
 #include <vector>
 
 class ChunkMesh;
@@ -49,6 +50,10 @@ public:
     // Enable/disable a centered crosshair drawn via bgfx debug text.
     void setCrosshair(bool enabled) { crosshair = enabled; }
 
+    // Replace the top-left HUD overlay, one string per line, drawn via bgfx debug
+    // text. Pass an empty vector to clear it. Persists across frames until changed.
+    void setHudText(std::vector<std::string> lines) { hudLines = std::move(lines); }
+
 private:
     struct PendingVoxel {
         WorldCoord pos;
@@ -75,6 +80,7 @@ private:
     bgfx::ProgramHandle       program;
     bgfx::IndexBufferHandle   ibo;       // shared cube indices; vertices are per-voxel transient
     bgfx::IndexBufferHandle   lineIbo;   // shared cube edge indices (12 edges) for highlights
+    std::vector<std::string>  hudLines;  // top-left debug-text overlay
     WorldCoord                cameraPos;
     bx::Vec3                  cameraRot; // {pitch, yaw, roll} in radians
     uint32_t                  viewWidth;

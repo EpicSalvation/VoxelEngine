@@ -269,13 +269,20 @@ void BgfxRenderer::render() {
         }
     }
 
-    // Crosshair: a centered '+' via bgfx debug text (8x16 character cells).
-    bgfx::setDebug(crosshair ? BGFX_DEBUG_TEXT : BGFX_DEBUG_NONE);
-    if (crosshair) {
+    // Debug-text overlays (8x16 character cells): a centered crosshair '+' and a
+    // top-left HUD. Both share one debug-text pass, cleared once per frame.
+    const bool wantText = crosshair || !hudLines.empty();
+    bgfx::setDebug(wantText ? BGFX_DEBUG_TEXT : BGFX_DEBUG_NONE);
+    if (wantText) {
         bgfx::dbgTextClear();
-        const uint16_t chX = static_cast<uint16_t>((viewWidth  / 8) / 2);
-        const uint16_t chY = static_cast<uint16_t>((viewHeight / 16) / 2);
-        bgfx::dbgTextPrintf(chX, chY, 0x0f, "+");
+        if (crosshair) {
+            const uint16_t chX = static_cast<uint16_t>((viewWidth  / 8) / 2);
+            const uint16_t chY = static_cast<uint16_t>((viewHeight / 16) / 2);
+            bgfx::dbgTextPrintf(chX, chY, 0x0f, "+");
+        }
+        for (size_t i = 0; i < hudLines.size(); ++i)
+            bgfx::dbgTextPrintf(1, static_cast<uint16_t>(1 + i), 0x0f, "%s",
+                                hudLines[i].c_str());
     }
 
     pendingVoxels.clear();

@@ -3,7 +3,8 @@
 // Layer stack (in config order, largest → smallest voxel size):
 //   "foundation"  500 m immutable — solid stone floor slab, Y in [-500, 0)
 //   "ramparts"     20 m immutable — perimeter walls + towers, Y in [0, 100)
-//   "terraces"     10 m composite → "detail" — elevated platform blocks
+//   "terraces"     10 m composite → "detail" — elevated platform blocks plus a
+//                  starter staircase from the floor up to the central start pad
 //   "props"         2 m immutable — decorative columns on the arena floor
 //   "detail"        1 m terminal  — fine walkable surface; terraces decompose here
 //
@@ -24,6 +25,7 @@
 #include "plugin_api.h"
 #include "world/Voxel.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -104,6 +106,54 @@ inline bool inPlatform(double wx, double wy, double wz) {
     return false;
 }
 
+// ── Starter staircase ────────────────────────────────────────────────────────
+// The arena floor (foundation top, Y = 0) and the lowest platform (the central
+// start pad, platform 0, top at Y = 20, south face at Z = 180) are 20 m apart
+// vertically with no natural route between them. Walk-mode collision has no
+// step-up, so a floor-spawned player cannot reach the platform network at all.
+//
+// This solid stone stair wedge bridges that gap: footprint X in [244, 256],
+// Z in [140, 180], climbing Y = 0 → 20 at 1 m of rise per 2 m of run (kStairRun).
+// Each step leaves a 2 m landing, so the ~1.6 m walk-mode jump clears every
+// riser. The player walks north across the floor from spawn, then jumps up the
+// steps onto the start pad. Like the platforms, the wedge is authored at the
+// terrace (10 m) scale as a conservative superset and carved to its fine 1 m
+// shape by the detail generator, so it decomposes on approach exactly as the
+// platforms do.
+constexpr double kStairXMin = 244.0;
+constexpr double kStairXMax = 256.0;
+constexpr double kStairZMin = 140.0;
+constexpr double kStairZMax = 180.0;
+constexpr double kStairTopY =  20.0;   // matches platform 0 y_max (start pad top)
+constexpr double kStairRun  =   2.0;   // horizontal run per 1 m of rise
+
+// Top-surface Y of the stair wedge at northward position wz (clamped to the pad).
+inline double stairHeight(double wz) {
+    const double steps = std::floor((wz - kStairZMin) / kStairRun) + 1.0;
+    return std::min(steps, kStairTopY);
+}
+
+// Exact 1 m detail occupancy: solid stone beneath the stepped surface.
+inline bool inStaircase(double wx, double wy, double wz) {
+    if (wx < kStairXMin || wx >= kStairXMax) return false;
+    if (wz < kStairZMin || wz >= kStairZMax) return false;
+    if (wy < 0.0) return false;
+    return wy < stairHeight(wz);
+}
+
+// Conservative 10 m terrace occupancy: true if the cell whose minimum corner is
+// (cellX, cellY, cellZ) with size vs contains any solid stair voxel. The wedge
+// height is non-decreasing in Z, so its maximum within a cell is at the cell's
+// northern edge — testing there keeps this a strict superset of inStaircase()
+// while sparing the empty upper cells from becoming floating terrace blocks.
+inline bool staircaseCellOverlap(double cellX, double cellY, double cellZ, double vs) {
+    if (cellX + vs <= kStairXMin || cellX >= kStairXMax) return false;
+    if (cellZ + vs <= kStairZMin || cellZ >= kStairZMax) return false;
+    if (cellY >= kStairTopY      || cellY + vs <= 0.0)   return false;
+    const double northZ = std::min(cellZ + vs, kStairZMax) - 1e-9;
+    return cellY < stairHeight(northZ);
+}
+
 // Returns true if the voxel whose minimum corner is at (cellX, cellY, cellZ)
 // with size vs overlaps the perimeter wall zone.
 inline bool inWall(double cellX, double cellY, double cellZ, double vs) {
@@ -164,8 +214,9 @@ void terraces_generator(WorldCoord origin, int n, Voxel* out, void* ud) {
                 const double wx = origin.value.x + x * vs;
                 const double wy = origin.value.y + y * vs;
                 const double wz = origin.value.z + z * vs;
-                out[x + n * (y + n * z)] =
-                    inPlatform(wx, wy, wz) ? Voxel{block} : Voxel::empty();
+                const bool solid = inPlatform(wx, wy, wz) ||
+                                   staircaseCellOverlap(wx, wy, wz, vs);
+                out[x + n * (y + n * z)] = solid ? Voxel{block} : Voxel::empty();
             }
 }
 
@@ -182,11 +233,17 @@ void detail_generator(WorldCoord origin, int n, Voxel* out, void* /*ud*/) {
                 const double wy = origin.value.y + y * vs;
                 const double wz = origin.value.z + z * vs;
                 Voxel& v = out[x + n * (y + n * z)];
-                if (!inPlatform(wx, wy, wz)) {
+                // The walkable surface is the union of the platforms and the
+                // starter staircase that bridges the floor to the start pad.
+                const bool solidHere  = inPlatform(wx, wy, wz) ||
+                                        inStaircase(wx, wy, wz);
+                const bool solidAbove = inPlatform(wx, wy + vs, wz) ||
+                                        inStaircase(wx, wy + vs, wz);
+                if (!solidHere) {
                     v = Voxel::empty();
                 } else {
                     // Grass on the top face, stone everywhere else.
-                    v.material = inPlatform(wx, wy + vs, wz) ? stone : grass;
+                    v.material = solidAbove ? stone : grass;
                 }
             }
 }

@@ -329,8 +329,11 @@ Controls for `07-arena-platformer`: **WASD** move, **mouse** look, **G** toggles
 walk/fly (cross-layer collision + gravity), **Space** jump (walk) or fly up,
 **Shift** fly down, **left/right mouse** break/place, **1**–**9** select
 material, **P** toggles lava hazards on platforms, **E** exports the detail layer
-to `arena-export.vox`, **F** toggles the mouse cursor, **ESC** quits. Walk into
-gold key stakes to collect them; reach the goal totem with all four keys to win.
+to `arena-export.vox`, **F** toggles the mouse cursor, **ESC** quits. From the
+floor spawn, switch to walk mode and head north to the stone staircase, then jump
+up its steps onto the start pad (walk-mode collision has no step-up, so each 1 m
+riser is a jump). Walk into gold key stakes to collect them — an on-screen
+counter tracks your progress — and reach the goal totem with all four keys to win.
 
 ---
 
@@ -518,12 +521,13 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 *Platformer mechanics (M2, M5)*
 - [x] Walk mode with gravity, jump, and grounded state (the M5 kinematic body) is the core traversal; swept axis-separated AABB collision lands the player on platforms and stops them at walls
 - [x] Free-fly camera (F) to survey the course; floating-origin submission keeps sub-meter precision 250 m+ from the arena center (M2)
-- [x] Build/break on the `detail` layer (raycast + `setVoxel`, 1–9 material select) lets the player bridge gaps or make shortcuts; edited chunks re-mesh and fire `on_voxel_modified`
+- [x] Build/break on the `detail` layer (raycast + `setVoxel`, 1–9 material select) lets the player bridge gaps or make shortcuts; edited chunks re-mesh and fire `on_voxel_modified`. Placing into a not-yet-resident detail chunk (e.g. the air above a platform, whose top sits on a chunk boundary) creates the chunk on demand so building upward works
+- [x] A stone starter staircase, authored in the arena plugin's `terraces`/`detail` generators (coarse superset carved to its 1 m step shape), climbs from the floor to the start pad so the floor-spawned player can reach the platform network
 - [x] Player edits persist across runs (chunk-granular dirty tracking + `WorldSave`), so a built bridge is still there on relaunch
 
 *Game objective — collect keys, reach the goal (demo logic + M7)*
 - [x] Keys and the goal totem are imported `.vox` models (`Engine::importVox`) placed at world anchors and rendered with their authored palette colors (the M7 color round-trip)
-- [x] Collect-then-finish loop: walking through a key's trigger volume collects it; reaching the goal totem with all keys collected logs victory; falling off or touching a hazard respawns the player at the start
+- [x] Collect-then-finish loop: walking through a key's trigger volume collects it; reaching the goal totem with all keys collected logs victory; falling off or touching a hazard respawns the player at the start. An on-screen HUD counter (bgfx debug-text overlay) shows keys collected out of four and the win prompt
 - [x] Live `hazards` plugin load/unload (P) adds/removes lava pools at runtime, reverting the arena exactly when unloaded (the M4 live-toggle pattern)
 - [x] Export (E) the player-built region of the `detail` layer back to `.vox` via `Engine::exportVox`; exporting the full 500-voxel-wide arena exercises auto-chunking (>256 voxels/axis) and the lossy-property warning path
 

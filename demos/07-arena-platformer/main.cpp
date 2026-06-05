@@ -10,6 +10,11 @@
 //   "props"         2 m immutable — decorative columns at eight arena positions.
 //   "detail"        1 m terminal  — fine walkable surface revealed by decomposition.
 //
+// A stone starter staircase (authored in the arena plugin's terraces/detail
+// generators) climbs from the floor up to the south edge of the central start
+// pad, giving the floor-spawned walk-mode player a route onto the platform
+// network — walk-mode collision has no step-up, so jump up each 1 m riser.
+//
 // Layer ratio chain: 25:1, 2:1, 5:1, 2:1 — all validated at startup.
 //
 // Game objective (Group 4 / M7):
@@ -495,6 +500,19 @@ layers:
         persistentChunks.insert(coord);
     }
 
+    // ── HUD: on-screen key counter ────────────────────────────────────────────
+    // Refresh the top-left overlay from the current objective state. Called once
+    // up front and again whenever the count changes (collect / win).
+    auto updateHud = [&] {
+        int collected = 0;
+        for (bool k : keysCollected) collected += k ? 1 : 0;
+        std::string line = "Keys: " + std::to_string(collected) + " / 4";
+        if (gameWon)            line += "   *** YOU WIN! ***";
+        else if (collected == 4) line += "   Reach the goal totem!";
+        renderer.setHudText({line});
+    };
+    updateHud();
+
     GLFWwindow* glfwWin = window.glfwHandle();
     glfwSetInputMode(glfwWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
@@ -508,6 +526,8 @@ layers:
                  "1-9 = select material.\n"
                  "[main] Fly toward platforms to decompose them; build bridges to "
                  "cross gaps. Edits save to arena-save/ and survive relaunch.\n"
+                 "[main] In walk mode (G), head north from spawn to the stone "
+                 "staircase and jump up its steps onto the start pad.\n"
                  "[main] Collect the four gold key stakes (walk into them), then "
                  "reach the goal totem to win.\n"
                  "[main] P = toggle lava hazards on platforms, E = export detail "
@@ -712,6 +732,7 @@ layers:
                     const int remaining = 4 - collectedCount;
                     std::cout << "[main] Key " << (i + 1)
                               << " collected! " << remaining << " remaining.\n";
+                    updateHud();
                 }
             }
 
@@ -726,6 +747,7 @@ layers:
                     gameWon = true;
                     std::cout << "[main] *** VICTORY!  All keys collected and "
                                  "goal totem reached! ***\n";
+                    updateHud();
                 }
             }
 
@@ -960,6 +982,21 @@ layers:
                 blockedByPlayer = (t == chunkmath::worldToVoxel(camPos, vs));
             }
             if (!blockedByPlayer) {
+                // The placement target may be an empty cell in a detail chunk that
+                // is not resident — most commonly the air directly above a platform,
+                // since every platform top sits on a detail-chunk boundary (tops at
+                // y = 20/30/…/70, chunks 10 m tall). Layer::setVoxel fails silently
+                // on a missing chunk, so create an empty one first. It is not backed
+                // by terrace decomposition (its parent macro voxel is empty and never
+                // decomposes), so mark it persistent — like the imported key/goal
+                // chunks — so the per-frame radius eviction never drops the built
+                // voxel mid-session.
+                const ChunkCoord tc =
+                    chunkmath::voxelToChunkLocal(t, detail->chunkSizeVoxels()).chunk;
+                if (!detail->getChunk(tc)) {
+                    detail->loadChunk(tc, nullptr);  // empty chunk
+                    persistentChunks.insert(tc);
+                }
                 Voxel placed;
                 placed.material = materials[selectedMaterial].props;
                 editDetailVoxel(t, placed);
