@@ -159,7 +159,7 @@ Therefore **a composite layer's occupancy must be a conservative superset of its
 
 ## 5. Material Property System
 
-**Files:** `src/world/Voxel.h`, `src/simulation/PhysicsSystem.h`
+**Files:** `include/plugin_api.h` (the `MaterialProperties` struct), `src/world/Voxel.h`, `src/simulation/RemovalModel.{h,cpp}` (the first property consumer; M8). The structural `PhysicsSystem`/`PropagationSystem` consumers arrive in M11.
 
 ### Design Intent
 
@@ -175,12 +175,29 @@ Material properties replace the ID with a data record. Simulation systems query 
 | `structural_strength` | `float` | Resistance to collapse; queried by `PropagationSystem` |
 | `thermal_conductivity` | `float` | W/(m·K); drives heat transfer and fire spread |
 | `porosity` | `float` | 0.0–1.0; fraction of volume permeable to fluid |
-| `hardness` | `float` | Relative resistance to removal/destruction; not mapped to any real-world scale |
+| `hardness` | `float` | Relative resistance to removal/destruction; not mapped to any real-world scale. `0` = no resistance (instant removal); `< 0` = indestructible (sentinel). See the consumption contract below |
 | `palette_index` | `uint8_t` | Index into the 256-entry visual palette; used for `.vox` compatibility |
 
 ### Palette Index and Editor Compatibility
 
 `palette_index` is the bridge to standard voxel editors. The visual palette maps each index to color, texture, and PBR parameters. A `.vox` file stores only palette indices — importing a `.vox` file populates `palette_index` and leaves other material properties at their defaults for that palette entry. Extended properties are stored in the engine-native `.vxe` format.
+
+### Property-Driven Behavior: the consumption contract
+
+A simulation system reads the **target voxel's own `MaterialProperties`** and responds to the values. It never resolves properties by `material_id` and never branches on a material identity. This is the rule that makes the system compose: a system written today works on any material defined later, because it only ever asks "what are *this voxel's* properties," not "which material is this."
+
+**Properties are read off the voxel, not looked up live.** Materials are copied into voxels by value at generation/import time (§8). A consumer therefore reads `voxel.material.<field>` directly; it does not consult the plugin material registry at simulation time. The accepted consequence: re-registering or unloading a material does **not** retroactively change voxels that already exist — their properties were frozen when they were created. The material-id registry lookup (`PluginManager::material()`, M8) exists for *tooling* — importers, UI, build-menu selection — and is deliberately off every simulation hot path.
+
+**Worked example — voxel-removal cost (M8, `src/simulation/RemovalModel`).** The effort to remove a voxel is a pure, deterministic function of its `hardness` and an optional tool `power`:
+
+- `hardness > 0` — work required is proportional to `hardness` (abstract units; `hardness` is relative, not a real-world scale). A tool applies `power` work-units per unit time, so `time_to_remove = hardness / power`. The mapping is linear and transparent; a game may layer its own feel curve on top of this engine primitive.
+- `hardness == 0` — no resistance; the voxel removes in a single step. This is the **fail-soft default**: an unset `hardness` (the zero-initialized struct default) means "removable," and solid materials are expected to set `hardness` explicitly. The engine does not substitute a hidden default for unset values.
+- `hardness < 0` — **indestructible** (sentinel; `-1.0f` by convention). The removal tool refuses to clear the voxel. This gives *per-material* indestructibility inside an otherwise-editable terminal layer, distinct from `VoxelMode::immutable`, which makes a *whole layer* non-editable. The sentinel requires no schema change — `hardness` is already a serialized `float` (§9 chunk format), so a negative value round-trips through save/load and `.vox` import unchanged.
+- `power <= 0` — the tool can never remove the voxel (infinite time), regardless of `hardness`.
+
+`RemovalModel` is pure and stateless (no `rand`/`time`/global state) and depends only on `MaterialProperties` — not on `World`, the renderer, or `PluginManager` — so it is unit-testable in isolation. The **outcome** (removed or not) is fully deterministic; only the wall-clock *time* to reach it depends on frame rate and how long the player holds the action, and that timing never touches saved world state (a voxel is binary: present or `empty()`). The per-target progress accumulator is **transient tool state**, held in the tool/demo path and never persisted; dirty tracking stays chunk-granular (§9). `on_voxel_modified` fires exactly once, at the moment the voxel is cleared.
+
+`structural_strength` (M11 collapse) and `thermal_conductivity`/`porosity` (M12 fluid and heat) are future consumers that follow this same contract: read the property off the voxel, respond to the value, stay off the material-id path.
 
 ---
 
