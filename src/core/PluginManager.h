@@ -114,6 +114,22 @@ public:
     const std::vector<RegisteredImporter>&            importers()            const { return importers_; }
     const std::vector<RegisteredExporter>&            exporters()            const { return exporters_; }
 
+    // Keyed material-property lookup. These centralize the registry search that
+    // importers, the build menu, and other tooling previously hand-rolled. They
+    // are a TOOLING convenience only: simulation systems read a voxel's own
+    // MaterialProperties by value and never resolve by id (architecture.md §5).
+    //
+    // material(): returns the properties registered under material_id, or a
+    // neutral default (a zero-initialized MaterialProperties — the fail-soft
+    // "removable, weightless" default) when no material with that id exists.
+    MaterialProperties material(const std::string& material_id) const;
+
+    // materialForPalette(): returns the properties of the material registered
+    // with this palette_index (the last such registration wins, mirroring
+    // register_material's overwrite-by-id semantics), or a neutral default whose
+    // palette_index is set to the requested index when none is registered.
+    MaterialProperties materialForPalette(std::uint8_t palette_index) const;
+
 private:
     PluginContext buildContext();
 

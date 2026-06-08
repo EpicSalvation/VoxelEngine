@@ -33,6 +33,14 @@ int initRegisterB(PluginContext* ctx) {
     ctx->register_material(ctx, "dup", m);
     return 0;
 }
+int initRegisterPalette(PluginContext* ctx) {
+    MaterialProperties m;
+    m.density       = 5.0f;
+    m.hardness      = 3.0f;
+    m.palette_index = 7;
+    ctx->register_material(ctx, "rock", m);
+    return 0;
+}
 
 }  // namespace
 
@@ -76,13 +84,43 @@ TEST(PluginManager, DuplicateMaterialOverwrites) {
     pm.wireInPlugin(initRegisterA);
     pm.wireInPlugin(initRegisterB);
 
-    int   count   = 0;
-    float density = 0.0f;
+    int count = 0;
     for (const auto& m : pm.materials())
-        if (m.material_id == "dup") { ++count; density = m.props.density; }
+        if (m.material_id == "dup") ++count;
 
-    EXPECT_EQ(count, 1);              // overwritten, not duplicated
-    EXPECT_FLOAT_EQ(density, 2.0f);   // second registration wins
+    EXPECT_EQ(count, 1);                                 // overwritten, not duplicated
+    EXPECT_FLOAT_EQ(pm.material("dup").density, 2.0f);   // second registration wins (via lookup)
+}
+
+TEST(PluginManager, MaterialLookupByIdAndPalette) {
+    PluginManager pm;
+    PluginId id = pm.wireInPlugin(initRegisterPalette);
+    ASSERT_NE(id, kInvalidPluginId);
+
+    // Known id → the registered properties.
+    const MaterialProperties rock = pm.material("rock");
+    EXPECT_FLOAT_EQ(rock.density, 5.0f);
+    EXPECT_FLOAT_EQ(rock.hardness, 3.0f);
+    EXPECT_EQ(static_cast<int>(rock.palette_index), 7);
+
+    // Known palette index → the same registered properties.
+    EXPECT_FLOAT_EQ(pm.materialForPalette(7).density, 5.0f);
+
+    // Unknown id → a neutral zero-initialized default.
+    const MaterialProperties none = pm.material("nonexistent");
+    EXPECT_FLOAT_EQ(none.density, 0.0f);
+    EXPECT_EQ(static_cast<int>(none.palette_index), 0);
+
+    // Unknown palette index → neutral default carrying the requested index.
+    const MaterialProperties p9 = pm.materialForPalette(9);
+    EXPECT_FLOAT_EQ(p9.density, 0.0f);
+    EXPECT_EQ(static_cast<int>(p9.palette_index), 9);
+
+    // The lookup tracks the registry: after the owning plugin unloads, the id and
+    // palette resolve back to the neutral default.
+    ASSERT_TRUE(pm.unloadPlugin(id));
+    EXPECT_FLOAT_EQ(pm.material("rock").density, 0.0f);
+    EXPECT_FLOAT_EQ(pm.materialForPalette(7).density, 0.0f);
 }
 
 TEST(PluginManager, WiredInPluginUnloadTearsDown) {

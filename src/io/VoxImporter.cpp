@@ -366,18 +366,6 @@ bool VoxImporter::load(const std::string& path, Layer& layer,
         }
     }
 
-    // Build palette_index → MaterialProperties lookup from registered materials.
-    // Index 0 stays as zero-default (empty voxels are skipped anyway).
-    std::array<MaterialProperties, 256> propsByPalette{};
-    for (int i = 1; i < 256; ++i) {
-        propsByPalette[i].palette_index = static_cast<uint8_t>(i);
-    }
-    for (const auto& mat : plugins.materials()) {
-        uint8_t idx = mat.props.palette_index;
-        if (idx != 0)
-            propsByPalette[idx] = mat.props;
-    }
-
     // Pre-create any chunks that will be needed so setVoxel can find them.
     // We collect all required ChunkCoords before any writes.
     const double vsm = layer.voxelSizeM();
@@ -420,8 +408,13 @@ bool VoxImporter::load(const std::string& path, Layer& layer,
             const double wz = anchor.value.z +
                 static_cast<double>(model.offsetZ + static_cast<int32_t>(ve.z) - halfZ) * vsm;
 
+            // Resolve material properties from the registry by palette index. An
+            // index with no registered material yields a neutral default carrying
+            // that palette_index — identical to the old hand-rolled 256-entry table
+            // (architecture.md §10: properties come from the registry, never from
+            // the color value).
             Voxel v;
-            v.material = propsByPalette[ve.colorIndex];
+            v.material = plugins.materialForPalette(ve.colorIndex);
             layer.setVoxel(WorldCoord(wx, wy, wz), v);
         }
     }

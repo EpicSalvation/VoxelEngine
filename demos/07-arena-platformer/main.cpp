@@ -323,16 +323,22 @@ layers:
         return 1;
     }
 
-    // Build-material palette: every registered material is selectable (keys 1-9).
-    const auto& materials = pluginManager.materials();
-    if (materials.empty()) {
+    // Build-material palette: the first nine arena materials are selectable (keys
+    // 1-9). Capture their ids once at startup; props are resolved at placement
+    // time via PluginManager::material(). This keeps selection valid across the
+    // runtime hazards-plugin load/unload (P) — which mutates the registry vector —
+    // instead of indexing it positionally with a possibly-stale index.
+    std::vector<std::string> buildMaterials;
+    for (size_t i = 0; i < pluginManager.materials().size() && i < 9; ++i)
+        buildMaterials.push_back(pluginManager.materials()[i].material_id);
+    if (buildMaterials.empty()) {
         std::cerr << "[main] Fatal: no materials registered by the arena plugin.\n";
         return 1;
     }
     size_t selectedMaterial = 0;
     std::cout << "[main] Build materials (press the number to select):\n";
-    for (size_t i = 0; i < materials.size() && i < 9; ++i)
-        std::cout << "       " << (i + 1) << " - " << materials[i].material_id << "\n";
+    for (size_t i = 0; i < buildMaterials.size(); ++i)
+        std::cout << "       " << (i + 1) << " - " << buildMaterials[i] << "\n";
 
     // ── Engine + window + renderer ────────────────────────────────────────────
     Engine engine;
@@ -641,12 +647,12 @@ layers:
         prevKeyE = curKeyE;
 
         // Material selection (1-9): choose what the right mouse places.
-        for (int i = 0; i < 9 && i < static_cast<int>(materials.size()); ++i) {
+        for (int i = 0; i < static_cast<int>(buildMaterials.size()); ++i) {
             if (glfwGetKey(glfwWin, GLFW_KEY_1 + i) == GLFW_PRESS &&
                 selectedMaterial != static_cast<size_t>(i)) {
                 selectedMaterial = static_cast<size_t>(i);
                 std::cout << "[main] Selected material: "
-                          << materials[selectedMaterial].material_id << "\n";
+                          << buildMaterials[selectedMaterial] << "\n";
             }
         }
 
@@ -998,7 +1004,7 @@ layers:
                     persistentChunks.insert(tc);
                 }
                 Voxel placed;
-                placed.material = materials[selectedMaterial].props;
+                placed.material = pluginManager.material(buildMaterials[selectedMaterial]);
                 editDetailVoxel(t, placed);
             }
         }

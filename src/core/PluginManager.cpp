@@ -161,6 +161,24 @@ bool PluginManager::unloadPlugin(PluginId id) {
     return true;
 }
 
+MaterialProperties PluginManager::material(const std::string& material_id) const {
+    for (const auto& m : materials_)
+        if (m.material_id == material_id)
+            return m.props;
+    return MaterialProperties{};  // neutral fail-soft default for an unknown id
+}
+
+MaterialProperties PluginManager::materialForPalette(std::uint8_t palette_index) const {
+    MaterialProperties result{};
+    result.palette_index = palette_index;
+    // Last registration with this palette_index wins, matching the overwrite-by-id
+    // semantics of register_material (a later duplicate replaces the earlier one).
+    for (const auto& m : materials_)
+        if (m.props.palette_index == palette_index)
+            result = m.props;
+    return result;
+}
+
 void PluginManager::registerBuiltinHandlers() {
     // Register marker entries for the built-in .vox importer and exporter.
     // fn and user_data are null — the Engine dispatch never calls them; it

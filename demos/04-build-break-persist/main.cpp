@@ -37,6 +37,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -101,16 +102,21 @@ layers:
         return 1;
     }
 
-    // Build-material palette: every registered material is selectable (keys 1-9).
-    const auto& materials = pluginManager.materials();
-    if (materials.empty()) {
+    // Build-material palette: the first nine registered materials are selectable
+    // (keys 1-9). Capture their ids once; props are resolved at placement time via
+    // PluginManager::material(), so selection stays valid even if the registry
+    // changes, and never indexes the live registry vector positionally.
+    std::vector<std::string> buildMaterials;
+    for (size_t i = 0; i < pluginManager.materials().size() && i < 9; ++i)
+        buildMaterials.push_back(pluginManager.materials()[i].material_id);
+    if (buildMaterials.empty()) {
         std::cerr << "[main] Fatal: no materials registered by the plugin.\n";
         return 1;
     }
     size_t selectedMaterial = 0;
     std::cout << "[main] Build materials (press the number to select):\n";
-    for (size_t i = 0; i < materials.size() && i < 9; ++i)
-        std::cout << "       " << (i + 1) << " - " << materials[i].material_id << "\n";
+    for (size_t i = 0; i < buildMaterials.size(); ++i)
+        std::cout << "       " << (i + 1) << " - " << buildMaterials[i] << "\n";
 
     Engine engine;
     engine.start();
@@ -224,12 +230,12 @@ layers:
         prevKeyG = curKeyG;
 
         // Material selection (1-9).
-        for (int i = 0; i < 9 && i < static_cast<int>(materials.size()); ++i) {
+        for (int i = 0; i < static_cast<int>(buildMaterials.size()); ++i) {
             if (glfwGetKey(glfwWin, GLFW_KEY_1 + i) == GLFW_PRESS &&
                 selectedMaterial != static_cast<size_t>(i)) {
                 selectedMaterial = static_cast<size_t>(i);
                 std::cout << "[main] Selected material: "
-                          << materials[selectedMaterial].material_id << "\n";
+                          << buildMaterials[selectedMaterial] << "\n";
             }
         }
 
@@ -365,7 +371,7 @@ layers:
             }
             if (!blockedByPlayer) {
                 Voxel placed;
-                placed.material = materials[selectedMaterial].props;
+                placed.material = pluginManager.material(buildMaterials[selectedMaterial]);
                 editVoxel(t, placed);
             }
         }
