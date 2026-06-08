@@ -44,8 +44,14 @@ public:
     // Submit a wireframe box centered at a world-space position, drawn as lines
     // over the scene (depth-tested, no depth write) — used to outline the voxel
     // the player is targeting. size is the cube's full edge length in meters.
+    //
+    // progress in [0, 1] ramps the outline from abgr toward red as removal work
+    // accrues against the target, giving the player a visible "about to break"
+    // cue that lasts longer for harder materials. A negative value (the default)
+    // leaves the outline at abgr — the plain targeting highlight with no removal
+    // in progress.
     void drawVoxelHighlight(const WorldCoord& center, float size,
-                            uint32_t abgr = 0xff00ffff);
+                            uint32_t abgr = 0xff00ffff, float progress = -1.0f);
 
     // Enable/disable a centered crosshair drawn via bgfx debug text.
     void setCrosshair(bool enabled) { crosshair = enabled; }
@@ -72,6 +78,7 @@ private:
         WorldCoord center;
         float      size;
         uint32_t   abgr;
+        float      progress;  // [0,1] removal ramp; <0 means plain outline
     };
 
     std::vector<PendingVoxel>     pendingVoxels;

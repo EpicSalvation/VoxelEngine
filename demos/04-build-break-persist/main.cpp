@@ -39,6 +39,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -348,13 +349,15 @@ layers:
         glm::dvec3 lookDir{static_cast<double>(cp * sy), static_cast<double>(sp),
                            static_cast<double>(cp * cy)};
         voxelcast::RayHit hit = voxelcast::raycast(world, camPos, lookDir, kReachM);
-        if (hit.hit)
-            renderer.drawVoxelHighlight(
-                chunkmath::voxelCenter(hit.voxel, world.voxelSizeM()),
-                static_cast<float>(world.voxelSizeM()));
 
         bool curLeft  = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS);
         bool curRight = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
+
+        // The targeted voxel's material — drives both the removal cost below and
+        // the on-screen feedback. Read off the voxel itself, never a block-type id.
+        const Voxel target =
+            hit.hit ? world.getVoxel(chunkmath::voxelCenter(hit.voxel, world.voxelSizeM()))
+                    : Voxel::empty();
 
         // Break: holding left mouse on a voxel accrues removal work scaled by the
         // tool power; the voxel clears only when accrued work meets its
@@ -363,8 +366,6 @@ layers:
         // clears. Hardness is read off the target voxel's own material — no
         // block-type branch (ARCHITECTURE §5).
         if (hit.hit && curLeft) {
-            const Voxel target =
-                world.getVoxel(chunkmath::voxelCenter(hit.voxel, world.voxelSizeM()));
             if (remover.accrue(hit.voxel, target.material.hardness, kToolPower, dt)) {
                 editVoxel(hit.voxel, Voxel::empty());  // break
                 remover.reset();
@@ -398,6 +399,29 @@ layers:
             }
         }
         prevRight = curRight;
+
+        // Removal-progress feedback: outline the targeted voxel, ramping the
+        // outline toward red as accrued removal work approaches the material's
+        // hardness-derived threshold (so a harder voxel visibly takes longer to
+        // clear), and read out the target's hardness/density in the HUD. The
+        // ramp only applies while this exact voxel is the active removal target;
+        // a fresh or non-mined target shows the plain outline. All driven by the
+        // voxel's own material properties — no block-type branch (ARCHITECTURE §5).
+        if (hit.hit) {
+            const float progress =
+                (remover.hasTarget() && remover.target() == hit.voxel)
+                    ? remover.progress() : -1.0f;
+            renderer.drawVoxelHighlight(
+                chunkmath::voxelCenter(hit.voxel, world.voxelSizeM()),
+                static_cast<float>(world.voxelSizeM()), 0xff00ffff, progress);
+            char hud[64];
+            std::snprintf(hud, sizeof(hud), "hardness %.1f  density %.0f",
+                          static_cast<double>(target.material.hardness),
+                          static_cast<double>(target.material.density));
+            renderer.setHudText({std::string(hud)});
+        } else {
+            renderer.setHudText({});
+        }
 
         // Resize.
         int w, h;

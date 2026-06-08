@@ -245,13 +245,28 @@ void BgfxRenderer::render() {
     // occludes geometry. Drawn on view 0 after the opaque pass.
     constexpr uint64_t kLineState =
         BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_PT_LINES;
+    // Removal-progress ramp: lerp an ABGR color's RGB toward pure red as t→1,
+    // leaving alpha untouched. Drives the "about to break" outline cue.
+    auto rampToRed = [](uint32_t base, float t) -> uint32_t {
+        if (t < 0.0f) return base;               // no removal in progress
+        if (t > 1.0f) t = 1.0f;
+        const uint32_t a = base & 0xff000000u;
+        const float b = static_cast<float>((base >> 16) & 0xffu);
+        const float g = static_cast<float>((base >> 8)  & 0xffu);
+        const float r = static_cast<float>( base        & 0xffu);
+        const uint32_t rr = static_cast<uint32_t>(r + t * (255.0f - r));
+        const uint32_t gg = static_cast<uint32_t>(g * (1.0f - t));
+        const uint32_t bb = static_cast<uint32_t>(b * (1.0f - t));
+        return a | (bb << 16) | (gg << 8) | rr;
+    };
     for (const auto& ph : pendingHighlights) {
+        const uint32_t color = rampToRed(ph.abgr, ph.progress);
         bgfx::TransientVertexBuffer tvb;
         bgfx::allocTransientVertexBuffer(&tvb, 8, VoxelVertex::layout);
         VoxelVertex* verts = reinterpret_cast<VoxelVertex*>(tvb.data);
         std::memcpy(verts, kCubeTemplate, sizeof(kCubeTemplate));
         for (int i = 0; i < 8; ++i)
-            verts[i].abgr = ph.abgr;
+            verts[i].abgr = color;
 
         glm::vec3 lp = ph.center.toLocalFloat(cameraPos);
         // Scale the unit (±0.5) template up to the voxel size, nudged out slightly
@@ -314,8 +329,9 @@ void BgfxRenderer::renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOri
     pendingChunks.push_back({chunkOrigin, voxelSizeM, mesh.vbh(), mesh.opaqueIbh(), mesh.translucentIbh()});
 }
 
-void BgfxRenderer::drawVoxelHighlight(const WorldCoord& center, float size, uint32_t abgr) {
-    pendingHighlights.push_back({center, size, abgr});
+void BgfxRenderer::drawVoxelHighlight(const WorldCoord& center, float size, uint32_t abgr,
+                                     float progress) {
+    pendingHighlights.push_back({center, size, abgr, progress});
 }
 
 void BgfxRenderer::setViewport(int width, int height) {
