@@ -252,6 +252,10 @@ The engine builds as a library (`voxel-engine`); demos and games are separate
 executables that link it. The build is static by default — pass
 `-DBUILD_SHARED_LIBS=ON` to produce a shared engine library instead.
 
+The build is verified on Linux (GCC) — `cmake -B build && cmake --build build`
+configures and compiles cleanly from a fresh checkout, and `ctest --test-dir
+build` passes. macOS/Clang and Windows/MSVC are likewise supported.
+
 The `demos/` directory holds a progressive series of reference examples, each a
 standalone target named after its folder. Every `demos/<NN-name>/` with a
 `main.cpp` is discovered automatically — `cmake --build build` builds them all,
