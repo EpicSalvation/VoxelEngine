@@ -97,6 +97,7 @@ file(GLOB_RECURSE ENGINE_SOURCES
     src/platform/*.cpp
     src/plugins/*.cpp
     src/renderer/*.cpp
+    src/simulation/*.cpp
     src/world/*.cpp
 )
 
