@@ -3,9 +3,11 @@
 // This demo grows across the M5 task groups. Implemented so far:
 //   - place/remove: a plugin-driven streaming world (the M4 base-terrain
 //     heightmap) the player can edit. A double-precision DDA raycast finds the
-//     targeted voxel (wireframe highlight + crosshair); left mouse breaks, right
-//     mouse places the selected material. Every edit fires on_voxel_modified and
-//     re-meshes the affected chunk.
+//     targeted voxel (wireframe highlight + crosshair); hold left mouse to mine
+//     it (per-target removal accrues work scaled by the material's hardness via
+//     the M8 RemovalModel — a harder voxel takes longer; switching targets or
+//     releasing resets progress), right mouse places the selected material.
+//     Every edit fires on_voxel_modified and re-meshes the affected chunk.
 //   - persistence: edited (dirty) chunks are written to a save directory — on
 //     eviction (save-then-evict) and on quit. On relaunch the saved chunks load
 //     from disk in place of the generator, so edits survive across runs while
@@ -26,6 +28,7 @@
 #include "renderer/BgfxRenderer.h"
 #include "renderer/ChunkMesh.h"
 #include "renderer/LODManager.h"
+#include "simulation/RemovalAccumulator.h"
 #include "world/Chunk.h"
 #include "world/ChunkCoordMath.h"
 #include "world/VoxelCollision.h"
@@ -50,6 +53,7 @@ constexpr int    kLoadsPerFrame = 2;      // budget generated/meshed chunks per 
 constexpr float  kFlySpeed      = 24.0f;  // free-fly camera speed
 constexpr float  kMouseSens     = 0.002f;
 constexpr double kReachM        = 8.0;    // how far the player can target a voxel
+constexpr float  kToolPower     = 0.5f;   // removal work-units/sec (RemovalModel)
 
 // Walking player (walk mode).
 constexpr double kWalkSpeed = 6.0;        // m/s horizontal
@@ -179,7 +183,11 @@ layers:
     bool       firstMouse = true;
     bool       cursorCaptured = true;
     bool       prevKeyF = false, prevKeyG = false;
-    bool       prevLeft = false, prevRight = false;
+    bool       prevRight = false;
+
+    // Held-to-mine state: per-target removal progress (M8). Transient tool state
+    // — never persisted; reset when the target changes or the action is released.
+    sim::RemovalAccumulator remover;
 
     // Walking player state (active when walkMode is true). The eye (camPos) sits
     // kEyeOffset above the AABB center.
@@ -194,7 +202,8 @@ layers:
     auto prevTime = std::chrono::high_resolution_clock::now();
 
     std::cout << "[main] Build/break the world. WASD + mouse to fly, Space/Shift up/down,\n"
-                 "[main] left mouse = break, right mouse = place, 1-9 = material, F = cursor, ESC quits.\n";
+                 "[main] hold left mouse = break (harder voxels take longer), right mouse = place,\n"
+                 "[main] 1-9 = material, F = cursor, ESC quits.\n";
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -347,8 +356,21 @@ layers:
         bool curLeft  = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS);
         bool curRight = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
 
-        if (hit.hit && curLeft && !prevLeft) {
-            editVoxel(hit.voxel, Voxel::empty());  // break
+        // Break: holding left mouse on a voxel accrues removal work scaled by the
+        // tool power; the voxel clears only when accrued work meets its
+        // hardness-derived threshold (RemovalModel). Switching targets or
+        // releasing resets progress; an indestructible (hardness < 0) voxel never
+        // clears. Hardness is read off the target voxel's own material — no
+        // block-type branch (ARCHITECTURE §5).
+        if (hit.hit && curLeft) {
+            const Voxel target =
+                world.getVoxel(chunkmath::voxelCenter(hit.voxel, world.voxelSizeM()));
+            if (remover.accrue(hit.voxel, target.material.hardness, kToolPower, dt)) {
+                editVoxel(hit.voxel, Voxel::empty());  // break
+                remover.reset();
+            }
+        } else {
+            remover.reset();
         }
         if (hit.hit && curRight && !prevRight) {
             // Don't place a block into the space the player occupies: the full
@@ -375,7 +397,6 @@ layers:
                 editVoxel(t, placed);
             }
         }
-        prevLeft  = curLeft;
         prevRight = curRight;
 
         // Resize.

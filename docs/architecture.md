@@ -159,7 +159,7 @@ Therefore **a composite layer's occupancy must be a conservative superset of its
 
 ## 5. Material Property System
 
-**Files:** `include/plugin_api.h` (the `MaterialProperties` struct), `src/world/Voxel.h`, `src/simulation/RemovalModel.{h,cpp}` (the first property consumer; M8). The structural `PhysicsSystem`/`PropagationSystem` consumers arrive in M11.
+**Files:** `include/plugin_api.h` (the `MaterialProperties` struct), `src/world/Voxel.h`, `src/simulation/RemovalModel.{h,cpp}` (the first property consumer; M8), `src/simulation/RemovalAccumulator.{h,cpp}` (the transient per-target progress state that drives held-to-mine on top of `RemovalModel`; M8). The structural `PhysicsSystem`/`PropagationSystem` consumers arrive in M11.
 
 ### Design Intent
 
