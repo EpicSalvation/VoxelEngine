@@ -175,7 +175,7 @@ Material properties replace the ID with a data record. Simulation systems query 
 | `structural_strength` | `float` | Resistance to collapse; queried by `PropagationSystem` |
 | `thermal_conductivity` | `float` | W/(m·K); drives heat transfer and fire spread |
 | `porosity` | `float` | 0.0–1.0; fraction of volume permeable to fluid |
-| `hardness` | `float` | Relative mining resistance; not mapped to any real-world scale |
+| `hardness` | `float` | Relative resistance to removal/destruction; not mapped to any real-world scale |
 | `palette_index` | `uint8_t` | Index into the 256-entry visual palette; used for `.vox` compatibility |
 
 ### Palette Index and Editor Compatibility
@@ -412,7 +412,7 @@ If a plugin adds non-standard voxel data but does not register an exporter, the 
 
 Dirty tracking is at **chunk granularity within a composite voxel**, not per-voxel. A chunk is a fixed-size subvolume of a layer (size is a tunable constant, default TBD). When any voxel in a chunk is modified, the chunk is marked dirty and scheduled for persistence.
 
-Per-voxel dirty tracking was rejected because a single mining session could mark millions of individual voxels dirty, producing save file write amplification that makes autosave impractical.
+Per-voxel dirty tracking was rejected because a single large edit (removing many voxels at once) could mark millions of individual voxels dirty, producing save file write amplification that makes autosave impractical.
 
 ### What Gets Persisted
 

@@ -15,15 +15,15 @@
 //
 // Simulation systems query these values and respond to them; they never check
 // a block type ID. A new material (stone, ice, volcanic rock) is defined by
-// filling this struct — no changes to PhysicsSystem, fluid system, or mining
-// system are required.
+// filling this struct — no changes to PhysicsSystem, fluid system, or
+// voxel-removal system are required.
 // ---------------------------------------------------------------------------
 struct MaterialProperties {
     float   density              = 0.0f;  // kg/m³; drives physics mass and load
     float   structural_strength  = 0.0f;  // collapse resistance; queried by PropagationSystem
     float   thermal_conductivity = 0.0f;  // W/(m·K); drives heat and fire spread
     float   porosity             = 0.0f;  // 0.0–1.0; fraction permeable to fluid
-    float   hardness             = 0.0f;  // relative mining resistance
+    float   hardness             = 0.0f;  // relative resistance to removal/destruction
     uint8_t palette_index        = 0;     // index into the 256-entry visual palette (.vox compat)
 };
 

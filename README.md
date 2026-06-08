@@ -127,10 +127,10 @@ Voxels do not have a hardcoded "block type ID." Instead, each voxel carries a se
 | `structural_strength` | Resistance to collapse under load |
 | `thermal_conductivity` | Heat transfer rate; relevant for fire/temperature simulation |
 | `porosity` | Fluid permeability |
-| `hardness` | Resistance to mining/destruction |
+| `hardness` | Resistance to removal/destruction |
 | `palette_index` | Maps to a visual material definition (color, texture, PBR params) |
 
-Mods that add new materials define property values rather than special-case code. Physics, fluid, and mining systems respond to properties, not IDs. A new volcanic rock mod does not require changes to lava flow logic — it just declares material properties that the existing fluid system already understands.
+Mods that add new materials define property values rather than special-case code. Physics, fluid, and voxel-removal systems respond to properties, not IDs. A new volcanic rock mod does not require changes to lava flow logic — it just declares material properties that the existing fluid system already understands.
 
 For voxel-editor compatibility, the `palette_index` field maps to a standard 256-entry palette, allowing `.vox` import/export for the visual material layer even when extended properties are in use.
 
@@ -549,11 +549,44 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 > Phase 2 milestones are placeholders. Each will have a dedicated design task to produce a detailed plan before implementation begins. Order and scope are subject to revision after Phase 1 is complete.
 
 **M8 — Material Property System**
-- [ ] Design task: finalize material property schema and physics integration contracts
-- [x] Full material property struct on voxels
-- [x] Material definitions registered via plugin API
-- [ ] Simulation systems (mining resistance, etc.) driven by properties rather than IDs
-- [ ] **Demo — Material matters:** mine and interact with several materials whose differing `hardness`, `density`, and `structural_strength` produce visibly different behavior, all driven by plugin-registered property values rather than block IDs
+
+> M8 is the first Phase 2 milestone and the first to make a **simulation system read
+> material properties and respond to their values** instead of to a block-type
+> identity. The property struct (`MaterialProperties`) and its plugin registration
+> path already exist and have since M1/M4 — every voxel carries `density`,
+> `structural_strength`, `thermal_conductivity`, `porosity`, `hardness`, and
+> `palette_index` by value, and five plugins register materials with real values.
+> What is missing is any *consumer*: through M7b a voxel breaks instantly on a single
+> click (`editVoxel(hit, Voxel::empty())`), ignoring `hardness` entirely, and the
+> `src/simulation/` subsystem named in the project structure and ARCHITECTURE §5
+> does not yet exist on disk. M8 creates that subsystem and uses **voxel-removal cost**
+> as the worked example — the effort to remove a voxel is a pure function of its
+> `hardness`, so a hard material and a soft one behave visibly differently with no
+> block-type branching anywhere. Structural-strength collapse (M11) and
+> thermal/porosity-driven flow (M12) are deliberately out of scope; M8 establishes
+> the property-driven *pattern* those milestones follow.
+
+*Design — the schema is fixed; the consumption contract is not*
+- [ ] Design task: confirm `MaterialProperties` is complete for Phase 2 consumers, then write down the property→behavior contracts in ARCHITECTURE §5 — specifically the voxel-removal-cost function (how `hardness` maps to removal effort, the role of an optional tool `power`, and the instant-removal boundary at `hardness == 0`) and the general rule that a simulation system reads the voxel's own properties and never a material id
+
+*Material property foundation (verified complete)*
+- [x] Full material property struct on voxels — `MaterialProperties` (`include/plugin_api.h`) carries all six fields and is stored by value on `Voxel` (`src/world/Voxel.h`); copied into voxels at generation/import time (architecture §5)
+- [x] Material definitions registered via plugin API — `register_material` records owner-tracked `RegisteredMaterial` entries in `PluginManager`; `base-terrain`, `water`, `hazards`, `arena`, and `layered-world` register materials with real property values; duplicate-id overwrite warns and per-plugin unload tears the entries down (M4 tests)
+
+*Material registry lookup (cleanup — not on the simulation path)*
+- [ ] **(cleanup)** Add a queryable lookup to `PluginManager`: `material(material_id)` and `materialForPalette(uint8_t)` returning the registered `MaterialProperties` (or a documented neutral default), centralizing the keyed search that consumers currently hand-roll. Simulation reads properties off the voxel by value (architecture §5), so this serves tooling/import/UI, not the removal path
+- [ ] **(review old work)** Audit the existing registry consumers and move them onto the new lookup, accommodating any refinement it introduces: the hand-rolled 256-entry `palette_index → MaterialProperties` table in `VoxImporter::load` (`src/io/VoxImporter.cpp`), the positional `materials()[selectedMaterial]` build-selection in demos `04`/`07`, and the `find_if` scans in `PluginManagerTest` — confirming each behaves identically (or better) afterward
+
+*Voxel-removal cost — the worked property-driven system*
+- [ ] `src/simulation/RemovalModel.{h,cpp}` (first file under `src/simulation/`): a pure, deterministic function mapping target `hardness` (and an optional tool `power`) to the work/time required to remove a voxel — `hardness <= 0` removes instantly; no block-type id, no plugin or renderer dependency, unit-testable in isolation
+- [ ] Per-target removal accumulator in the build/break tool path: holding the remove action on a voxel accrues progress scaled by `RemovalModel`; the voxel is cleared to `Voxel::empty()` (firing `on_voxel_modified` as today) only when accumulated work reaches the hardness-derived threshold, and progress resets when the targeted voxel changes. This is transient tool state — not persisted, dirty tracking stays chunk-granular
+- [ ] Removal-progress feedback through the existing highlight path: `BgfxRenderer::drawVoxelHighlight` reflects accumulated progress (crack stages / color ramp) plus a HUD readout of the target's `hardness`/`density`, so the player can see a harder material visibly take longer to clear
+
+*Tests*
+- [ ] `tests/RemovalModelTest.cpp`: removal effort is strictly increasing in `hardness`; `hardness == 0` clears in one step; identical inputs are deterministic; two voxels differing only in `hardness` require measurably different work (property-driven, not id-driven)
+- [ ] Material-registry lookup returns the registered properties for a known id/palette and the documented default for an unknown one, and stays correct across a plugin unload (`tests/MaterialRegistryTest.cpp` or an addition to `PluginManagerTest`)
+
+- [ ] **Demo — Material matters:** `08-material-matters` — a world (or extended `04` layer) seeded with several materials of deliberately different `hardness` (and visibly different `density`/`structural_strength` shown in a HUD readout); removing each takes visibly different effort with a progress/crack indicator, all driven by the registered property values with no block-type branching anywhere in the removal path
 
 **M9 — Composition Recipes and Feature Generators**
 - [ ] Design task: recipe schema, feature generator interface, hierarchical seed parameter passing
