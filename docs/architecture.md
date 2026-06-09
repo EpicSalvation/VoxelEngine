@@ -209,10 +209,26 @@ A simulation system reads the **target voxel's own `MaterialProperties`** and re
 
 A composition recipe is a data record attached to a composite voxel type. It contains:
 
-- **Material distribution spec** — a list of `(material_id, weight)` pairs plus a noise function ID and parameters controlling spatial arrangement
+- **Material distribution spec** — a list of `(material_id, weight)` pairs plus a noise function ID and parameters controlling spatial arrangement (see *Noise Functions* below)
 - **Feature generator list** — ordered list of `(feature_generator_id, parameters)` entries applied after material distribution
-- **Boundary overrides** — separate material distribution specs for the top, bottom, and side faces of the macro-voxel
-- **Seed parameters** — arbitrary key-value pairs passed to child recipes as generation constraints
+- **Boundary overrides** — optional per-face material-distribution specs for the macro-voxel's top, bottom, and side faces (see *Boundary Overrides* below)
+- **Seed parameters** — arbitrary key-value pairs that bias the generation of the layer below (see *Hierarchical Constraints* below)
+
+### Noise Functions
+
+Noise is a **general engine facility, not a decomposition-private detail.** The material-distribution sampler is its first consumer, but the same noise is available to any world-generation code.
+
+A noise function is a pure, deterministic scalar field sampled at a world-space position. It is seeded by a `uint64_t` derived from `(world_seed, macro VoxelCoord)` and threaded through unchanged (no `rand`/`time`/global state). Sampling at the **world** position — not a macro-local one — makes adjacent macro voxels' child grids seamless by construction, the same property the streaming heightmap relies on.
+
+Noise is selected **by id**, with a built-in floor and full plugin override, mirroring the built-in `.vox` import/export handlers (§10):
+
+- The engine registers a standard set (`value`, `fbm`, `ridged`, `worley`, …) at startup as **built-in** entries (engine-owned, never torn down by a plugin unload). Implementations live in `src/world/Noise.{h,cpp}` — the engine's first in-`src` noise.
+- A plugin registers its own via `register_noise(noise_id, fn)`, owner-tracked and torn down on unload like every other registry (§8). A plugin registration that collides with a built-in id **overrides** it (the same dispatch rule as importers), so a game can replace `value` wholesale or add a wholly novel `my_warped_simplex`. The built-ins are a floor, not a ceiling — a non-block game can ignore them entirely.
+- A recipe references noise by id; a recipe naming an unregistered noise id (built-in or plugin) is a **startup error, not a silent skip** — the same validation rule as feature generators.
+
+**Reuse across the plugin ABI boundary.** Engine subsystems and in-tree demos call the functions in `src/world/Noise.h` directly (in-tree consumers may reach into `src/`, §12). Out-of-tree plugins, which link zero engine symbols (§12), participate two ways: they **provide** noise through `register_noise`, and they will be able to **consume** built-in/registered noise through a `resolve_noise(ctx, noise_id) -> NoiseFn` accessor on `PluginContext` — the §12 "add a function pointer when a consumer needs it" move, deferred until the first non-recipe consumer (tracked under M13). The deterministic seed helper itself is inline in `plugin_api.h`, so it is usable everywhere with no resolver.
+
+Noise-id → `NoiseFn` resolution happens at decomposition **job-build time on the main thread**; the resolved pointer is baked into the `DecompositionJob` so `DecompositionWorker` never consults `PluginManager` (§13 boundary).
 
 ### Feature Generators
 
@@ -225,9 +241,19 @@ Feature generators are plugins that receive a partially-filled child grid and a 
 
 Feature generators are identified by string name. Recipes reference them by name. If a recipe references a feature generator whose plugin is not loaded, it is a startup error (not a silent skip).
 
+### Boundary Overrides
+
+A recipe may attach an optional material-distribution spec to each of three faces of the macro voxel — `top`, `bottom`, and `side` (the four lateral faces share the single `side` spec). Each override carries a **depth** (default `1`) giving how many child-voxel layers inward from that face it replaces, so a multi-voxel feature such as a topsoil cap over a stone interior is expressible, not just a one-voxel skin.
+
+Overrides paint the macro voxel's **geometric** outer faces — the boundary slabs of its own child grid — **not** neighbor-exposed faces: the decomposition worker stays a pure function of the single macro voxel's inputs and never samples neighboring macro-voxel occupancy (§13). Exposure-aware boundaries (painting only faces that actually meet empty space) are a deferred refinement. Where face slabs overlap at edges and corners they are applied over the interior in the fixed order `bottom` → `side` → `top` (top wins), so a top cap reads cleanly across the rim; the order is fixed and therefore deterministic.
+
 ### Hierarchical Constraints
 
-A recipe can include `seed_parameters` that are passed to child composite voxels' recipes as generation inputs. This allows a 10km "mountain range" recipe to constrain its constituent 1km "peak" recipes — e.g. "generate peaks biased toward granite, with no water table above 800m" — without either recipe needing to know about the other's implementation.
+A recipe's `seed_parameters` bias the generation of the layer below it. At decomposition time they are **merged into the effective parameter set** handed to the distribution sampler and to each feature generator — the same `RecipeParam` array those generators already read — so a generator reads e.g. `cave_density` without caring whether the value came from its own per-entry params or was inherited from above. **Per-entry params take precedence** over inherited `seed_parameters` on a key collision, so a feature overlay can always pin a value the parent leaves free.
+
+Inherited `seed_parameters` are an input **carried on the `DecompositionJob`**. For M9 (single-step decomposition) the source is the decomposing layer's own recipe `seed_parameters`; this is the demo's lever — toggling one value re-runs the job and visibly changes the child grid while each value regenerates identically. Persisting inherited parameters **on the produced child macro voxels**, so a deeper layer's later decomposition sees its grandparent's constraints, is the cross-step cascade and belongs to M10 — this is the handoff seam between the two milestones.
+
+This is what lets a 10km "mountain range" recipe constrain its constituent 1km "peak" recipes — e.g. "generate peaks biased toward granite, with no water table above 800m" — without either recipe needing to know about the other's implementation.
 
 ---
 
