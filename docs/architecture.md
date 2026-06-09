@@ -165,7 +165,7 @@ Through M9 the approach-trigger / `drain` / insert / evict loop lived in each de
 
 ## 5. Material Property System
 
-**Files:** `include/plugin_api.h` (the `MaterialProperties` struct), `src/world/Voxel.h`, `src/simulation/RemovalModel.{h,cpp}` (the first property consumer; M8), `src/simulation/RemovalAccumulator.{h,cpp}` (the transient per-target progress state that drives held-to-mine on top of `RemovalModel`; M8). The structural `PhysicsSystem`/`PropagationSystem` consumers arrive in M11.
+**Files:** `include/plugin_api.h` (the `MaterialProperties` struct), `src/world/Voxel.h`, `src/simulation/RemovalModel.{h,cpp}` (the first property consumer; M8), `src/simulation/RemovalAccumulator.{h,cpp}` (the transient per-target progress state that drives held-to-mine on top of `RemovalModel`; M8). The structural `PhysicsSystem`/`PropagationSystem` consumers arrive in M13.
 
 ### Design Intent
 
@@ -203,7 +203,7 @@ A simulation system reads the **target voxel's own `MaterialProperties`** and re
 
 `RemovalModel` is pure and stateless (no `rand`/`time`/global state) and depends only on `MaterialProperties` — not on `World`, the renderer, or `PluginManager` — so it is unit-testable in isolation. The **outcome** (removed or not) is fully deterministic; only the wall-clock *time* to reach it depends on frame rate and how long the player holds the action, and that timing never touches saved world state (a voxel is binary: present or `empty()`). The per-target progress accumulator is **transient tool state**, held in the tool/demo path and never persisted; dirty tracking stays chunk-granular (§9). `on_voxel_modified` fires exactly once, at the moment the voxel is cleared.
 
-`structural_strength` (M11 collapse) and `thermal_conductivity`/`porosity` (M12 fluid and heat) are future consumers that follow this same contract: read the property off the voxel, respond to the value, stay off the material-id path.
+`structural_strength` (M13 collapse) and `thermal_conductivity`/`porosity` (M14 fluid and heat) are future consumers that follow this same contract: read the property off the voxel, respond to the value, stay off the material-id path.
 
 ---
 
@@ -232,7 +232,7 @@ Noise is selected **by id**, with a built-in floor and full plugin override, mir
 - A plugin registers its own via `register_noise(noise_id, fn)`, owner-tracked and torn down on unload like every other registry (§8). A plugin registration that collides with a built-in id **overrides** it (the same dispatch rule as importers), so a game can replace `value` wholesale or add a wholly novel `my_warped_simplex`. The built-ins are a floor, not a ceiling — a non-block game can ignore them entirely.
 - A recipe references noise by id; a recipe naming an unregistered noise id (built-in or plugin) is a **startup error, not a silent skip** — the same validation rule as feature generators.
 
-**Reuse across the plugin ABI boundary.** Engine subsystems and in-tree demos call the functions in `src/world/Noise.h` directly (in-tree consumers may reach into `src/`, §12). Out-of-tree plugins, which link zero engine symbols (§12), participate two ways: they **provide** noise through `register_noise`, and they will be able to **consume** built-in/registered noise through a `resolve_noise(ctx, noise_id) -> NoiseFn` accessor on `PluginContext` — the §12 "add a function pointer when a consumer needs it" move, deferred until the first non-recipe consumer (tracked under M13). The deterministic seed helper itself is inline in `plugin_api.h`, so it is usable everywhere with no resolver.
+**Reuse across the plugin ABI boundary.** Engine subsystems and in-tree demos call the functions in `src/world/Noise.h` directly (in-tree consumers may reach into `src/`, §12). Out-of-tree plugins, which link zero engine symbols (§12), participate two ways: they **provide** noise through `register_noise`, and they will be able to **consume** built-in/registered noise through a `resolve_noise(ctx, noise_id) -> NoiseFn` accessor on `PluginContext` — the §12 "add a function pointer when a consumer needs it" move, deferred until the first non-recipe consumer (tracked under M15). The deterministic seed helper itself is inline in `plugin_api.h`, so it is usable everywhere with no resolver.
 
 Noise-id → `NoiseFn` resolution happens at decomposition **job-build time on the main thread**; the resolved pointer is baked into the `DecompositionJob` so `DecompositionWorker` never consults `PluginManager` (§13 boundary).
 

@@ -16,7 +16,7 @@
 // built-in floor at startup (PluginManager::registerBuiltinNoise, owner-tracked
 // so a plugin unload never tears them down); a plugin register_noise of the same
 // id OVERRIDES a built-in (the importer dispatch rule). In-tree consumers call
-// these directly; the plugin-consume accessor (resolve_noise) is deferred to M13.
+// these directly; the plugin-consume accessor (resolve_noise) is deferred to M15.
 //
 // Each function matches plugin_api.h's NoiseFn so the same pointer serves both
 // in-tree callers and the noise registry. Common params (read via

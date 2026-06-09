@@ -450,7 +450,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 **M5 — Player Interaction**
 
-> Player interaction turns the read-only streaming world (M3/M4) into a writable one. The foundation it adds is the first **world-space single-voxel accessor** on the chunked `World` — until now the chunked path addressed voxels only by per-chunk local index or by whole-chunk load/unload, with no way to read or write the voxel at an arbitrary `WorldCoord`. Picking, editing, and collision all build on that accessor. M5 is also the first milestone to **fire the `on_voxel_modified` hook** (registered in M4, dormant until now) and the first to **write game state to disk**. Collision here is deliberately lightweight kinematic terminal-voxel AABB resolution — the material-property-driven `PhysicsSystem` (structural load, collapse, propagation) is M11, not this.
+> Player interaction turns the read-only streaming world (M3/M4) into a writable one. The foundation it adds is the first **world-space single-voxel accessor** on the chunked `World` — until now the chunked path addressed voxels only by per-chunk local index or by whole-chunk load/unload, with no way to read or write the voxel at an arbitrary `WorldCoord`. Picking, editing, and collision all build on that accessor. M5 is also the first milestone to **fire the `on_voxel_modified` hook** (registered in M4, dormant until now) and the first to **write game state to disk**. Collision here is deliberately lightweight kinematic terminal-voxel AABB resolution — the material-property-driven `PhysicsSystem` (structural load, collapse, propagation) is M13, not this.
 
 *World-space voxel access — the shared foundation*
 - [x] Global voxel-coordinate math in `ChunkCoordMath.h`: a 64-bit `VoxelCoord` plus `worldToVoxel`, `voxelOrigin`/`voxelCenter`, and `voxelToChunkLocal`/`chunkLocalToVoxel` conversions between `WorldCoord`, a global integer voxel coordinate, and `(ChunkCoord, local x/y/z)`; double-only and `floor`-based to match `worldToChunk` (correct on the negative side of the origin), covered by `tests/WorldVoxelAccessTest.cpp`
@@ -599,8 +599,8 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 > does not yet exist on disk. M8 creates that subsystem and uses **voxel-removal cost**
 > as the worked example — the effort to remove a voxel is a pure function of its
 > `hardness`, so a hard material and a soft one behave visibly differently with no
-> block-type branching anywhere. Structural-strength collapse (M11) and
-> thermal/porosity-driven flow (M12) are deliberately out of scope; M8 establishes
+> block-type branching anywhere. Structural-strength collapse (M13) and
+> thermal/porosity-driven flow (M14) are deliberately out of scope; M8 establishes
 > the property-driven *pattern* those milestones follow.
 
 *Design — the schema is fixed; the consumption contract is not*
@@ -645,7 +645,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 > picking** path deferred in M6 (interacting with an undecomposed macro voxel runs
 > its recipe). Scope boundaries: decomposition stays **single-step** (the deep N-layer
 > cascade and cache-eviction policy are M10), and no structural/aggregate behavior is
-> added (that is M11). Determinism is non-negotiable — the recipe is a pure function
+> added (that is M13). Determinism is non-negotiable — the recipe is a pure function
 > of `(world_seed, macro VoxelCoord)` per ARCHITECTURE §4, so evicted recipe-built
 > chunks regenerate identically.
 
@@ -655,7 +655,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 *Recipe schema and registry*
 - [x] Flat `RecipeDesc` (public, `plugin_api.h`) + internal `Recipe` value type (`src/world/Recipe.h`): plugins build a POD `RecipeDesc` (pointers + counts — material-distribution spec, ordered feature-overlay list with per-entry params, top/bottom/side boundary overrides with per-face `depth`, and a `seed_parameters` array of tagged `RecipeParam`), so no std:: type crosses the plugin ABI; the engine deep-copies it into the owning `Recipe` (`std::string`/`std::vector`, no plugin/renderer/IO dependency) at registration, so the plugin's arrays need not outlive the call. Material/feature/noise ids stay as strings on `Recipe`; they resolve to `MaterialProperties`/`FeatureGeneratorFn`/`NoiseFn` only when a decomposition job is built on the main thread, so `DecompositionWorker` consumes a resolved job rather than `Recipe` or `PluginManager` directly *(`src/world/Recipe.h`: owning `Recipe` (+`DistributionValue`/`FeatureRefValue`/`BoundaryValue`/`RecipeParamValue`) with header-only `Recipe::fromDesc` deep-copying the flat `RecipeDesc`; null id/text pointers become empty strings; depends only on `plugin_api.h` + the standard library)*
 - [x] `register_recipe(layer_name, const RecipeDesc*)` plugin hook in `plugin_api.h`, the deep-copied `Recipe` stored in an owner-tracked `RecipeRegistry` on `PluginManager` (lookup by composite layer name, neutral/default when unregistered), torn down on per-plugin unload exactly like the material/feature registries (the M4 ownership pattern) *(`PluginManager::recipes_` of `RegisteredRecipe{layer_name, Recipe, owner}`; the `register_recipe` lambda deep-copies and overwrites-by-layer-name with a warning; `findRecipe(name)` returns a `const Recipe*` (null ⇒ synthesized default at job-build); `eraseOwned` teardown added to all three unload/failed-init paths)*
-- [x] Noise as a general engine facility (ARCHITECTURE §6): `NoiseFn` + `register_noise(noise_id, fn)` in `plugin_api.h`, an owner-tracked noise registry on `PluginManager` mirroring the built-in `.vox` handlers — `Engine::init()` registers a built-in set (`value`/`fbm`/`ridged`/`worley`, implemented in new `src/world/Noise.{h,cpp}`, the engine's first in-`src` noise) as built-ins; a plugin `register_noise` of the same id overrides a built-in (the importer dispatch rule) and plugin entries tear down on unload. The recipe distribution sampler is the first consumer; in-tree code calls `Noise.h` directly, while the plugin-consume accessor (`resolve_noise`) is deferred to M13 *(`src/world/Noise.{h,cpp}`: trilinear 3D value-noise base seeded by the threaded `uint64_t`, with `fbm`/`ridged` octave stacks and cellular `worley`, all returning `[0,1)`; `PluginManager::registerBuiltinNoise()` (called by `Engine::init`) installs the floor at `kBuiltinOwnerId`; `resolveNoise(id)` prefers a plugin entry over a built-in of the same id)*
+- [x] Noise as a general engine facility (ARCHITECTURE §6): `NoiseFn` + `register_noise(noise_id, fn)` in `plugin_api.h`, an owner-tracked noise registry on `PluginManager` mirroring the built-in `.vox` handlers — `Engine::init()` registers a built-in set (`value`/`fbm`/`ridged`/`worley`, implemented in new `src/world/Noise.{h,cpp}`, the engine's first in-`src` noise) as built-ins; a plugin `register_noise` of the same id overrides a built-in (the importer dispatch rule) and plugin entries tear down on unload. The recipe distribution sampler is the first consumer; in-tree code calls `Noise.h` directly, while the plugin-consume accessor (`resolve_noise`) is deferred to M15 *(`src/world/Noise.{h,cpp}`: trilinear 3D value-noise base seeded by the threaded `uint64_t`, with `fbm`/`ridged` octave stacks and cellular `worley`, all returning `[0,1)`; `PluginManager::registerBuiltinNoise()` (called by `Engine::init`) installs the floor at `kBuiltinOwnerId`; `resolveNoise(id)` prefers a plugin entry over a built-in of the same id)*
 - [x] Recipe validation folded into startup validation: every `composite` layer resolves to a recipe (explicit or synthesized default); a recipe that names a `feature_generator_id` or `noise_id` with no registered generator is a **startup error, not a silent skip** (ARCHITECTURE §6); material ids/palette entries referenced by a distribution resolve through the M8 `PluginManager::material`/`materialForPalette` lookup, falling back to the documented neutral default *(`validateRecipes(LayerConfig, PluginManager)` in `src/core/RecipeValidation.{h,cpp}`, run after plugins load: walks every `composite` layer, skips those with no explicit recipe (default), and throws `std::runtime_error` on the first feature/noise id that fails to resolve; material ids are intentionally not checked — fail-soft via the M8 lookup)*
 
 *Recipe-driven decomposition*
@@ -710,15 +710,15 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 > position/material — pure in `(world_seed, coords, recipes)`, so eviction stays
 > transparent. Scope boundaries: streaming
 > stays per-layer on the existing `LODManager` footprint (the camera-relative,
-> axis-agnostic streaming *volume* is M13); no structural/aggregate behavior is
-> added (M11). Determinism remains non-negotiable — every level is a pure function
+> axis-agnostic streaming *volume* is M15); no structural/aggregate behavior is
+> added (M13). Determinism remains non-negotiable — every level is a pure function
 > of `(world_seed, macro VoxelCoord)`, now transitively down the chain.
 
 *Design — the cascade orchestrator and the eviction policy*
 - [x] Design task — decisions pinned (recorded in ARCHITECTURE §4/§6/§11; no `plugin_api.h` change, the `RecipeParam`/`resolveRecipe` machinery already covers it): (a) **cascade orchestration home** — lift the approach-trigger/`drain`/insert/evict loop out of the demo main loops into a reusable engine-owned `src/world/DecompositionManager.{h,cpp}` owning a `layer_name → DecompositionState` map (replacing today's single demo-owned state) and driving the chain through `World::childLayer`/`DecompositionWorker`; **`LODManager` moves out of `src/renderer/` to a neutral tier** (it is pure headless set/budget math) so the manager depends only on that math and the §13 "world/decomposition tier must not depend on Renderer" rule stays compiler-enforced rather than relaxed; (b) **eviction policy and memory budget** — start simple: a **per-layer resident-chunk cap** (new `LayerDef` field beside `view_distance_chunks`) with **farthest-first** eviction (reuses `LODManager` distance, no per-chunk timestamps, deterministic); a global estimated-byte budget is deferred as an optional outer backstop layered on later; dirty chunks are saved through the M4/M7b `ChunkPersistence`/`WorldSave` path before their in-RAM drop, never silently discarded; (c) **cross-step seed-parameter cascade — per-voxel, recomputed, not stored**: `Voxel` stays a POD; a decomposing macro voxel's inherited param set is reconstructed at job-build by walking its ancestor coordinate+recipe chain — the merge of the ancestor recipes' `seed_parameters` (root→parent) plus engine-reserved, `__`-namespaced positional/material params describing the voxel itself (at least `__altitude`/world-pos and `__parent_material`); precedence weakest→strongest is root ancestor → … → immediate parent → this recipe's own `seed_parameters` → per-entry params (extends M9's "per-entry wins"); position-dependence is opt-in (a recipe ignoring the reserved keys behaves identically everywhere); flagged a perf-revisit candidate (recompute is cheap, swap toward per-layer or add caching if it bites); (d) **transitive determinism + occupancy** — every level pure in `(world_seed, macro VoxelCoord)`, and the §4 "coarse occupancy must superset fine occupancy" invariant now holds across *every* hop; for a recipe-driven (non-shared-field) stack this is geometrically automatic (a child grid is confined to a present parent's subvolume) but **not statically checkable**, so it becomes a documented authoring contract plus an optional debug-only runtime assert. Cross-run decomposition-state disk persistence is **deferred** — re-decomposition on load is correct by determinism (ARCHITECTURE §11 softened accordingly)
 
 *Cascade orchestration — the full N-layer chain*
-- [ ] **Relocate `LODManager`** out of `src/renderer/` to a neutral tier (it is already pure headless set/budget math — no GPU, no bgfx), updating the renderer's includes and the §13 dependency map to list it as a streaming-policy component. This lets the world-tier `DecompositionManager` depend on it without a world→renderer edge, and decouples the in-memory working set from the draw set (a prerequisite a neutral residency facility gives M11/M13 and any headless front-end)
+- [ ] **Relocate `LODManager`** out of `src/renderer/` to a neutral tier (it is already pure headless set/budget math — no GPU, no bgfx), updating the renderer's includes and the §13 dependency map to list it as a streaming-policy component. This lets the world-tier `DecompositionManager` depend on it without a world→renderer edge, and decouples the in-memory working set from the draw set (a prerequisite a neutral residency facility gives M13/M15 and any headless front-end)
 - [ ] `DecompositionManager` (engine-owned, `src/world/`) replacing the per-demo loop: holds a `DecompositionState` per composite layer (a `layer_name → DecompositionState` map), and each tick (1) enqueues the undecomposed macro voxels within that layer's approach radius whose parent is already decomposed and resident, (2) drains `DecompositionWorker` results into the child layer's `ChunkStore` and marks them decomposed, and (3) runs the budgeted eviction pass — the same operations demos 05/07/09 hand-roll, now written once. The manager owns no GPU meshes (§13); it returns a per-tick resident/evicted diff per layer (mirroring `drain`) the front-end consumes to sync its meshes
 - [ ] **Composite child grids:** when a decomposed layer's `decompose_to` target is *itself composite*, the produced child grid is a grid of **atomic macro voxels** (composite records carrying their own surface material), not terminal voxels — ARCHITECTURE §4 step 5. Those children render as solid blocks and do not decompose until their own approach trigger fires, so the chain resolves level-by-level. The recipe distribution/boundary path (M9) fills a composite child grid exactly as it fills a terminal one; the difference is purely that the result feeds another `DecompositionState`, not the renderer's terminal mesher
 - [ ] Full N-step descent working end to end: approaching the coarsest composite decomposes it into the next layer, approaching one of *those* decomposes it again, down to the terminal grid — a terminal voxel deep in the chain becomes resident only after its entire ancestor chain has decomposed, each step still the single-step pure pass M6/M9 proved (no step generates more than `(ratio)³` children). Picking (composite-pick from M9) and approach both drive any level of the chain, not only the top
@@ -744,20 +744,34 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 - [ ] **Demo — Drill to the core:** `10-drill-to-the-core` — a four-layer composite chain (`continental → regional → local → terrain`) on the engine-owned `DecompositionManager`. Fly toward a continental block to decompose it into regional blocks, approach one of those for the local blocks, and again for the fine terminal grid — drilling level by level, each level popping in async. A HUD shows the per-layer resident-chunk counts against their budgets; fly away and the region cascade-evicts back to a single coarse block, then revisit to confirm it regenerates **identically** (a clean-cache round-trip), while a deep edit you made persists across the same round-trip. A top-level seed parameter visibly biases what the leaves generate all the way down the chain. Controls + run lines added to the Setup section when the demo lands
 
-**M11 — Physics and Upward Damage Propagation**
+**M11 — Networking and Multiplayer**
+- [ ] Design task: authority model (authoritative server vs. peer-to-peer), sync strategy (replicate the `LayerConfig` + world seed, dirty chunks, and player edits — never generated chunks, since decomposition determinism re-derives them), per-layer interest management, and the plugin-API surface for networked events
+- [ ] Client/server session and world join: reconcile the deterministic base world from a shared seed so only dirty chunks and player edits travel the wire
+- [ ] Voxel edits and `on_voxel_modified` events replicated across clients, scoped to each player's streaming set
+- [ ] Decomposition triggers and macro-voxel state kept consistent across clients (re-derived from the shared seed rather than re-sent)
+- [ ] **Demo — Shared world:** two clients connect to one authoritative world, build/break and decompose in the same region, and watch each other's edits and decompositions stream in live with only edits and dirty chunks crossing the wire
+
+**M12 — Audio**
+- [ ] Design task: spatial-audio backend, positional/attenuation model in `WorldCoord` space under the floating origin, material-driven sound selection, and the plugin-API surface for registering sounds and emitters
+- [ ] 3D positional playback with distance attenuation: sources placed in world space and mixed relative to the floating-origin listener (the camera/player)
+- [ ] Material-driven sound: footstep, break, and place sounds selected from the targeted voxel's material properties rather than hardcoded, registered by plugins
+- [ ] Audio event hooks: plugins register sounds and trigger them from existing engine events (voxel modified, chunk decomposed, and collapse/flow once those land)
+- [ ] **Demo — Soundscape:** walk and build through a world where footsteps, breaking, and placing voxels play material-appropriate positional sounds over an ambient bed that pans correctly as the listener moves
+
+**M13 — Physics and Upward Damage Propagation**
 - [ ] Design task: propagation algorithm, performance budget, immutable boundary behavior
 - [ ] Structural strength aggregation from child voxels to parent composite
 - [ ] Collapse events firing and cascading correctly
 - [ ] Propagation confirmed to stop at immutable layer boundaries
 - [ ] **Demo — Structural collapse:** hollow out a composite structure until its aggregated structural strength fails, triggering a collapse that cascades to neighbors and visibly stops at an immutable layer boundary
 
-**M12 — Fluid and Thermal Simulation**
+**M14 — Fluid and Thermal Simulation**
 - [ ] Design task: fluid and heat transfer algorithms, interaction with porosity and thermal conductivity properties
 - [ ] Fluid flow driven by `porosity` material property
 - [ ] Heat transfer driven by `thermal_conductivity` material property
 - [ ] **Demo — Flow and heat:** release a fluid that flows through porous materials and is blocked by low-`porosity` ones, plus a heat source that spreads at rates set by each material's `thermal_conductivity`
 
-**M13 — Engine Generality (Beyond the Block Game)**
+**M15 — Engine Generality (Beyond the Block Game)**
 
 > Phase 1 proved the MVP, but several implementation choices made along the way
 > quietly assume a single-scale, gravity-down, heightmap *block game* — and each
@@ -766,7 +780,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 > `LODManager`'s vertical streaming band is an **absolute** chunk-Y range, not a
 > camera-relative volume, so a deep-dig world silently bottoms out on empty space
 > the moment the dig leaves the configured band (the M8 material demo did exactly
-> this). M13 is a deliberate generality pass: take the implicit Phase-1 assumptions
+> this). M15 is a deliberate generality pass: take the implicit Phase-1 assumptions
 > and turn them into explicit, configurable engine *policy*, so the non-block-game
 > configurations the architecture already describes actually work. No new
 > simulation systems — this milestone widens what the existing ones are willing to
@@ -781,7 +795,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [ ] **Demo — Beyond blocks:** a deliberately non-Minecraft configuration on the same engine — e.g. a flying game whose only interactive layer is a small box playspace adrift inside a huge immutable backdrop, or a continuous vertical descent that streams with the camera all the way down — demonstrating that with the generalized streaming and axis policy the engine is genuinely multi-purpose, not a block-game with extra layers
 - [ ] **Demo — Asteroid belt miner:** the complementary case to *Beyond blocks* — instead of one privileged "down", *many*. A rocketsuit player jets through a dense field of asteroids in zero ambient gravity; each asteroid is a composite voxel that decomposes on approach (M6) into a minable terminal grid, and exerts its **own radial gravity well** so the player can land on, walk around, and mine the surface of a body from any side — the same kinematic body and removal tool from M5/M8, but with "down" pointing at the nearest asteroid's center rather than a fixed axis. Streaming is a camera-centered 3D box with no vertical bias (asteroids surround the player in every direction), and mined-out resource voxels are driven by the M8 property system (richer ores are `hardness`-costlier). Together the two demos show two different ways to escape the block-game mold: *Beyond blocks* removes the gravity axis entirely, this one makes gravity **local and many-bodied**
 
-**M14 — Polish and Release**
+**M16 — Polish and Release**
 - [ ] Design task: identify gaps between Phase 1 implementation and full architecture spec
 - [ ] ARCHITECTURE.md fully reflects implemented behavior (not just intended behavior)
 - [ ] Example plugin suite covers all major hook types
