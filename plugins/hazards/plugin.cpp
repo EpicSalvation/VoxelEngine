@@ -51,7 +51,9 @@ static const double kLavaPos[][3] = {
     {  85.0, 59.0, 415.0 }, {  86.0, 59.0, 415.0 }, {  85.0, 59.0, 416.0 },
 };
 
-void hazard_pools_feature(WorldCoord origin, double vs, int n, Voxel* inout, void* /*ud*/) {
+void hazard_pools_feature(WorldCoord origin, double vs, int n, Voxel* inout,
+                          const RecipeParam* /*params*/, size_t /*param_count*/,
+                          uint64_t /*seed*/, void* /*ud*/) {
     const double size = vs * static_cast<double>(n);
     MaterialProperties lava{};
     lava.density             = 800.0f;

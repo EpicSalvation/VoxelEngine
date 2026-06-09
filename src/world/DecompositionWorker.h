@@ -11,6 +11,7 @@
 
 #include "Chunk.h"
 #include "ChunkCoordMath.h"
+#include "ResolvedRecipe.h"
 #include "plugin_api.h"  // LayerGeneratorFn
 
 // Async on-demand decomposition (M6, docs/ARCHITECTURE.md §4).
@@ -31,6 +32,20 @@ struct DecompositionJob {
     std::vector<ChunkCoord> childChunks;      // child-layer chunks to generate
     int                     childChunkSize  = 0;
     double                  childVoxelSizeM = 0.0;
+
+    // Recipe-driven path (M9). When `recipe` is set, the worker fills each child
+    // chunk from it (distribution -> boundary overrides -> feature overlays);
+    // `seed` is the deterministic per-decomposition seed from (world_seed, macro
+    // coord), `ratio` is child voxels per macro edge, and `macroChildMin` is the
+    // global child VoxelCoord of the macro voxel's minimum corner.
+    std::shared_ptr<const ResolvedRecipe> recipe;
+    uint64_t                              seed          = 0;
+    int64_t                               ratio         = 0;
+    chunkmath::VoxelCoord                 macroChildMin;
+
+    // Default-recipe path (the M6 behavior, kept byte-for-byte for demos 05/07):
+    // when `recipe` is null the worker runs this child generator over the
+    // subvolume instead.
     LayerGeneratorFn        generator       = nullptr;
     void*                   userData        = nullptr;
 };
@@ -67,6 +82,14 @@ public:
                                                  double voxelSizeM,
                                                  LayerGeneratorFn generator,
                                                  void* userData);
+
+    // Build one child chunk at coord from a resolved recipe (M9). Pure (no shared
+    // state) and deterministic in (recipe, coord, seed); the recipe-driven unit
+    // of work, and used directly by tests. See fillChildChunk in ResolvedRecipe.h.
+    static std::unique_ptr<Chunk> generateChunkFromRecipe(
+        ChunkCoord coord, int chunkSize, double voxelSizeM,
+        const ResolvedRecipe& recipe, chunkmath::VoxelCoord macroChildMin,
+        int64_t ratio, uint64_t seed);
 
 private:
     void workerLoop();

@@ -29,11 +29,14 @@ namespace {
 constexpr int kSeaLevel = 15;
 
 void water_feature_generator(
-    WorldCoord  chunk_origin,
-    double      /*voxel_size_m*/,
-    int         grid_size,
-    Voxel*      inout_voxels,
-    void*       /*user_data*/)
+    WorldCoord         chunk_origin,
+    double             /*voxel_size_m*/,
+    int                grid_size,
+    Voxel*             inout_voxels,
+    const RecipeParam* /*params*/,
+    size_t             /*param_count*/,
+    uint64_t           /*seed*/,
+    void*              /*user_data*/)
 {
     MaterialProperties water;
     water.density              = 1000.0f;

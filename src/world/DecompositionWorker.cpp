@@ -51,6 +51,16 @@ std::unique_ptr<Chunk> DecompositionWorker::generateChunk(ChunkCoord coord,
     return chunk;
 }
 
+std::unique_ptr<Chunk> DecompositionWorker::generateChunkFromRecipe(
+        ChunkCoord coord, int chunkSize, double voxelSizeM,
+        const ResolvedRecipe& recipe, chunkmath::VoxelCoord macroChildMin,
+        int64_t ratio, uint64_t seed) {
+    const WorldCoord origin = chunkmath::chunkOrigin(coord, voxelSizeM, chunkSize);
+    auto chunk = std::make_unique<Chunk>(coord, chunkSize, origin);
+    fillChildChunk(*chunk, voxelSizeM, recipe, macroChildMin, ratio, seed);
+    return chunk;
+}
+
 void DecompositionWorker::workerLoop() {
     for (;;) {
         DecompositionJob job;
@@ -66,9 +76,15 @@ void DecompositionWorker::workerLoop() {
         result.macro = job.macro;
         result.chunks.reserve(job.childChunks.size());
         for (ChunkCoord c : job.childChunks) {
-            result.chunks.push_back(generateChunk(c, job.childChunkSize,
-                                                  job.childVoxelSizeM,
-                                                  job.generator, job.userData));
+            if (job.recipe) {
+                result.chunks.push_back(generateChunkFromRecipe(
+                    c, job.childChunkSize, job.childVoxelSizeM, *job.recipe,
+                    job.macroChildMin, job.ratio, job.seed));
+            } else {
+                result.chunks.push_back(generateChunk(c, job.childChunkSize,
+                                                      job.childVoxelSizeM,
+                                                      job.generator, job.userData));
+            }
         }
 
         {

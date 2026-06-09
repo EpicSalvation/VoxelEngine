@@ -118,7 +118,7 @@ layers:
         for (const auto& f : pluginManager.featureGenerators())
             if (f.fn)
                 f.fn(chunk.origin(), world.voxelSizeM(), world.chunkSizeVoxels(),
-                     chunk.data(), f.user_data);
+                     chunk.data(), nullptr, 0, 0u, f.user_data);
     };
 
     // Drop every resident chunk so the world re-streams from scratch. Called

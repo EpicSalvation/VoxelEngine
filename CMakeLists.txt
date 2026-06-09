@@ -267,6 +267,10 @@ foreach(_demo ${_voxel_demo_dirs})
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_SHOWCASE_PLUGIN_PATH="$<TARGET_FILE:material-showcase>")
     endif()
+    if(TARGET recipe-world)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_RECIPE_PLUGIN_PATH="$<TARGET_FILE:recipe-world>")
+    endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)
     if(EXISTS ${_demo_assets})
@@ -311,6 +315,13 @@ if(TEST_SOURCES)
       VOXEL_FIXTURE_GOOD="$<TARGET_FILE:test-plugin-good>"
       VOXEL_FIXTURE_BADINIT="$<TARGET_FILE:test-plugin-badinit>"
       VOXEL_FIXTURE_NOSYM="$<TARGET_FILE:test-plugin-nosym>")
+  endif()
+  # The M9 recipe tests load the recipe-world plugin to exercise its real
+  # cave/ore feature generators through the registered FeatureGeneratorFn.
+  if(TARGET recipe-world)
+    add_dependencies(voxel-engine-tests recipe-world)
+    target_compile_definitions(voxel-engine-tests PRIVATE
+      VOXEL_RECIPE_PLUGIN_PATH="$<TARGET_FILE:recipe-world>")
   endif()
   add_test(NAME AllTests COMMAND voxel-engine-tests)
 endif()

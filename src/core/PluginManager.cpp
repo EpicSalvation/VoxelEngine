@@ -193,6 +193,15 @@ const Recipe* PluginManager::findRecipe(const std::string& layer_name) const {
     return nullptr;  // unregistered => synthesized default recipe (resolved at job build)
 }
 
+const RegisteredFeatureGenerator*
+PluginManager::findFeatureGenerator(const std::string& generator_id) const {
+    const RegisteredFeatureGenerator* found = nullptr;
+    for (const auto& g : featureGenerators_)
+        if (g.generator_id == generator_id)
+            found = &g;  // last registration of an id wins (overwrite semantics)
+    return found;
+}
+
 const RegisteredNoise* PluginManager::resolveNoise(const std::string& noise_id) const {
     const RegisteredNoise* builtin = nullptr;
     const RegisteredNoise* plugin  = nullptr;

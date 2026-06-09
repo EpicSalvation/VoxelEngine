@@ -282,7 +282,9 @@ void props_generator(WorldCoord origin, int n, Voxel* out, void* ud) {
 // non-goal platform. Applied to detail layer chunks after base generation.
 // These markers represent the key pickup locations for the M7b game objective
 // (the actual collect/win logic arrives in Group 4).
-void key_spots_feature(WorldCoord origin, double vs, int n, Voxel* inout, void* /*ud*/) {
+void key_spots_feature(WorldCoord origin, double vs, int n, Voxel* inout,
+                       const RecipeParam* /*params*/, size_t /*param_count*/,
+                       uint64_t /*seed*/, void* /*ud*/) {
     // World positions (wx, wy, wz) of the gold marker voxels.
     // wy = platform y_max (the voxel sits on top of the platform surface).
     static const double kKeys[][3] = {

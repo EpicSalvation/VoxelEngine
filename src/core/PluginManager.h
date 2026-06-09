@@ -168,6 +168,13 @@ public:
     // behavior), resolved at decomposition-job-build time (architecture.md §6).
     const Recipe* findRecipe(const std::string& layer_name) const;
 
+    // Feature-generator lookup by id. Returns the winning entry (the last
+    // registration of an id wins, matching register_feature_generator's
+    // overwrite semantics), or nullptr when none is registered. Used at
+    // decomposition-job-build time to resolve a recipe's feature overlay ids to
+    // their FeatureGeneratorFn before the job leaves the main thread (§13).
+    const RegisteredFeatureGenerator* findFeatureGenerator(const std::string& generator_id) const;
+
     // Noise lookup by id. Returns the winning entry (a plugin registration
     // overrides a built-in of the same id; the last registration of each kind
     // wins), or nullptr if no noise with that id is registered. The resolved

@@ -437,7 +437,7 @@ layers:
         for (const auto& f : pluginManager.featureGenerators())
             if (f.fn)
                 f.fn(chunk.origin(), detail->voxelSizeM(), detail->chunkSizeVoxels(),
-                     chunk.data(), f.user_data);
+                     chunk.data(), nullptr, 0, 0u, f.user_data);
     };
 
     // ── Detail layer edit helpers ─────────────────────────────────────────────
