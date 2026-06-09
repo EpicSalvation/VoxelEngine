@@ -310,6 +310,14 @@ cmake --build build
 # Single-config:   ./build/07-arena-platformer
 # Multi-config:    ./build/Debug/07-arena-platformer.exe
 
+# Run material matters (M8): a flat strata world — soft topsoil over stone, iron,
+# and diamond on an indestructible bedrock floor. Aim down and hold left mouse to
+# mine; harder materials take visibly longer (the highlight ramps red) and bedrock
+# never clears. The HUD reads out the targeted voxel's hardness/density/structural
+# strength; right mouse places the selected material (1-6).
+# Single-config:   ./build/08-material-matters
+# Multi-config:    ./build/Debug/08-material-matters.exe
+
 # Run the test suite
 ctest --test-dir build
 ```
@@ -338,6 +346,14 @@ floor spawn, switch to walk mode and head north to the stone staircase, then jum
 up its steps onto the start pad (walk-mode collision has no step-up, so each 1 m
 riser is a jump). Walk into gold key stakes to collect them — an on-screen
 counter tracks your progress — and reach the goal totem with all four keys to win.
+
+Controls for `08-material-matters`: **WASD** move, **mouse** look, **G** toggles
+walk/fly, **Space/Shift** up/down (fly) or jump (walk), **hold left mouse** mine
+the targeted voxel (harder materials take longer; bedrock never clears), **right
+mouse** place the selected material, **1**–**6** select material, **F** toggles
+the mouse cursor, **ESC** quits. Aim straight down and dig through the strata to
+feel each material's hardness; the HUD shows the targeted voxel's hardness,
+density, and structural strength.
 
 ---
 
@@ -548,7 +564,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 > Phase 2 milestones are placeholders. Each will have a dedicated design task to produce a detailed plan before implementation begins. Order and scope are subject to revision after Phase 1 is complete.
 
-**M8 — Material Property System**
+**M8 — Material Property System** ✅
 
 > M8 is the first Phase 2 milestone and the first to make a **simulation system read
 > material properties and respond to their values** instead of to a block-type
@@ -581,13 +597,13 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] `src/simulation/RemovalModel.{h,cpp}` (first file under `src/simulation/`): a pure, deterministic function mapping target `hardness` (and an optional tool `power`) to the work/time required to remove a voxel — `hardness > 0` → `time = hardness/power`; `hardness == 0` → instant; `hardness < 0` → never removable (indestructibility sentinel, no schema change); `power <= 0` → never removable. No block-type id, no plugin or renderer dependency, unit-testable in isolation
 - [x] Per-target removal accumulator in the build/break tool path: holding the remove action on a voxel accrues progress scaled by `RemovalModel`; the voxel is cleared to `Voxel::empty()` (firing `on_voxel_modified` as today) only when accumulated work reaches the hardness-derived threshold, and progress resets when the targeted voxel changes. An indestructible (`hardness < 0`) target never accrues progress and is never cleared. This is transient tool state — not persisted, dirty tracking stays chunk-granular *(`sim::RemovalAccumulator`, `src/simulation/RemovalAccumulator.{h,cpp}`; wired into `04-build-break-persist` — hold left mouse to mine, harder voxels take longer; `tests/RemovalAccumulatorTest.cpp`)*
 - [x] Removal-progress feedback through the existing highlight path: `BgfxRenderer::drawVoxelHighlight` reflects accumulated progress (crack stages / color ramp) plus a HUD readout of the target's `hardness`/`density`, so the player can see a harder material visibly take longer to clear *(`drawVoxelHighlight` gained an optional `progress` arg that ramps the outline toward red as `RemovalAccumulator::progress()` rises; `04-build-break-persist` feeds the active target's progress and shows hardness/density via `setHudText`. Renderer concern, kept in core and property-driven — plugins influence it through `register_material`, not a render hook)*
-- [ ] Example indestructible material: a plugin registers a `bedrock`-style material with sentinel `hardness < 0` and places it in the editable terminal layer; the removal tool refuses to clear it — the reference pattern for per-material indestructibility (distinct from whole-layer `VoxelMode::immutable`)
+- [x] Example indestructible material: a plugin registers a `bedrock`-style material with sentinel `hardness < 0` and places it in the editable terminal layer; the removal tool refuses to clear it — the reference pattern for per-material indestructibility (distinct from whole-layer `VoxelMode::immutable`) *(`plugins/material-showcase/plugin.cpp` registers `bedrock` (`hardness = -1`) and lays it as the strata floor in the ordinary terminal layer; `RemovalAccumulator` never accrues against it, so it never clears — no block-type branch, the gate is the voxel's own `hardness`)*
 
 *Tests*
 - [x] `tests/RemovalModelTest.cpp`: removal effort is strictly increasing in `hardness` for `hardness > 0`; `hardness == 0` clears in one step; `hardness < 0` and `power <= 0` both report never-removable; identical inputs are deterministic; two voxels differing only in `hardness` require measurably different work (property-driven, not id-driven)
-- [ ] Material-registry lookup returns the registered properties for a known id/palette and the documented default for an unknown one, and stays correct across a plugin unload (`tests/MaterialRegistryTest.cpp` or an addition to `PluginManagerTest`)
+- [x] Material-registry lookup returns the registered properties for a known id/palette and the documented default for an unknown one, and stays correct across a plugin unload (`tests/MaterialRegistryTest.cpp` or an addition to `PluginManagerTest`) *(`PluginManager.MaterialLookupByIdAndPalette` in `tests/PluginManagerTest.cpp`: known id/palette → registered props, unknown id → neutral zero default, unknown palette → default carrying the requested index, and id/palette resolve back to the default after the owning plugin unloads)*
 
-- [ ] **Demo — Material matters:** `08-material-matters` — a world (or extended `04` layer) seeded with several materials of deliberately different `hardness` (and visibly different `density`/`structural_strength` shown in a HUD readout), including one indestructible (`hardness < 0`) material that cannot be cleared; removing each takes visibly different effort with a progress/crack indicator, all driven by the registered property values with no block-type branching anywhere in the removal path
+- [x] **Demo — Material matters:** `08-material-matters` — a flat strata world (built by the `material-showcase` plugin) of grass/dirt/stone/iron/diamond over an indestructible bedrock floor, each material differing in `hardness` (and `density`/`structural_strength`, all shown in the HUD); hold left mouse to mine — softer strata clear fast, harder ones take visibly longer (the highlight ramps toward red), and bedrock (`hardness < 0`) never clears; right mouse places the selected material (1-6). All effort is driven by the targeted voxel's own properties with no block-type branching on the removal path
 
 **M9 — Composition Recipes and Feature Generators**
 - [ ] Design task: recipe schema, feature generator interface, hierarchical seed parameter passing
@@ -615,7 +631,30 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [ ] Heat transfer driven by `thermal_conductivity` material property
 - [ ] **Demo — Flow and heat:** release a fluid that flows through porous materials and is blocked by low-`porosity` ones, plus a heat source that spreads at rates set by each material's `thermal_conductivity`
 
-**M13 — Polish and Release**
+**M13 — Engine Generality (Beyond the Block Game)**
+
+> Phase 1 proved the MVP, but several implementation choices made along the way
+> quietly assume a single-scale, gravity-down, heightmap *block game* — and each
+> one narrows the engine toward "Minecraft clone" even though the README promises a
+> range from flying games to planetary and space simulation. The one we hit head-on:
+> `LODManager`'s vertical streaming band is an **absolute** chunk-Y range, not a
+> camera-relative volume, so a deep-dig world silently bottoms out on empty space
+> the moment the dig leaves the configured band (the M8 material demo did exactly
+> this). M13 is a deliberate generality pass: take the implicit Phase-1 assumptions
+> and turn them into explicit, configurable engine *policy*, so the non-block-game
+> configurations the architecture already describes actually work. No new
+> simulation systems — this milestone widens what the existing ones are willing to
+> assume about the world.
+
+- [ ] Design task: audit Phase 1 for implicit single-scale / gravity-down / heightmap assumptions and produce an explicit **limitations catalog** with a generalization plan — streaming region-of-interest, vertical axis, gravity direction, and the terminal-as-primary forwarding in `World` are the known entries; the catalog is the deliverable that scopes the rest of this milestone
+- [ ] **Configurable, camera-relative streaming region-of-interest, per layer:** replace `LODManager`'s fixed horizontal-square footprint + absolute vertical band with a pluggable streaming *volume* (box / sphere / shell) chosen per layer and centered on the camera, with no privileged vertical axis — so a deep-dig world streams downward as the player descends, a flying game streams a thin backdrop shell, and a space world streams a 3D box. This directly removes the vertical-band limitation that made the M8 dig demo end in empty space rather than on bedrock
+- [ ] Decouple gravity direction and the "vertical" axis from streaming and collision: the engine is agnostic to which way is down — "down" can be absent (zero-g flight), a fixed alternate axis, or a direction that **varies per position and per frame** (radial wells around a planet, or the nearest body in a many-asteroid field) — so swept AABB resolution and the kinematic body work against an arbitrary, changing up-vector rather than a baked Y-down assumption
+- [ ] Generalize the terminal-as-primary `World` forwarding so a world whose interactive layer is *not* the finest terminal layer (e.g. a flying game where the only editable layer is a mid-stack playspace) is a first-class configuration, not a special case
+- [ ] Heterogeneous per-layer streaming budgets verified together: a tiny tight playspace volume and a vast sparse immutable backdrop shell streaming simultaneously within their own budgets, proving one stack can mix radically different scales and densities
+- [ ] **Demo — Beyond blocks:** a deliberately non-Minecraft configuration on the same engine — e.g. a flying game whose only interactive layer is a small box playspace adrift inside a huge immutable backdrop, or a continuous vertical descent that streams with the camera all the way down — demonstrating that with the generalized streaming and axis policy the engine is genuinely multi-purpose, not a block-game with extra layers
+- [ ] **Demo — Asteroid belt miner:** the complementary case to *Beyond blocks* — instead of one privileged "down", *many*. A rocketsuit player jets through a dense field of asteroids in zero ambient gravity; each asteroid is a composite voxel that decomposes on approach (M6) into a minable terminal grid, and exerts its **own radial gravity well** so the player can land on, walk around, and mine the surface of a body from any side — the same kinematic body and removal tool from M5/M8, but with "down" pointing at the nearest asteroid's center rather than a fixed axis. Streaming is a camera-centered 3D box with no vertical bias (asteroids surround the player in every direction), and mined-out resource voxels are driven by the M8 property system (richer ores are `hardness`-costlier). Together the two demos show two different ways to escape the block-game mold: *Beyond blocks* removes the gravity axis entirely, this one makes gravity **local and many-bodied**
+
+**M14 — Polish and Release**
 - [ ] Design task: identify gaps between Phase 1 implementation and full architecture spec
 - [ ] ARCHITECTURE.md fully reflects implemented behavior (not just intended behavior)
 - [ ] Example plugin suite covers all major hook types
