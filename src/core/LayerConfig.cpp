@@ -109,7 +109,8 @@ LayerConfig LayerConfig::parseAndValidate(const std::string& yamlContent) {
     }
 
     // Every composite layer must name a decompose_to target that exists in this config.
-    // Recipe plugin registration is checked at engine startup after plugins are loaded.
+    // Recipe references (feature/noise ids) are checked after plugins are loaded —
+    // see validateRecipes() in core/RecipeValidation.h.
     for (const auto& layer : config.layers_) {
         if (layer.mode == VoxelMode::composite) {
             if (!layer.decompose_to)

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include "plugin_api.h"
+#include "world/Recipe.h"  // Recipe value type (deep-copied from RecipeDesc at registration)
 
 // Identifies a loaded plugin instance. Returned by loadPlugin/wireInPlugin and
 // passed to unloadPlugin. kInvalidPluginId (0) denotes a failed load.
@@ -31,6 +32,28 @@ struct RegisteredMaterial {
     std::string        material_id;
     MaterialProperties props;
     PluginId           owner;
+};
+
+// A composition recipe registered for a composite layer (keyed by layer name,
+// mirroring register_layer_generator). The flat RecipeDesc a plugin passes is
+// deep-copied into the owning Recipe at registration, so the plugin's arrays
+// need not outlive the call.
+struct RegisteredRecipe {
+    std::string layer_name;
+    Recipe      recipe;
+    PluginId    owner;
+};
+
+// A noise function registered by id. Built-in entries (owner kBuiltinOwnerId,
+// isBuiltin = true) form the engine floor; a plugin registration of the same id
+// overrides a built-in on lookup (the importer dispatch rule), and plugin
+// entries are torn down on unload while built-ins persist.
+struct RegisteredNoise {
+    std::string noise_id;
+    NoiseFn     fn        = nullptr;
+    void*       user_data = nullptr;
+    PluginId    owner;
+    bool        isBuiltin = false;
 };
 
 struct RegisteredVoxelModifiedHook {
@@ -92,6 +115,13 @@ public:
     // Called by Engine::init() before any plugins are loaded.
     void registerBuiltinHandlers();
 
+    // Register the engine's built-in noise set (value/fbm/ridged/worley) as the
+    // floor of the noise registry. Built-in entries are owned by the engine
+    // (kBuiltinOwnerId) and never torn down by a plugin unload; a plugin
+    // register_noise of the same id overrides a built-in on lookup. Called by
+    // Engine::init() before any plugins are loaded.
+    void registerBuiltinNoise();
+
     // Wire in a plugin that is compiled directly into the executable rather than loaded
     // as a .so. Useful for the example plugin and for testing without a .so build step.
     // Returns the new plugin's id (no library handle is associated), or kInvalidPluginId
@@ -113,6 +143,8 @@ public:
     const std::vector<RegisteredChunkLifecycleHook>&  chunkEvictedHooks()    const { return chunkEvictedHooks_; }
     const std::vector<RegisteredImporter>&            importers()            const { return importers_; }
     const std::vector<RegisteredExporter>&            exporters()            const { return exporters_; }
+    const std::vector<RegisteredRecipe>&              recipes()              const { return recipes_; }
+    const std::vector<RegisteredNoise>&               noises()               const { return noises_; }
 
     // Keyed material-property lookup. These centralize the registry search that
     // importers, the build menu, and other tooling previously hand-rolled. They
@@ -130,6 +162,18 @@ public:
     // palette_index is set to the requested index when none is registered.
     MaterialProperties materialForPalette(std::uint8_t palette_index) const;
 
+    // Recipe lookup by composite layer name. Returns a pointer into the registry,
+    // or nullptr when no recipe is registered for that layer — the caller treats
+    // "unregistered" as the synthesized default recipe (the M6 run-the-child
+    // behavior), resolved at decomposition-job-build time (architecture.md §6).
+    const Recipe* findRecipe(const std::string& layer_name) const;
+
+    // Noise lookup by id. Returns the winning entry (a plugin registration
+    // overrides a built-in of the same id; the last registration of each kind
+    // wins), or nullptr if no noise with that id is registered. The resolved
+    // entry carries both fn and user_data for the eventual NoiseFn call.
+    const RegisteredNoise* resolveNoise(const std::string& noise_id) const;
+
 private:
     PluginContext buildContext();
 
@@ -142,6 +186,8 @@ private:
     std::vector<RegisteredChunkLifecycleHook>  chunkEvictedHooks_;
     std::vector<RegisteredImporter>            importers_;
     std::vector<RegisteredExporter>            exporters_;
+    std::vector<RegisteredRecipe>              recipes_;
+    std::vector<RegisteredNoise>               noises_;
 
     // A plugin that has been loaded and whose registrations are live.
     struct LoadedPlugin {

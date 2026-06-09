@@ -1,4 +1,5 @@
 #include "PluginManager.h"
+#include "world/Noise.h"
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
@@ -83,6 +84,8 @@ PluginId PluginManager::loadPlugin(const std::string& path) {
         eraseOwned(chunkEvictedHooks_,  id);
         eraseOwned(importers_,          id);
         eraseOwned(exporters_,          id);
+        eraseOwned(recipes_,            id);
+        eraseOwned(noises_,             id);
         platformDlClose(handle);
         return kInvalidPluginId;
     }
@@ -130,6 +133,8 @@ PluginId PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
         eraseOwned(chunkEvictedHooks_,  id);
         eraseOwned(importers_,          id);
         eraseOwned(exporters_,          id);
+        eraseOwned(recipes_,            id);
+        eraseOwned(noises_,             id);
         return kInvalidPluginId;
     }
     loaded_.push_back({id, nullptr});
@@ -153,6 +158,8 @@ bool PluginManager::unloadPlugin(PluginId id) {
     eraseOwned(chunkEvictedHooks_,    id);
     eraseOwned(importers_,            id);
     eraseOwned(exporters_,            id);
+    eraseOwned(recipes_,              id);
+    eraseOwned(noises_,               id);
 
     void* handle = it->handle;
     loaded_.erase(it);
@@ -179,6 +186,30 @@ MaterialProperties PluginManager::materialForPalette(std::uint8_t palette_index)
     return result;
 }
 
+const Recipe* PluginManager::findRecipe(const std::string& layer_name) const {
+    for (const auto& r : recipes_)
+        if (r.layer_name == layer_name)
+            return &r.recipe;
+    return nullptr;  // unregistered => synthesized default recipe (resolved at job build)
+}
+
+const RegisteredNoise* PluginManager::resolveNoise(const std::string& noise_id) const {
+    const RegisteredNoise* builtin = nullptr;
+    const RegisteredNoise* plugin  = nullptr;
+    // Last registration of each kind wins; a plugin entry overrides a built-in.
+    for (const auto& n : noises_) {
+        if (n.noise_id != noise_id) continue;
+        if (n.isBuiltin) builtin = &n;
+        else             plugin  = &n;
+    }
+    return plugin ? plugin : builtin;
+}
+
+void PluginManager::registerBuiltinNoise() {
+    for (const auto& b : noise::builtins())
+        noises_.push_back({b.id, b.fn, nullptr, kBuiltinOwnerId, true});
+}
+
 void PluginManager::registerBuiltinHandlers() {
     // Register marker entries for the built-in .vox importer and exporter.
     // fn and user_data are null — the Engine dispatch never calls them; it
@@ -202,6 +233,36 @@ PluginContext PluginManager::buildContext() {
                                          FeatureGeneratorFn fn, void* ud) {
         auto* mgr = static_cast<PluginManager*>(c->engine_data);
         mgr->featureGenerators_.push_back({id, fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.register_recipe = [](PluginContext* c, const char* name, const RecipeDesc* desc) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!name || !desc) {
+            std::cerr << "[PluginManager] register_recipe called with null "
+                      << (name ? "recipe" : "layer name") << "; ignored.\n";
+            return;
+        }
+        Recipe recipe = Recipe::fromDesc(*desc);  // deep copy; plugin arrays need not outlive
+        auto& recs = mgr->recipes_;
+        // Keyed by layer name; a later registration for the same layer overwrites
+        // the earlier one (mirroring register_material's overwrite-by-id).
+        auto it = std::find_if(recs.begin(), recs.end(),
+            [name](const RegisteredRecipe& r) { return r.layer_name == name; });
+        if (it != recs.end()) {
+            std::cerr << "[PluginManager] Warning: recipe for layer '" << name
+                      << "' already registered; overwriting.\n";
+            it->recipe = std::move(recipe);
+            it->owner  = mgr->currentOwner_;
+        } else {
+            recs.push_back({name, std::move(recipe), mgr->currentOwner_});
+        }
+    };
+
+    ctx.register_noise = [](PluginContext* c, const char* id, NoiseFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        // Plugin entries are appended (isBuiltin = false); resolveNoise prefers
+        // them over a built-in of the same id, so this overrides the floor.
+        mgr->noises_.push_back({id, fn, ud, mgr->currentOwner_, false});
     };
 
     ctx.register_material = [](PluginContext* c, const char* id, MaterialProperties props) {

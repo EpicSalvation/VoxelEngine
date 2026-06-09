@@ -24,6 +24,7 @@ void Engine::init(PluginManager& pm, World& world)
     pm_    = &pm;
     world_ = &world;
     pm.registerBuiltinHandlers();
+    pm.registerBuiltinNoise();  // value/fbm/ridged/worley floor (architecture.md §6)
 }
 
 bool Engine::importVox(const std::string& path,
