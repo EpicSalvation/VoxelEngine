@@ -606,11 +606,58 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] **Demo — Material matters:** `08-material-matters` — a flat strata world (built by the `material-showcase` plugin) of grass/dirt/stone/iron/diamond over an indestructible bedrock floor, each material differing in `hardness` (and `density`/`structural_strength`, all shown in the HUD); hold left mouse to mine — softer strata clear fast, harder ones take visibly longer (the highlight ramps toward red), and bedrock (`hardness < 0`) never clears; right mouse places the selected material (1-6). All effort is driven by the targeted voxel's own properties with no block-type branching on the removal path
 
 **M9 — Composition Recipes and Feature Generators**
-- [ ] Design task: recipe schema, feature generator interface, hierarchical seed parameter passing
-- [ ] Recipe system implemented and referenced from composite voxel types
-- [ ] Feature generator plugin hook live; example cave generator plugin written
-- [ ] Hierarchical seed parameters passed from parent recipe to child recipe
-- [ ] **Demo — Recipe-built voxel:** decompose a composite voxel whose recipe stamps feature overlays (e.g. a cave network and ore veins via the example feature-generator plugin) and biases child materials, with a parent seed visibly constraining what the children generate
+
+> M9 makes decomposition **recipe-driven**. Through M6/M7b a composite macro voxel
+> decomposed by simply running its child layer's generator over the subvolume — a
+> deliberate placeholder (`MacroVoxel.h`: "This holds no recipe yet (recipes are
+> M9)"; `DecompositionJob` carries a bare `LayerGeneratorFn`). M9 replaces that with
+> the **composition recipe** described in README §"Macro-Voxel Composition Recipes"
+> and specified in ARCHITECTURE §6: a data record attached to a composite layer that
+> drives child-grid generation through a weighted **material distribution**, an
+> ordered list of **feature overlays** (caves, ore veins, …), **boundary overrides**
+> for the macro voxel's faces, and **seed parameters** passed down to constrain child
+> generation. This is the first milestone to **change `plugin_api.h`** — the
+> deferred `register_recipe` hook lands, and `FeatureGeneratorFn` gains the parameter
+> set + deterministic seed it has lacked since M4 (today feature generators take no
+> parameters and are applied unconditionally to every chunk; M9 makes them
+> recipe-referenced and parameterized). It is also the first to fire the **composite
+> picking** path deferred in M6 (interacting with an undecomposed macro voxel runs
+> its recipe). Scope boundaries: decomposition stays **single-step** (the deep N-layer
+> cascade and cache-eviction policy are M10), and no structural/aggregate behavior is
+> added (that is M11). Determinism is non-negotiable — the recipe is a pure function
+> of `(world_seed, macro VoxelCoord)` per ARCHITECTURE §4, so evicted recipe-built
+> chunks regenerate identically.
+
+*Design — the recipe schema and the feature-generator contract*
+- [ ] Design task: pin down (a) the **recipe schema** — material-distribution spec (`(material_id, weight)` list + noise-function id + params), ordered `(feature_generator_id, params)` list, per-face boundary overrides, and `seed_parameters` key/value map; (b) the **recipe attachment model** — recipes registered per composite **layer name** (mirroring `register_layer_generator`), since the engine keys behavior by layer, not by an abstract "voxel type"; (c) the **extended feature-generator interface** — a parameter set plus a deterministic seeded RNG/seed handle, replacing the current parameterless `FeatureGeneratorFn`; (d) the **back-compat rule** — a composite layer that registers no explicit recipe gets a synthesized *default recipe* equivalent to the M6 "run the child generator over the subvolume" behavior, so demos `05`/`07` are byte-for-byte unchanged. Rewrite ARCHITECTURE §6 from aspirational to as-built and record the `plugin_api.h` additions
+
+*Recipe schema and registry*
+- [ ] Recipe data record (`src/world/Recipe.h`): the material-distribution spec, ordered feature-overlay list with per-entry params, top/bottom/side boundary overrides, and a `seed_parameters` map — a plain value type with no plugin/renderer/IO dependency, constructible by plugins and consumable by `DecompositionWorker`
+- [ ] `register_recipe(layer_name, Recipe)` plugin hook in `plugin_api.h`, stored in an owner-tracked `RecipeRegistry` on `PluginManager` (lookup by composite layer name, neutral/default when unregistered), torn down on per-plugin unload exactly like the material/feature registries (the M4 ownership pattern)
+- [ ] Recipe validation folded into startup validation: every `composite` layer resolves to a recipe (explicit or synthesized default); a recipe that names a `feature_generator_id` with no registered generator is a **startup error, not a silent skip** (ARCHITECTURE §6); material ids/palette entries referenced by a distribution resolve through the M8 `PluginManager::material`/`materialForPalette` lookup, falling back to the documented neutral default
+
+*Recipe-driven decomposition*
+- [ ] `DecompositionJob` carries a `Recipe` (and the resolved per-entry feature-generator fns + child material set) instead of a bare `LayerGeneratorFn`; the worker fills each child chunk by (1) sampling the material distribution into the grid, (2) applying boundary overrides on the macro voxel's exposed faces, then (3) running the recipe's feature overlays in declared order — one self-contained pure pass, still single-step (no cascade into further composites)
+- [ ] Deterministic seeded RNG/seed derived from `(world_seed, macro VoxelCoord)` and threaded into the distribution sampler and every feature generator — the "seeded RNG provided by `DecompositionWorker`" promised in ARCHITECTURE §4/§14. No `rand`/`time`/unordered iteration is introduced; the existing M6 determinism guarantee is preserved
+- [ ] The synthesized **default recipe** path keeps demos `05`/`07` running the child generator over the subvolume unchanged, proving the recipe layer is additive rather than a rewrite of the proven M6 decomposition flow
+- [ ] **Composite picking** (the M6 deferral): a raycast that hits an undecomposed macro voxel in a composite layer enqueues its recipe-driven decomposition (via `DecompositionState::markPending`), so the player can trigger a recipe by interacting with the block, not only by approaching it
+
+*Feature generators — now recipe-referenced and parameterized*
+- [ ] Extend `FeatureGeneratorFn` / `register_feature_generator` with a parameter set and the deterministic seed handle (`plugin_api.h` change); migrate existing callers — the `water` plugin's sea-level generator and the hand-rolled `applyFeatureGenerators` loops in demos `03`/`07` — to the new signature, and route feature application through the recipe's ordered `(id, params)` list rather than "every registered generator over every chunk"
+- [ ] Example **cave-network** feature generator plugin: carves connected void regions with seeded 3D value noise, parameters controlling threshold/scale; deterministic (no `rand`/`time`/unordered iteration). Plus an **ore-vein** feature generator that replaces material pockets with an ore material — the two overlays the demo recipe stacks
+- [ ] Boundary overrides exercised by a real recipe: a surface-soil top face over a stone interior on the decomposed macro voxel, demonstrating per-face distribution distinct from the interior
+
+*Hierarchical seed parameters*
+- [ ] A parent composite recipe's `seed_parameters` are passed as generation inputs into the child layer's recipe/distribution at decomposition time, biasing the child grid (e.g. "bias toward granite", "no ore above depth N") — demonstrated **single-step** (parent composite → its immediate child) without the deep cascade reserved for M10; document the handoff point in ARCHITECTURE §6
+
+*Tests*
+- [ ] Recipe-driven decomposition determinism: the same `(recipe, world_seed, macro coord)` yields a byte-for-byte identical child grid across repeated and concurrent runs (extends the M6 `DecompositionTest` harness)
+- [ ] Material distribution honors weights and is spatially stable for a fixed seed; boundary overrides land on the correct faces and only those faces; feature overlays run in declared order (an order-sensitive pair proves ordering)
+- [ ] Cave generator carves the expected void fraction for given params and is deterministic; ore-vein generator replaces only the targeted material pockets
+- [ ] Recipe validation: a recipe naming an unregistered feature generator is rejected at startup; a composite layer with no explicit recipe resolves to the default recipe; an unknown material id resolves to the neutral default; `RecipeRegistry` entries are gone after the owning plugin unloads
+- [ ] Seed-parameter passing: two distinct parent seed parameters produce measurably different — but each individually deterministic — child grids (proving the parent constrains the child, property-style, not by id branching)
+
+- [ ] **Demo — Recipe-built voxel:** `09-recipe-built-voxel` — a composite layer whose registered recipe biases child materials, overrides the top boundary with surface soil, and stacks the cave-network + ore-vein feature overlays. Fly toward a macro voxel (or click it — composite picking) to decompose it and reveal a carved cave network shot through with ore veins under a soil cap; a key toggles the parent **seed parameter** between two values and re-decomposes, visibly changing cave density / ore richness while each value regenerates identically on revisit (determinism). Controls + run lines added to the Setup section when the demo lands
 
 **M10 — Cascading Multi-Layer Decomposition**
 - [ ] Design task: cache eviction policy, memory budget across deep layer stacks
