@@ -155,6 +155,12 @@ Decomposition only generates a child grid for composite voxels the coarse layer 
 
 Therefore **a composite layer's occupancy must be a conservative superset of its `decompose_to` child's occupancy**: every solid child voxel must fall within a solid parent. When both layers derive from a shared field (e.g. a height map), sample the coarse occupancy from the **extreme** of that field over the parent voxel's full footprint, not a single center sample — a center sample misses detail that rises into the voxel elsewhere in its footprint, which on slopes leaves holes where the fine surface crosses a coarse voxel boundary. Those holes are invisible, and because nothing decomposed there, also non-collidable (the player falls through). The layered-world `blocks_generator` had exactly this bug: it sampled the surface height at each macro voxel's center column and was fixed to take the max over the footprint.
 
+Across a **deep chain (M10)** this invariant must hold **transitively** — every solid voxel at a fine layer falls within a solid macro voxel at *every* coarser ancestor, not just its immediate parent. For a recipe-driven stack (where child content is recipe data, not a shared analytic field) the *geometric* half is automatic: a decomposition only runs on a `present` parent and confines its child grid to that parent's subvolume, so a solid child is always within a solid parent by construction. What is **not** statically checkable is the generator-side guarantee that a coarse layer marks a macro voxel present whenever any transitive descendant would be solid — recipe output is data-dependent. This is therefore a documented **authoring contract** (a coarse recipe's occupancy must conservatively cover its descendants') backed by an optional debug-only runtime assert, rather than a config-time validation.
+
+### Engine-Owned Cascade Orchestration (M10)
+
+Through M9 the approach-trigger / `drain` / insert / evict loop lived in each demo's main loop with a single `DecompositionState`. M10 lifts it into an engine-owned `DecompositionManager` (`src/world/`) that holds a `DecompositionState` **per composite layer** and drives the whole chain: each tick it enqueues in-radius undecomposed macro voxels whose parent is already decomposed and resident, drains worker results into the child layer, and runs the budgeted eviction pass. A decomposition whose `decompose_to` target is itself composite produces a grid of **atomic macro voxels** (step 5 above), which feed the next layer's `DecompositionState` rather than the terminal mesher. The manager owns no GPU meshes (§13) — it returns a per-tick resident/evicted diff per layer that the front-end consumes to sync its own geometry. It depends on `LODManager` for residency/budget math, which is why `LODManager` (pure headless set math) is filed in a neutral tier, not under `Renderer`.
+
 ---
 
 ## 5. Material Property System
@@ -251,7 +257,14 @@ Overrides paint the macro voxel's **geometric** outer faces — the boundary sla
 
 A recipe's `seed_parameters` bias the generation of the layer below it. At decomposition time they are **merged into the effective parameter set** handed to the distribution sampler and to each feature generator — the same `RecipeParam` array those generators already read — so a generator reads e.g. `cave_density` without caring whether the value came from its own per-entry params or was inherited from above. **Per-entry params take precedence** over inherited `seed_parameters` on a key collision, so a feature overlay can always pin a value the parent leaves free.
 
-Inherited `seed_parameters` are an input **carried on the `DecompositionJob`**. For M9 (single-step decomposition) the source is the decomposing layer's own recipe `seed_parameters`; this is the demo's lever — toggling one value re-runs the job and visibly changes the child grid while each value regenerates identically. Persisting inherited parameters **on the produced child macro voxels**, so a deeper layer's later decomposition sees its grandparent's constraints, is the cross-step cascade and belongs to M10 — this is the handoff seam between the two milestones.
+Inherited `seed_parameters` are an input **carried on the `DecompositionJob`**. For M9 (single-step decomposition) the source is the decomposing layer's own recipe `seed_parameters`; this is the demo's lever — toggling one value re-runs the job and visibly changes the child grid while each value regenerates identically.
+
+The **cross-step cascade (M10)** makes inheritance deep, and resolves it by **recomputation, not storage**. Nothing is persisted on the produced child macro voxels — a `Voxel` stays a trivially-copyable POD (a parent pointer would break RLE persistence and the plugin ABI, and create eviction-lifetime problems). Instead, when a macro voxel decomposes, its inherited param set is **reconstructed at job-build time by walking its ancestor coordinate+recipe chain** (the coordinate hierarchy the cascade already computes is the "reference" to the parent — no field is added to `Voxel`). The set has two parts:
+
+1. **The ancestor `seed_parameters` chain** — each ancestor recipe's declared `seed_parameters`, merged root → parent. This is the explicit push-down channel ("bias toward granite" flows the whole way down, not one step).
+2. **Engine-reserved, `__`-namespaced positional/material params** describing the decomposing macro voxel itself — at minimum its world position / `__altitude` and its own generated material (`__parent_material`) — injected automatically so a recipe can express position- and material-conditional rules ("no water table above 800m" reads `__altitude`; a mountain-range voxel biasing its peaks reads `__parent_material`). Namespacing keeps these facts from colliding with author params; position-dependence is **opt-in** (a recipe that ignores the reserved keys behaves identically everywhere).
+
+Full precedence, weakest → strongest: root ancestor → … → immediate parent → this recipe's own `seed_parameters` → per-entry params (the M9 "per-entry wins" rule, with nearer/more-local context overriding farther). Because the whole set is a pure function of `(world_seed, ancestor coords, recipes)`, it is re-derived identically on a cache miss, so an evicted deep subtree regenerates byte-for-byte — the property that makes the deep cache transparent. (This per-voxel recompute is a deliberate, deterministic choice over per-layer-uniform inheritance; it is a candidate to swap back toward per-layer or to add caching if profiling ever demands it.)
 
 This is what lets a 10km "mountain range" recipe constrain its constituent 1km "peak" recipes — e.g. "generate peaks biased toward granite, with no water table above 800m" — without either recipe needing to know about the other's implementation.
 
@@ -460,15 +473,17 @@ Per-voxel dirty tracking was rejected because a single large edit (removing many
 ### What Gets Persisted
 
 - All dirty chunks (player-modified)
-- Composite voxel decomposition state (whether a given composite has been decomposed, so we don't re-decompose on load)
 - Immutable voxels: nothing (regenerated from seed on load)
 - Clean (unmodified) recipe-generated chunks: nothing (regenerated on cache miss)
+- Composite voxel decomposition state: **not persisted (M10 decision)**. Because decomposition is deterministic, re-decomposing on load reproduces the identical clean state, and any dirty descendant reloads from its chunk file as its layer re-streams. Persisting "which composites are decomposed" to disk would only avoid redundant re-decomposition work on load — a load-time optimization deferred to a later save-game milestone, not a correctness requirement.
 
 ### Cache Eviction
 
 Clean chunks can be evicted from memory when they fall outside the LOD view distance budget. On cache miss (player re-approaches), they are regenerated deterministically from the recipe. This is transparent to the player only if decomposition is deterministic — see [Cascading Decomposition](#4-cascading-decomposition).
 
-Dirty chunks are never evicted from disk, but may be evicted from the in-memory cache and reloaded on demand.
+Dirty chunks are never evicted from disk, but may be evicted from the in-memory cache and reloaded on demand. A dirty chunk is always **saved before its in-RAM drop** (never silently discarded).
+
+**Memory budget across a deep stack (M10).** Distance + hysteresis is the primary eviction signal, but a deep chain holds several layers resident at once, so each composite/terminal layer also carries a **per-layer resident-chunk cap** (a `LayerDef` field). When a layer exceeds its cap the `DecompositionManager` evicts its **farthest-first clean** chunks to fit, pinning near and dirty chunks. (A global estimated-byte budget is a deferred outer backstop — farthest-first across all layers — that layers over the per-layer caps if a lopsided-density config needs it; per-layer chunk count is the deliberately simple starting metric.) Eviction is **cascading**: evicting a parent macro voxel back to atomic evicts every decomposed descendant across all deeper layers in one consistent pass — the inverse of the level-by-level decomposition walk — clearing each layer's `DecompositionState` entry with no orphaned resident child grids.
 
 ---
 
