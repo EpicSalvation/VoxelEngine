@@ -29,6 +29,7 @@
 
 struct DecompositionJob {
     chunkmath::VoxelCoord   macro;            // composite-layer voxel (bookkeeping key)
+    std::string             layerName;        // composite layer this macro belongs to (M10)
     std::vector<ChunkCoord> childChunks;      // child-layer chunks to generate
     int                     childChunkSize  = 0;
     double                  childVoxelSizeM = 0.0;
@@ -52,6 +53,7 @@ struct DecompositionJob {
 
 struct DecompositionResult {
     chunkmath::VoxelCoord               macro;
+    std::string                         layerName;  // composite layer the macro belongs to (M10)
     std::vector<std::unique_ptr<Chunk>> chunks;
 };
 

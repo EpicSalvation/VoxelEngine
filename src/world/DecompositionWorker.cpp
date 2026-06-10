@@ -73,7 +73,8 @@ void DecompositionWorker::workerLoop() {
         }
 
         DecompositionResult result;
-        result.macro = job.macro;
+        result.macro     = job.macro;
+        result.layerName = job.layerName;
         result.chunks.reserve(job.childChunks.size());
         for (ChunkCoord c : job.childChunks) {
             if (job.recipe) {
