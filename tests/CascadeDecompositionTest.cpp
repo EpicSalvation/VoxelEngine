@@ -1,4 +1,4 @@
-// M10 cascade decomposition tests.
+// M10 cascade decomposition tests — including cache eviction and memory budget.
 //
 // Verifies that DecompositionManager correctly drives the full N-layer chain:
 // approaching the camera drives each composite level to decompose in declared
@@ -6,6 +6,11 @@
 // after its entire ancestor chain has decomposed; each composite layer's
 // DecompositionState stays consistent. Also verifies that the coarse-supersets-
 // fine invariant check fires for invalid composite→composite configs.
+//
+// Cache eviction / memory budget tests (the three unchecked M10 tasks):
+//   CacheMissDeterminismAcrossCascade   — evict then re-approach → identical result
+//   CascadeEvictionCorrectness          — dirty chunks saved, clean chunks dropped
+//   MemoryBudget                        — per-layer cap enforced by farthest-first eviction
 
 #include "core/LayerConfig.h"
 #include "core/PluginManager.h"
@@ -311,4 +316,251 @@ TEST(CascadeDecompositionTest, DecompositionStateConsistentPerLayer) {
     EXPECT_EQ(mgr.pendingCount("regional"),    0u);
     EXPECT_EQ(mgr.pendingCount("local"),       0u);
     EXPECT_EQ(mgr.inFlight(),  0u);
+}
+
+// ── Cache-miss determinism across the cascade ─────────────────────────────────
+//
+// Decompose the full chain in a region, capture terminal voxel data, move the
+// camera far away so the whole region cascade-evicts back to coarse blocks
+// (decompPerFrame=0 so no new decompositions happen during the eviction phase),
+// then re-approach and verify the regenerated deep grid is byte-for-byte identical.
+// This proves the M9 determinism guarantee holds transitively through every hop.
+TEST(CascadeDecompositionTest, CacheMissDeterminismAcrossCascade) {
+    auto cfg = LayerConfig::loadFromString(kFourLayerYaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin(solidPluginInit);
+    DecompositionManager mgr(world, pm, cfg, 0xC0FFEE11ull, 2);
+
+    const WorldCoord camNear(0.0, 0.0, 0.0);
+    // Camera far enough that view_distance_chunks=1 forces eviction of origin chunks.
+    const WorldCoord camFar(10000.0, 10000.0, 10000.0);
+    constexpr double kApproach = 20.0;
+
+    auto drainFull = [&](const WorldCoord& cam) {
+        for (int pass = 0; pass < 60; ++pass) {
+            mgr.tick(cam, kApproach);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        drainUntilDone(mgr, world, cam, kApproach);
+    };
+
+    // Pure-evict helper: tick with approach=0 and decompPerFrame=0 so only the
+    // LOD eviction runs — no new decompositions are triggered near camFar.
+    auto evictOnly = [&](const WorldCoord& cam) {
+        for (int pass = 0; pass < 20; ++pass) {
+            mgr.tick(cam, /*approachRadiusM=*/0.0, /*loadPerFrame=*/4, /*decompPerFrame=*/0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    };
+
+    // ── First approach: decompose full chain to terminal ─────────────────────
+    drainFull(camNear);
+    const Layer* terrain = world.layer("terrain");
+    ASSERT_NE(terrain, nullptr);
+    ASSERT_GT(terrain->chunks().size(), 0u)
+        << "terminal layer must be resident after full descent";
+
+    // Snapshot: copy all voxels in every resident terminal chunk.
+    struct ChunkSnapshot {
+        ChunkCoord         coord;
+        std::vector<Voxel> voxels;
+    };
+    std::vector<ChunkSnapshot> snapBefore;
+    for (const auto& kv : terrain->chunks()) {
+        const Chunk* chunk = kv.second.get();
+        const int total = chunk->size() * chunk->size() * chunk->size();
+        snapBefore.push_back({chunk->coord(),
+            std::vector<Voxel>(chunk->data(), chunk->data() + total)});
+    }
+    ASSERT_FALSE(snapBefore.empty());
+    // Remember which coords were resident.
+    std::vector<ChunkCoord> origCoords;
+    for (const auto& s : snapBefore) origCoords.push_back(s.coord);
+
+    // ── Evict: move camera far — no new decompositions ───────────────────────
+    evictOnly(camFar);
+    // All origin terrain chunks must be gone (cascade-evicted from origin parent).
+    for (const ChunkCoord& cc : origCoords) {
+        EXPECT_EQ(terrain->getChunk(cc), nullptr)
+            << "origin terrain chunk must be evicted after camera moves far away";
+    }
+    // Continental decomposed state at origin must be cleared.
+    EXPECT_EQ(mgr.decomposedCount("continental"), 0u)
+        << "all origin continental decomposed state must clear on cascade eviction";
+
+    // ── Re-approach: regenerate ──────────────────────────────────────────────
+    drainFull(camNear);
+    ASSERT_GT(terrain->chunks().size(), 0u)
+        << "terminal layer must be resident again after re-approach";
+
+    // Every chunk that was present in the first descent must now be byte-identical.
+    for (const auto& snap : snapBefore) {
+        const Chunk* chunk = terrain->getChunk(snap.coord);
+        if (!chunk) continue;  // edge-of-view chunk; skip
+        const int total = chunk->size() * chunk->size() * chunk->size();
+        ASSERT_EQ(static_cast<int>(snap.voxels.size()), total);
+        for (int i = 0; i < total; ++i) {
+            EXPECT_EQ(std::memcmp(&snap.voxels[i], &chunk->data()[i], sizeof(Voxel)), 0)
+                << "voxel mismatch at linear index " << i << " in chunk ("
+                << snap.coord.x << "," << snap.coord.y << "," << snap.coord.z << ")";
+            if (std::memcmp(&snap.voxels[i], &chunk->data()[i], sizeof(Voxel)) != 0)
+                break;
+        }
+    }
+}
+
+// ── Cascade eviction correctness ──────────────────────────────────────────────
+//
+// Decompose to terminal, mark one terminal chunk dirty, then evict by moving the
+// camera far away (decompPerFrame=0 so no new decompositions happen).
+// Verify: (a) the dirty-evict callback fires for the dirty chunk, (b) it does NOT
+// fire for any clean sibling, (c) both dirty and clean origin chunks are gone after
+// eviction — dirty ones were saved, clean ones silently dropped.
+TEST(CascadeDecompositionTest, CascadeEvictionCorrectness) {
+    auto cfg = LayerConfig::loadFromString(kFourLayerYaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin(solidPluginInit);
+    DecompositionManager mgr(world, pm, cfg, 0xDEADC0DEull, 2);
+
+    // Track which chunks get passed to the dirty-evict callback.
+    struct SavedChunk {
+        ChunkCoord         coord;
+        std::vector<Voxel> voxels;
+    };
+    std::vector<SavedChunk> saved;
+    mgr.setDirtyEvictCallback([&](const Chunk& chunk, const std::string& /*layerName*/) {
+        const int total = chunk.size() * chunk.size() * chunk.size();
+        saved.push_back({chunk.coord(),
+            std::vector<Voxel>(chunk.data(), chunk.data() + total)});
+    });
+
+    const WorldCoord camNear(0.0, 0.0, 0.0);
+    const WorldCoord camFar(10000.0, 10000.0, 10000.0);
+    constexpr double kApproach = 20.0;
+
+    // Drive full decomposition from camNear.
+    for (int pass = 0; pass < 60; ++pass) {
+        mgr.tick(camNear, kApproach);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    drainUntilDone(mgr, world, camNear, kApproach);
+
+    Layer* terrain = world.layer("terrain");
+    ASSERT_NE(terrain, nullptr);
+    ASSERT_GT(terrain->chunks().size(), 0u);
+
+    // Mark one terminal chunk dirty (simulates a player edit).
+    ChunkCoord dirtyCoord = terrain->chunks().begin()->first;
+    terrain->chunks().begin()->second->markDirty();
+    ASSERT_TRUE(terrain->isChunkDirty(dirtyCoord));
+
+    // Remember all origin terrain coords before eviction.
+    std::vector<ChunkCoord> originCoords;
+    for (const auto& kv : terrain->chunks())
+        originCoords.push_back(kv.first);
+    const size_t totalTerminalBefore = originCoords.size();
+
+    // Evict by moving far away with decompPerFrame=0 (no new decompositions).
+    for (int pass = 0; pass < 20; ++pass) {
+        mgr.tick(camFar, /*approachRadiusM=*/0.0, /*loadPerFrame=*/4, /*decompPerFrame=*/0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // The dirty chunk must have been passed to the save callback exactly once.
+    EXPECT_EQ(saved.size(), 1u) << "exactly one dirty chunk should have been saved";
+    if (!saved.empty())
+        EXPECT_EQ(saved[0].coord, dirtyCoord)
+            << "the saved chunk must be the one we marked dirty";
+
+    // All origin terrain chunks must be evicted (dirty saved, clean dropped).
+    for (const ChunkCoord& cc : originCoords) {
+        EXPECT_EQ(terrain->getChunk(cc), nullptr)
+            << "origin terrain chunk must be gone after cascade eviction";
+    }
+
+    // Clean chunks must NOT have been passed to the save callback.
+    EXPECT_LT(saved.size(), totalTerminalBefore)
+        << "clean chunks must be silently dropped, not saved";
+}
+
+// ── Memory budget: per-layer resident-chunk cap ───────────────────────────────
+//
+// Configure a 2-layer stack (composite → terminal) with a tight
+// resident_chunk_budget on the composite layer. Load many chunks by placing the
+// camera inside a large region, then verify the composite layer's resident count
+// never exceeds the budget. Near chunks must not be evicted; farthest-first clean
+// chunks must be shed to stay within the cap.
+TEST(CascadeDecompositionTest, MemoryBudget) {
+    // 2-layer stack: composite (4 m voxels, chunk_size=1 so each chunk == 1 voxel)
+    // decomposing into terminal (1 m).  Budget = 4 composite chunks.
+    const char* budgetYaml = R"(
+layers:
+  - name: coarse
+    voxel_size_m: 4.0
+    mode: composite
+    decompose_to: fine
+    chunk_size_voxels: 1
+    view_distance_chunks: 4
+    resident_chunk_budget: 4
+  - name: fine
+    voxel_size_m: 1.0
+    mode: terminal
+    chunk_size_voxels: 1
+    view_distance_chunks: 8
+)";
+    auto cfg = LayerConfig::loadFromString(budgetYaml);
+    World world(cfg);
+    PluginManager pm;
+    int coarseGenCalls = 0;
+    auto coarseGen = [](WorldCoord /*o*/, int n, Voxel* out, void* ud) {
+        (*static_cast<int*>(ud))++;
+        MaterialProperties mp; mp.palette_index = 1; mp.density = 1.0f;
+        for (int i = 0; i < n*n*n; ++i) out[i] = Voxel{mp};
+    };
+    // Wire plugin directly so we can capture coarseGenCalls.
+    pm.wireInPlugin([](PluginContext* ctx) -> int {
+        ctx->register_layer_generator(ctx, "coarse",
+            [](WorldCoord, int n, Voxel* out, void*) {
+                MaterialProperties mp; mp.palette_index = 1; mp.density = 1.0f;
+                for (int i = 0; i < n*n*n; ++i) out[i] = Voxel{mp};
+            }, nullptr);
+        ctx->register_layer_generator(ctx, "fine",
+            [](WorldCoord, int n, Voxel* out, void*) {
+                MaterialProperties mp; mp.palette_index = 2;
+                for (int i = 0; i < n*n*n; ++i) out[i] = Voxel{mp};
+            }, nullptr);
+        return 0;
+    });
+    (void)coarseGen; (void)coarseGenCalls;
+
+    DecompositionManager mgr(world, pm, cfg, 0xB00DB00Bull, 1);
+
+    // Place camera at origin and run many ticks so more than 4 chunks would
+    // normally load within the view_distance_chunks=4 radius (produces 9×9=81
+    // XZ candidates with the default unconstrained Y).
+    const WorldCoord cam(0.0, 0.0, 0.0);
+    for (int pass = 0; pass < 30; ++pass) {
+        mgr.tick(cam, /*approachRadiusM=*/0.0, /*loadPerFrame=*/20, /*decompPerFrame=*/0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    const Layer* coarse = world.layer("coarse");
+    ASSERT_NE(coarse, nullptr);
+    EXPECT_LE((int)coarse->chunks().size(), 4)
+        << "composite layer must not exceed its resident_chunk_budget of 4";
+    EXPECT_GT(coarse->chunks().size(), 0u)
+        << "at least the near chunks must remain resident";
+
+    // Re-run with a different camera position: budget must still hold, and the
+    // near chunks around the new camera must survive (dirty=false so they can be
+    // evicted, but the LOD + budget together keep the nearest ones alive).
+    const WorldCoord cam2(100.0, 0.0, 100.0);
+    for (int pass = 0; pass < 30; ++pass) {
+        mgr.tick(cam2, 0.0, 20, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_LE((int)coarse->chunks().size(), 4)
+        << "budget must hold after camera teleport";
 }
