@@ -124,6 +124,40 @@ LayerConfig LayerConfig::parseAndValidate(const std::string& yamlContent) {
         }
     }
 
+    // Coarse-supersets-fine invariant (M10, ARCHITECTURE §4):
+    // For every composite → child composite transition, the parent voxel size should
+    // be at least as large as the child layer's chunk world size. If it is smaller,
+    // one parent macro voxel decomposes into a child chunk that is *larger* than
+    // the parent voxel's subvolume; the extra child voxels outside that subvolume
+    // are left empty (fillChildChunk enforces this), but it means the child chunks
+    // from adjacent parent voxels overlap in chunk-coord space — the last write
+    // wins. This is logged as a warning so the config author can widen parent voxels
+    // or reduce child chunk sizes to avoid the overlap. The check is informational
+    // for composite→terminal transitions where the overlap is benign (terminal
+    // chunks are not further decomposed).
+    for (const auto& layer : config.layers_) {
+        if (layer.mode != VoxelMode::composite) continue;
+        const LayerDef* child = config.findLayer(*layer.decompose_to);
+        if (!child) continue;  // already caught above
+        const double childChunkWorldSize =
+            child->voxel_size_m * static_cast<double>(child->chunk_size_voxels);
+        if (child->mode == VoxelMode::composite &&
+                layer.voxel_size_m < childChunkWorldSize - 1e-9) {
+            throw std::runtime_error(
+                "Coarse-supersets-fine violation (ARCHITECTURE §4): composite layer '" +
+                layer.name + "' (voxel_size_m=" + std::to_string(layer.voxel_size_m) +
+                ") decomposes into composite layer '" + child->name +
+                "' whose chunk world size is " +
+                std::to_string(childChunkWorldSize) +
+                " m (child voxel_size_m=" + std::to_string(child->voxel_size_m) +
+                " × chunk_size_voxels=" + std::to_string(child->chunk_size_voxels) +
+                "). Parent voxel must be >= child chunk world size so each parent "
+                "macro voxel fills exactly one or more complete child chunks. "
+                "Reduce chunk_size_voxels for layer '" + child->name +
+                "' or increase voxel_size_m for layer '" + layer.name + "'.");
+        }
+    }
+
     return config;
 }
 

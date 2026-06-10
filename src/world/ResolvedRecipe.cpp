@@ -96,6 +96,17 @@ void fillChildChunk(Chunk& chunk, double voxelSizeM, const ResolvedRecipe& recip
                 const int64_t my = gv.y - macroChildMin.y;  // macro voxel's child
                 const int64_t mz = gv.z - macroChildMin.z;  // grid, in [0, ratio)
 
+                // Coarse-supersets-fine invariant (M10, ARCHITECTURE §4): child
+                // voxels outside the macro voxel's subvolume are left empty. This
+                // arises only when child_chunk_world_size > parent_voxel_size (a
+                // config with large chunk sizes relative to voxel sizes). Keeping
+                // these cells empty ensures no fine-layer voxel exists without a
+                // covering coarse-layer voxel.
+                if (mx < 0 || mx >= ratio || my < 0 || my >= ratio || mz < 0 || mz >= ratio) {
+                    chunk.at(x, y, z) = Voxel::empty();
+                    continue;
+                }
+
                 // Overlap order bottom -> side -> top (top wins), per §6.
                 const ResolvedDistribution* dist = &recipe.interior;
                 const std::vector<RecipeParam>* flat = &flatInterior;
