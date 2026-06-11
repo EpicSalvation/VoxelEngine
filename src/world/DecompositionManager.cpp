@@ -82,7 +82,43 @@ DecompositionJob DecompositionManager::makeJob(const CompositeLayerInfo& info,
 
     const Recipe* recipe = pm_.findRecipe(info.layer->name());
     if (recipe) {
-        job.recipe = std::make_shared<ResolvedRecipe>(resolveRecipe(*recipe, pm_));
+        // ── Build inherited param set (M10 cross-step seed cascade) ──────────
+        // Start with engine-reserved __-namespaced positional/material params
+        // describing this macro voxel (weakest — overridden by any ancestor key).
+        const WorldCoord macroCenter =
+            chunkmath::voxelCenter(macro, info.layer->voxelSizeM());
+        RecipeParamValue altParam;
+        altParam.key    = "__altitude";
+        altParam.kind   = RecipeParamKind::Number;
+        altParam.number = macroCenter.value.y;
+        RecipeParamValue matParam;
+        matParam.key    = "__parent_material";
+        matParam.kind   = RecipeParamKind::Number;
+        matParam.number = static_cast<double>(
+            info.layer->getVoxel(macroCenter).material.palette_index);
+
+        std::vector<RecipeParamValue> inherited{altParam, matParam};
+
+        // Merge ancestor recipe seed_parameters root → immediate parent.
+        // Each ancestor's params override the preceding (and the reserved base).
+        // The inherited set is a pure function of (world_seed, ancestor coords,
+        // recipes), so it re-derives identically after a clean evict (§4/§11).
+        const size_t ci = compositeIdx_.at(info.layer->name());
+        std::vector<int> ancestorIdxs;
+        for (int ai = composites_[ci].parentIdx; ai >= 0;
+             ai = composites_[ai].parentIdx)
+            ancestorIdxs.push_back(ai);
+        std::reverse(ancestorIdxs.begin(), ancestorIdxs.end());  // root first
+        for (int ai : ancestorIdxs) {
+            const Recipe* ancestorRecipe =
+                pm_.findRecipe(composites_[ai].layer->name());
+            if (ancestorRecipe)
+                inherited = mergeRecipeParams(
+                    inherited, ancestorRecipe->seed_parameters);
+        }
+
+        job.recipe = std::make_shared<ResolvedRecipe>(
+            resolveRecipe(*recipe, pm_, inherited));
         job.seed   = voxel_seed_mix(worldSeed_, chunkmath::VoxelCoordHash{}(macro));
         job.ratio  = info.ratio;
         job.macroChildMin = chunkmath::childVoxelMin(macro, info.ratio);

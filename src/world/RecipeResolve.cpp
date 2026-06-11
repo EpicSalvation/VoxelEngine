@@ -5,15 +5,14 @@
 #include "Recipe.h"
 #include "core/PluginManager.h"
 
-namespace {
-
-// Merge inherited (seed) params with per-entry params: start from the inherited
-// set, then apply the entry's params, which OVERRIDE on a key collision (§6).
-std::vector<RecipeParamValue> mergeParams(
-        const std::vector<RecipeParamValue>& inherited,
-        const std::vector<RecipeParamValue>& entry) {
-    std::vector<RecipeParamValue> out = inherited;
-    for (const RecipeParamValue& e : entry) {
+// Merge two param sets: `base` as the foundation, `override_params` winning on
+// key collision. Keys absent from `base` but present in `override_params` are
+// appended. Public so DecompositionManager::makeJob can build the inherited set.
+std::vector<RecipeParamValue> mergeRecipeParams(
+        const std::vector<RecipeParamValue>& base,
+        const std::vector<RecipeParamValue>& override_params) {
+    std::vector<RecipeParamValue> out = base;
+    for (const RecipeParamValue& e : override_params) {
         bool replaced = false;
         for (RecipeParamValue& o : out) {
             if (o.key == e.key) { o = e; replaced = true; break; }
@@ -22,6 +21,8 @@ std::vector<RecipeParamValue> mergeParams(
     }
     return out;
 }
+
+namespace {
 
 ResolvedDistribution resolveDistribution(
         const DistributionValue& d, const PluginManager& pm,
@@ -35,7 +36,7 @@ ResolvedDistribution resolveDistribution(
     const RegisteredNoise* nz = pm.resolveNoise(id);
     rd.noise     = nz ? nz->fn : nullptr;
     rd.noiseUser = nz ? nz->user_data : nullptr;
-    rd.noiseParams = mergeParams(seedParams, d.noise_params);
+    rd.noiseParams = mergeRecipeParams(seedParams, d.noise_params);
     return rd;
 }
 
@@ -51,8 +52,12 @@ ResolvedBoundary resolveBoundary(const BoundaryValue& b, const PluginManager& pm
 
 }  // namespace
 
-ResolvedRecipe resolveRecipe(const Recipe& recipe, const PluginManager& pm) {
-    const std::vector<RecipeParamValue>& seed = recipe.seed_parameters;
+ResolvedRecipe resolveRecipe(const Recipe& recipe, const PluginManager& pm,
+                             const std::vector<RecipeParamValue>& inherited) {
+    // This recipe's own seed_parameters override the inherited (ancestor) set on
+    // key collision; per-entry feature params win over both (§6 precedence).
+    const std::vector<RecipeParamValue> seed =
+        mergeRecipeParams(inherited, recipe.seed_parameters);
 
     ResolvedRecipe out;
     out.interior = resolveDistribution(recipe.interior, pm, seed);
@@ -68,8 +73,8 @@ ResolvedRecipe resolveRecipe(const Recipe& recipe, const PluginManager& pm) {
             rf.fn   = g->fn;
             rf.user = g->user_data;
         }
-        rf.params   = mergeParams(seed, f.params);
-        rf.seedSalt = static_cast<uint64_t>(i) + 1;  // 0 is reserved for the distribution salt domain
+        rf.params   = mergeRecipeParams(seed, f.params);
+        rf.seedSalt = static_cast<uint64_t>(i) + 1;  // 0 reserved for the distribution salt domain
         out.features.push_back(std::move(rf));
     }
     return out;
