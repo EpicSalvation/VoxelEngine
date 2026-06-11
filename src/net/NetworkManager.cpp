@@ -11,10 +11,12 @@
 #include "world/LODManager.h"
 #include "io/ChunkPersistence.h"
 
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 
 namespace net {
 
@@ -25,6 +27,14 @@ void NetworkManager::init(World& world, PluginManager& pm)
 {
     world_ = &world;
     pm_    = &pm;
+
+    // Wire plugin sends (ctx->send_network_message) through to this manager so
+    // a plugin-built MessageEnvelope reaches the transport (ARCHITECTURE §15).
+    pm.setNetworkSendHandler(
+        [](const MessageEnvelope* env, void* user) {
+            if (env) static_cast<NetworkManager*>(user)->sendNetworkMessage(*env);
+        },
+        this);
 
     // Install the default ENet transport if no custom one was set.
     if (!transport_) {
@@ -44,6 +54,7 @@ bool NetworkManager::startServer(uint16_t port, int max_peers)
     }
     role_          = SessionRole::Server;
     localPlayerId_ = kLocalPlayer;
+    joinComplete_  = false;
     std::cout << "[NetworkManager] server listening on port " << port << '\n';
     return true;
 }
@@ -64,6 +75,7 @@ bool NetworkManager::startHostPeer(uint16_t port, int max_peers)
     // required for the local player.
     role_          = SessionRole::HostPeer;
     localPlayerId_ = kLocalPlayer;
+    joinComplete_  = false;
     std::cout << "[NetworkManager] host-peer listening on port " << port << '\n';
     return true;
 }
@@ -81,6 +93,7 @@ bool NetworkManager::startClient(const std::string& host, uint16_t port)
     }
     role_          = SessionRole::Client;
     localPlayerId_ = kLocalPlayer;
+    joinComplete_  = false;
     std::cout << "[NetworkManager] client connecting to " << host << ':' << port << '\n';
     return true;
 }
@@ -88,11 +101,23 @@ bool NetworkManager::startClient(const std::string& host, uint16_t port)
 void NetworkManager::stop()
 {
     if (role_ == SessionRole::Offline) return;
-    // Drain and discard any queued packets, then shut down the transport.
     if (transport_) {
-        InboundPacket pkt;
-        while (transport_->poll(&pkt)) {}
+        // Politely disconnect every peer, then service the transport briefly so
+        // the disconnect notifications actually reach the wire — otherwise the
+        // remote side only finds out via its connection timeout.
+        for (auto& [peer_id, player_id] : peerToPlayer_) {
+            (void)player_id;
+            transport_->disconnect(peer_id);
+        }
         transport_->flush();
+        InboundPacket pkt;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(100);
+        while (std::chrono::steady_clock::now() < deadline) {
+            while (transport_->poll(&pkt)) {}
+            transport_->flush();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
     }
     role_ = SessionRole::Offline;
     peerToPlayer_.clear();
@@ -113,6 +138,7 @@ void NetworkManager::update(double /*dt*/)
 
     InboundPacket pkt;
     while (transport_->poll(&pkt)) {
+        ++packetsReceived_;
         handlePacket(pkt);
     }
     transport_->flush();
@@ -256,6 +282,8 @@ void NetworkManager::broadcastCommittedEdit(uint32_t seq, PlayerId source,
         // BroadcastAll: send == true (default, already set above).
         if (send) {
             transport_->send(peer_id, 0, buf.data(), buf.size(), Reliability::Reliable);
+        } else {
+            ++suppressedEdits_;
         }
     }
 }
@@ -435,6 +463,41 @@ void NetworkManager::handleNetMessage(const InboundPacket& pkt)
         return;
     }
 
+    if (role_ == SessionRole::Server || role_ == SessionRole::HostPeer) {
+        // Authority: trust the connection, not the payload — stamp the sender id
+        // from the peer the packet physically arrived on, so a peer cannot spoof
+        // another player and every node downstream sees a consistent id.
+        auto sender_it = peerToPlayer_.find(pkt.peer_id);
+        if (sender_it != peerToPlayer_.end()) p.sender_id = sender_it->second;
+
+        const auto rel = (static_cast<MessageReliability>(p.reliability) ==
+                          MessageReliability::Unreliable)
+                             ? Reliability::Unreliable : Reliability::Reliable;
+        const int  channel = (rel == Reliability::Unreliable) ? 1 : 0;
+
+        if (static_cast<MessageTarget>(p.target) == MessageTarget::Broadcast) {
+            // Relay so a client broadcast reaches every other peer — clients are
+            // only connected to the authority, never to each other.
+            auto relay = encode_net_message(p);
+            for (auto& [peer_id, player_id] : peerToPlayer_) {
+                (void)player_id;
+                if (peer_id == pkt.peer_id) continue;
+                if (transport_)
+                    transport_->send(peer_id, channel, relay.data(), relay.size(), rel);
+            }
+        } else if (static_cast<MessageTarget>(p.target) == MessageTarget::Player) {
+            // Route a player-addressed message on to its destination peer; it is
+            // not for the authority itself unless no such peer exists.
+            auto dest = playerToPeer_.find(p.target_player);
+            if (dest != playerToPeer_.end()) {
+                auto fwd = encode_net_message(p);
+                if (transport_)
+                    transport_->send(dest->second, channel, fwd.data(), fwd.size(), rel);
+                return;
+            }
+        }
+    }
+
     // Build a transient MessageEnvelope backed by the decoded strings.
     MessageEnvelope env;
     env.channel_id    = p.channel_id.c_str();
@@ -530,6 +593,14 @@ void NetworkManager::updatePeerPosition(PlayerId player_id, WorldCoord pos)
 const std::unordered_map<PlayerId, WorldCoord>& NetworkManager::playerPositions() const
 {
     return peerPositions_;
+}
+
+uint32_t NetworkManager::rttMs(PlayerId player_id) const
+{
+    if (!transport_) return 0;
+    auto it = playerToPeer_.find(player_id);
+    if (it == playerToPeer_.end()) return 0;
+    return transport_->roundTripTimeMs(it->second);
 }
 
 void NetworkManager::broadcastLocalPosition(WorldCoord pos)
@@ -648,6 +719,7 @@ void NetworkManager::handleDirtyChunkData(const InboundPacket& pkt)
 
 void NetworkManager::handleJoinComplete(const InboundPacket& /*pkt*/)
 {
+    joinComplete_ = true;
     std::cout << "[NetworkManager] join handshake complete\n";
     // Fire on_player_joined for the local player now that we have the world state.
     if (pm_) {

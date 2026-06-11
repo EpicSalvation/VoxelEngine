@@ -56,6 +56,10 @@ public:
 
     virtual bool isListening() const = 0;
     virtual bool isConnected()  const = 0;
+
+    // Smoothed round-trip time to a peer in milliseconds, 0 if unknown or the
+    // backend does not measure it. Default suits backends without RTT tracking.
+    virtual uint32_t roundTripTimeMs(PeerId /*peer_id*/) const { return 0; }
 };
 
 } // namespace net

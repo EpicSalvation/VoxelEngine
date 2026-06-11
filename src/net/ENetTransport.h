@@ -29,6 +29,7 @@ public:
     void flush() override;
     bool isListening() const override;
     bool isConnected()  const override;
+    uint32_t roundTripTimeMs(PeerId peer_id) const override;
 
 private:
     // PIMPL: ENet types are confined to the .cpp.
