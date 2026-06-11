@@ -86,6 +86,12 @@ PluginId PluginManager::loadPlugin(const std::string& path) {
         eraseOwned(exporters_,          id);
         eraseOwned(recipes_,            id);
         eraseOwned(noises_,             id);
+        eraseOwned(editReceivedHooks_,  id);
+        eraseOwned(playerJoinedHooks_,  id);
+        eraseOwned(playerLeftHooks_,    id);
+        eraseOwned(networkMessageHooks_,id);
+        eraseOwned(authorityPolicies_,  id);
+        eraseOwned(interestFilters_,    id);
         platformDlClose(handle);
         return kInvalidPluginId;
     }
@@ -135,6 +141,12 @@ PluginId PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
         eraseOwned(exporters_,          id);
         eraseOwned(recipes_,            id);
         eraseOwned(noises_,             id);
+        eraseOwned(editReceivedHooks_,  id);
+        eraseOwned(playerJoinedHooks_,  id);
+        eraseOwned(playerLeftHooks_,    id);
+        eraseOwned(networkMessageHooks_,id);
+        eraseOwned(authorityPolicies_,  id);
+        eraseOwned(interestFilters_,    id);
         return kInvalidPluginId;
     }
     loaded_.push_back({id, nullptr});
@@ -160,6 +172,12 @@ bool PluginManager::unloadPlugin(PluginId id) {
     eraseOwned(exporters_,            id);
     eraseOwned(recipes_,              id);
     eraseOwned(noises_,               id);
+    eraseOwned(editReceivedHooks_,    id);
+    eraseOwned(playerJoinedHooks_,    id);
+    eraseOwned(playerLeftHooks_,      id);
+    eraseOwned(networkMessageHooks_,  id);
+    eraseOwned(authorityPolicies_,    id);
+    eraseOwned(interestFilters_,      id);
 
     void* handle = it->handle;
     loaded_.erase(it);
@@ -320,6 +338,51 @@ PluginContext PluginManager::buildContext() {
     ctx.register_exporter = [](PluginContext* c, const char* ext, ExporterFn fn, void* ud) {
         auto* mgr = static_cast<PluginManager*>(c->engine_data);
         mgr->exporters_.push_back({ext, fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.register_on_edit_received = [](PluginContext* c, OnEditReceivedFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!mgr->editReceivedHooks_.empty())
+            std::cerr << "[PluginManager] Warning: on_edit_received already registered; overwriting.\n";
+        mgr->editReceivedHooks_.clear();
+        mgr->editReceivedHooks_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.register_on_player_joined = [](PluginContext* c, OnPlayerJoinedFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->playerJoinedHooks_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.register_on_player_left = [](PluginContext* c, OnPlayerLeftFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->playerLeftHooks_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.register_on_network_message = [](PluginContext* c, const char* prefix,
+                                          OnNetworkMessageFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->networkMessageHooks_.push_back({prefix ? prefix : "", fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.send_network_message = [](PluginContext* /*c*/, const MessageEnvelope* /*envelope*/) {
+        // Routing is handled by NetworkManager (M11); PluginManager stores the registry
+        // only. NetworkManager wires this pointer to its own send implementation on init.
+    };
+
+    ctx.register_authority_policy = [](PluginContext* c, AuthorityPolicyFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!mgr->authorityPolicies_.empty())
+            std::cerr << "[PluginManager] Warning: authority_policy already registered; overwriting.\n";
+        mgr->authorityPolicies_.clear();
+        mgr->authorityPolicies_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.register_interest_filter = [](PluginContext* c, InterestFilterFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!mgr->interestFilters_.empty())
+            std::cerr << "[PluginManager] Warning: interest_filter already registered; overwriting.\n";
+        mgr->interestFilters_.clear();
+        mgr->interestFilters_.push_back({fn, ud, mgr->currentOwner_});
     };
 
     return ctx;
