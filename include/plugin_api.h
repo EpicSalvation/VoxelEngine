@@ -26,6 +26,9 @@ struct MaterialProperties {
     float   porosity             = 0.0f;  // 0.0–1.0; fraction permeable to fluid
     float   hardness             = 0.0f;  // relative resistance to removal/destruction
     uint8_t palette_index        = 0;     // index into the 256-entry visual palette (.vox compat)
+    uint8_t _pad[3]              = {};    // explicit padding — keeps memcmp-based determinism checks
+                                          // valid across GCC optimization levels. Must stay zero;
+                                          // never read by engine code.
 };
 
 // Forward declaration — full definition in src/world/Voxel.h
