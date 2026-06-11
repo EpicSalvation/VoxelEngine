@@ -9,6 +9,7 @@
 
 class PluginManager;
 class World;
+namespace net { class NetworkManager; }
 
 class Engine {
 public:
@@ -48,11 +49,17 @@ public:
     void   setTargetFrameRate(int fps) { desiredFrameRate = fps; }
     int    getTargetFrameRate() const { return desiredFrameRate; }
 
+    // Attach a NetworkManager to receive per-tick updates. Null (the default)
+    // disables networking; existing single-player demos are unaffected.
+    void                  setNetworkManager(net::NetworkManager* nm) { nm_ = nm; }
+    net::NetworkManager*  networkManager() const { return nm_; }
+
 private:
     void gameLoop();
 
-    PluginManager* pm_    = nullptr;
-    World*         world_ = nullptr;
+    PluginManager*       pm_    = nullptr;
+    World*               world_ = nullptr;
+    net::NetworkManager* nm_    = nullptr;
 
     std::atomic<bool>  isRunning      = false;
     std::thread        gameLoopThread;

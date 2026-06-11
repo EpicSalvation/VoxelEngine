@@ -5,6 +5,7 @@
 #include "io/VoxExporter.h"
 #include "world/Layer.h"
 #include "world/World.h"
+#include "net/NetworkManager.h"
 
 #include <iostream>
 
@@ -126,8 +127,10 @@ void Engine::stop()
 
 void Engine::update(double dt)
 {
-    (void)dt;
-    std::cout << "Updating game logic...\n";
+    // Network update runs after world update and before render (ARCHITECTURE §15).
+    if (nm_ && nm_->isActive()) {
+        nm_->update(dt);
+    }
 }
 
 void Engine::gameLoop() {
