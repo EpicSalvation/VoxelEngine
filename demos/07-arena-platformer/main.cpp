@@ -458,7 +458,7 @@ layers:
         const Voxel oldVox = world.getVoxel(center);
         if (!world.setVoxel(center, newVox)) return;
         for (const auto& h : pluginManager.voxelModifiedHooks())
-            if (h.fn) h.fn(center, &oldVox, &newVox, h.user_data);
+            if (h.fn) h.fn(center, &oldVox, &newVox, kLocalPlayer, h.user_data);
         remeshDetailChunk(chunkmath::voxelToChunkLocal(vc, detail->chunkSizeVoxels()).chunk);
     };
 

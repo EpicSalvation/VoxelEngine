@@ -62,6 +62,43 @@ struct RegisteredVoxelModifiedHook {
     PluginId          owner;
 };
 
+struct RegisteredEditReceivedHook {
+    OnEditReceivedFn fn;
+    void*            user_data;
+    PluginId         owner;
+};
+
+struct RegisteredPlayerJoinedHook {
+    OnPlayerJoinedFn fn;
+    void*            user_data;
+    PluginId         owner;
+};
+
+struct RegisteredPlayerLeftHook {
+    OnPlayerLeftFn fn;
+    void*          user_data;
+    PluginId       owner;
+};
+
+struct RegisteredNetworkMessageHook {
+    std::string        channel_prefix;
+    OnNetworkMessageFn fn;
+    void*              user_data;
+    PluginId           owner;
+};
+
+struct RegisteredAuthorityPolicy {
+    AuthorityPolicyFn fn;
+    void*             user_data;
+    PluginId          owner;
+};
+
+struct RegisteredInterestFilter {
+    InterestFilterFn fn;
+    void*            user_data;
+    PluginId         owner;
+};
+
 struct RegisteredStructuralEventHook {
     OnStructuralEventFn fn;
     void*               user_data;
@@ -145,6 +182,12 @@ public:
     const std::vector<RegisteredExporter>&            exporters()            const { return exporters_; }
     const std::vector<RegisteredRecipe>&              recipes()              const { return recipes_; }
     const std::vector<RegisteredNoise>&               noises()               const { return noises_; }
+    const std::vector<RegisteredEditReceivedHook>&    editReceivedHooks()    const { return editReceivedHooks_; }
+    const std::vector<RegisteredPlayerJoinedHook>&    playerJoinedHooks()    const { return playerJoinedHooks_; }
+    const std::vector<RegisteredPlayerLeftHook>&      playerLeftHooks()      const { return playerLeftHooks_; }
+    const std::vector<RegisteredNetworkMessageHook>&  networkMessageHooks()  const { return networkMessageHooks_; }
+    const std::vector<RegisteredAuthorityPolicy>&     authorityPolicies()    const { return authorityPolicies_; }
+    const std::vector<RegisteredInterestFilter>&      interestFilters()      const { return interestFilters_; }
 
     // Keyed material-property lookup. These centralize the registry search that
     // importers, the build menu, and other tooling previously hand-rolled. They
@@ -195,6 +238,12 @@ private:
     std::vector<RegisteredExporter>            exporters_;
     std::vector<RegisteredRecipe>              recipes_;
     std::vector<RegisteredNoise>               noises_;
+    std::vector<RegisteredEditReceivedHook>    editReceivedHooks_;
+    std::vector<RegisteredPlayerJoinedHook>    playerJoinedHooks_;
+    std::vector<RegisteredPlayerLeftHook>      playerLeftHooks_;
+    std::vector<RegisteredNetworkMessageHook>  networkMessageHooks_;
+    std::vector<RegisteredAuthorityPolicy>     authorityPolicies_;
+    std::vector<RegisteredInterestFilter>      interestFilters_;
 
     // A plugin that has been loaded and whose registrations are live.
     struct LoadedPlugin {

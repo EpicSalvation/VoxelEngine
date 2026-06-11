@@ -128,11 +128,61 @@ using NoiseFn = float(*)(
     void*              user_data
 );
 
+// ---------------------------------------------------------------------------
+// Networking types (M11, docs/ARCHITECTURE.md §15)
+//
+// All types cross the plugin ABI as POD — no std:: containers, no ENet types.
+// The engine deep-copies payload data on send.
+// ---------------------------------------------------------------------------
+
+// Opaque player identifier. kLocalPlayer (0) always refers to the local client.
+using PlayerId = uint32_t;
+static constexpr PlayerId kLocalPlayer = 0;
+
+// Message routing target.
+enum class MessageTarget : uint8_t {
+    Broadcast,   // deliver to all connected peers
+    Server,      // deliver to the authority node only
+    Player,      // deliver to the specific peer in MessageEnvelope::target_player
+};
+
+// Reliability class used when sending a network message.
+enum class MessageReliability : uint8_t {
+    Reliable,
+    Unreliable,
+};
+
+// POD envelope passed to on_network_message and send_network_message.
+// channel_id is a null-terminated string identifying the logical channel.
+// The engine never inspects the payload — routing is by envelope fields only.
+struct MessageEnvelope {
+    const char*        channel_id    = nullptr;
+    PlayerId           sender_id     = 0;
+    PlayerId           target_player = 0;      // used when target == Player
+    MessageTarget      target        = MessageTarget::Broadcast;
+    MessageReliability reliability   = MessageReliability::Reliable;
+    const void*        payload       = nullptr;
+    size_t             payload_size  = 0;
+};
+
+// Resolution returned by an on_edit_received handler. Transform means the
+// authority commits out_voxel (written by the handler) instead of the proposed
+// voxel. Apply is the default built-in (last-write-wins).
+enum class EditResolution : uint8_t {
+    Apply,
+    Discard,
+    Transform,  // commit *out_voxel instead of the proposed voxel
+};
+
 // Called when a terminal-layer voxel is modified by the player or simulation.
+// source is kLocalPlayer for local edits and the remote peer's id for replicated
+// ones. Single-player plugins that ignore source continue to work without change —
+// the field is appended at the end so existing registration call sites are unaffected.
 using OnVoxelModifiedFn = void(*)(
     WorldCoord   position,
     const Voxel* old_voxel,
     const Voxel* new_voxel,
+    PlayerId     source,
     void*        user_data
 );
 
@@ -141,6 +191,60 @@ using OnStructuralEventFn = void(*)(
     WorldCoord  position,
     float       structural_strength_remaining,
     void*       user_data
+);
+
+// Called at the authority node before an edit is committed. The handler returns
+// Apply, Discard, or Transform. On Transform it writes the substituted voxel to
+// *out_voxel; on Apply/Discard out_voxel is ignored. The default built-in returns
+// Apply (last-write-wins). Must be called from the single edit-application choke
+// point (NetworkManager::applyEdit) so every edit, local or remote, passes through.
+using OnEditReceivedFn = EditResolution(*)(
+    PlayerId      proposing_player,
+    WorldCoord    position,
+    const Voxel*  proposed_voxel,
+    Voxel*        out_voxel,   // written when returning Transform
+    void*         user_data
+);
+
+// Called after the join handshake completes (joined) or after a peer disconnects
+// or times out (left).
+using OnPlayerJoinedFn = void(*)(
+    PlayerId   player_id,
+    WorldCoord initial_position,
+    void*      user_data
+);
+
+using OnPlayerLeftFn = void(*)(
+    PlayerId  player_id,
+    void*     user_data
+);
+
+// Called when a MessageEnvelope addressed to this plugin's registered channel
+// prefix arrives. The handler must not retain the pointer beyond the call —
+// the engine owns the buffer.
+using OnNetworkMessageFn = void(*)(
+    const MessageEnvelope* envelope,
+    void*                  user_data
+);
+
+// Called at the authority for each (peer, edit) pair before the built-in
+// broadcast or radius check. Returns true to send, false to suppress. When
+// registered this overrides the built-in interest mode entirely.
+using InterestFilterFn = bool(*)(
+    PlayerId   target_peer,
+    WorldCoord edit_position,
+    void*      user_data
+);
+
+// Called by NetworkManager to validate edit intents before they reach
+// on_edit_received. Returns true to forward, false to reject without notifying
+// the authority. When no policy is registered the engine defaults to built-in
+// server authority (all edits forwarded).
+using AuthorityPolicyFn = bool(*)(
+    PlayerId     peer_id,
+    WorldCoord   position,
+    const Voxel* proposed_voxel,
+    void*        user_data
 );
 
 // Called when a layer chunk is created (loaded or generated) or evicted from cache.
@@ -307,6 +411,69 @@ struct PluginContext {
         const char*    extension,
         ExporterFn     fn,
         void*          user_data
+    );
+
+    // -----------------------------------------------------------------------
+    // Networking hooks (M11, docs/ARCHITECTURE.md §15)
+    // -----------------------------------------------------------------------
+
+    // Register a handler that fires before any edit is committed at the
+    // authority. At most one handler is active; re-registering overwrites the
+    // previous one (with a logged warning). Pass nullptr to restore the default
+    // built-in Apply (last-write-wins) behaviour.
+    void (*register_on_edit_received)(
+        PluginContext*   ctx,
+        OnEditReceivedFn fn,
+        void*            user_data
+    );
+
+    void (*register_on_player_joined)(
+        PluginContext*   ctx,
+        OnPlayerJoinedFn fn,
+        void*            user_data
+    );
+
+    void (*register_on_player_left)(
+        PluginContext* ctx,
+        OnPlayerLeftFn fn,
+        void*          user_data
+    );
+
+    // Register a handler for inbound messages whose channel_id begins with
+    // channel_prefix. Multiple handlers may be registered; all matching ones
+    // are called in registration order.
+    void (*register_on_network_message)(
+        PluginContext*      ctx,
+        const char*          channel_prefix,
+        OnNetworkMessageFn   fn,
+        void*                user_data
+    );
+
+    // Send a message to the target(s) described by the envelope. The engine
+    // deep-copies the payload; the caller need not keep the buffer alive after
+    // the call returns.
+    void (*send_network_message)(
+        PluginContext*         ctx,
+        const MessageEnvelope* envelope
+    );
+
+    // Register an authority-policy validator. Called for each incoming edit
+    // intent before it reaches on_edit_received. Returning false rejects the
+    // edit without informing the authority. Only one policy may be active;
+    // re-registering overwrites with a logged warning.
+    void (*register_authority_policy)(
+        PluginContext*    ctx,
+        AuthorityPolicyFn fn,
+        void*             user_data
+    );
+
+    // Register an interest filter that overrides the built-in broadcast /
+    // streaming-radius mode. Only one filter may be active; re-registering
+    // overwrites with a logged warning.
+    void (*register_interest_filter)(
+        PluginContext*   ctx,
+        InterestFilterFn fn,
+        void*            user_data
     );
 };
 
