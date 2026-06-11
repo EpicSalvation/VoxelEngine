@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "plugin_api.h"  // WorldCoord, Voxel forward, PlayerId
 
@@ -12,6 +13,10 @@
 // Note: Voxel and WorldCoord are already declared via plugin_api.h above.
 class World;
 class PluginManager;
+class LayerConfig;
+class LODManager;
+
+namespace persistence { class WorldSave; }
 
 namespace net {
 
@@ -90,6 +95,20 @@ public:
     // send_network_message plugin-context function.
     void sendNetworkMessage(const MessageEnvelope& env);
 
+    // World state accessors for the join handshake.
+    void setWorldSave(persistence::WorldSave* ws);
+    void setWorldSeed(uint64_t seed);
+    void setLayerConfig(const LayerConfig* config);
+
+    // Streaming-radius interest management.
+    enum class InterestMode { BroadcastAll, StreamingRadius };
+    void setInterestMode(InterestMode mode);
+    void updatePeerPosition(PlayerId player_id, WorldCoord pos);
+
+    // Player position replication.
+    const std::unordered_map<PlayerId, WorldCoord>& playerPositions() const;
+    void broadcastLocalPosition(WorldCoord pos);
+
 private:
     void handlePacket(InboundPacket& pkt);
     void onPeerConnected(PeerId peer_id);
@@ -108,18 +127,41 @@ private:
                                 WorldCoord pos, const Voxel& voxel,
                                 PeerId exclude_peer = 0);
 
+    // Send join-handshake packets to a newly connected peer (Server/HostPeer only).
+    void sendHandshakeToPeer(PeerId peer_id);
+    // Re-send dirty chunks to a peer (server resync response).
+    void sendDirtyChunksToPeer(PeerId peer_id);
+    void handleJoinResponse(const InboundPacket& pkt);
+    void handleDirtyChunkData(const InboundPacket& pkt);
+    void handleJoinComplete(const InboundPacket& pkt);
+    void handleResyncRequest(PeerId sender_peer, const InboundPacket& pkt);
+
     std::unique_ptr<ITransport> transport_;
-    World*         world_         = nullptr;
-    PluginManager* pm_            = nullptr;
-    SessionRole    role_          = SessionRole::Offline;
-    PlayerId       localPlayerId_ = kLocalPlayer;
-    PlayerId       nextPlayerId_  = 1;
-    uint32_t       nextSeqNo_     = 1;
+    World*                      world_         = nullptr;
+    PluginManager*              pm_            = nullptr;
+    persistence::WorldSave*     worldSave_     = nullptr;
+    const LayerConfig*          layerConfig_   = nullptr;
+    uint64_t                    worldSeed_     = 0;
+    SessionRole                 role_          = SessionRole::Offline;
+    PlayerId                    localPlayerId_ = kLocalPlayer;
+    PlayerId                    nextPlayerId_  = 1;
+    uint32_t                    nextSeqNo_     = 1;
+    uint32_t                    lastAppliedSeq_ = 0;
+
+    InterestMode interestMode_ = InterestMode::BroadcastAll;
 
     // peer_id (transport-level) → player_id (game-level)
     std::unordered_map<PeerId, PlayerId> peerToPlayer_;
     // player_id (game-level) → peer_id (transport-level)
     std::unordered_map<PlayerId, PeerId> playerToPeer_;
+    // last known WorldCoord per player (updated by player_position messages)
+    std::unordered_map<PlayerId, WorldCoord> peerPositions_;
+
+    // Received LayerConfig bytes during join handshake (client-side).
+    std::vector<uint8_t> receivedConfigBytes_;
+
+    // LODManager for streaming-radius interest filtering (lazily created).
+    std::unique_ptr<LODManager> lodManager_;
 };
 
 } // namespace net

@@ -171,6 +171,61 @@ std::unique_ptr<Chunk> decodeChunkFile(const uint8_t* data, size_t size,
     return chunk;
 }
 
+// Decode without checking identity — used when receiving chunks over the network
+// where the client may not yet know the exact WorldIdentity.
+std::unique_ptr<Chunk> decodeChunkFilePermissive(const uint8_t* data, size_t size)
+{
+    Reader r{data, size};
+
+    char magic[4];
+    if (!r.take(magic, 4) || std::memcmp(magic, kMagic, 4) != 0) return nullptr;
+    if (r.u32() != kVersion) return nullptr;
+
+    const double voxelSize  = r.f64();
+    const int    chunkSize  = static_cast<int>(r.u32());
+    if (!r.ok || chunkSize <= 0) return nullptr;
+    (void)voxelSize;  // not validated here
+
+    ChunkCoord coord{r.i32(), r.i32(), r.i32()};
+    if (!r.ok) return nullptr;
+
+    const uint32_t paletteCount = r.u32();
+    if (!r.ok || paletteCount == 0) return nullptr;
+    std::vector<MaterialProperties> palette(paletteCount);
+    for (uint32_t i = 0; i < paletteCount; ++i) {
+        MaterialProperties& m = palette[i];
+        m.density              = r.f32();
+        m.structural_strength  = r.f32();
+        m.thermal_conductivity = r.f32();
+        m.porosity             = r.f32();
+        m.hardness             = r.f32();
+        m.palette_index        = r.u8();
+    }
+    if (!r.ok) return nullptr;
+
+    const size_t   expected = static_cast<size_t>(chunkSize) * chunkSize * chunkSize;
+    const uint32_t runCount = r.u32();
+    if (!r.ok) return nullptr;
+
+    WorldCoord origin = chunkmath::chunkOrigin(coord, voxelSize, chunkSize);
+    auto chunk = std::make_unique<Chunk>(coord, chunkSize, origin);
+    Voxel* out = chunk->data();
+
+    size_t filled = 0;
+    for (uint32_t i = 0; i < runCount; ++i) {
+        const uint32_t length = r.u32();
+        const uint32_t idx    = r.u32();
+        if (!r.ok || idx >= paletteCount || length == 0) return nullptr;
+        if (filled + length > expected) return nullptr;
+        Voxel v;
+        v.material = palette[idx];
+        for (uint32_t k = 0; k < length; ++k) out[filled++] = v;
+    }
+    if (filled != expected) return nullptr;
+
+    return chunk;
+}
+
 // ── WorldSave ────────────────────────────────────────────────────────────────
 
 WorldSave::WorldSave(std::string dir, WorldIdentity id)
@@ -227,6 +282,35 @@ std::unique_ptr<Chunk> WorldSave::tryLoadChunk(ChunkCoord coord) const {
     std::vector<uint8_t> bytes(static_cast<size_t>(size));
     if (!in.read(reinterpret_cast<char*>(bytes.data()), size)) return nullptr;
     return decodeChunkFile(bytes.data(), bytes.size(), id_);
+}
+
+std::vector<uint8_t> WorldSave::loadRawChunkBytes(ChunkCoord coord) const {
+    const std::string path = filePath(coord);
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in) return {};
+    const std::streamsize size = in.tellg();
+    if (size <= 0) return {};
+    in.seekg(0);
+    std::vector<uint8_t> bytes(static_cast<size_t>(size));
+    if (!in.read(reinterpret_cast<char*>(bytes.data()), size)) return {};
+    return bytes;
+}
+
+std::vector<ChunkCoord> WorldSave::listSavedChunks() const {
+    std::vector<ChunkCoord> result;
+    std::error_code ec;
+    for (auto& entry : std::filesystem::directory_iterator(dir_, ec)) {
+        if (ec) break;
+        auto fn = entry.path().filename().string();
+        // format: c_<x>_<y>_<z>.vxc
+        if (fn.size() < 6 || fn.substr(0, 2) != "c_" || fn.substr(fn.size() - 4) != ".vxc")
+            continue;
+        auto stem = fn.substr(2, fn.size() - 6); // strip "c_" and ".vxc"
+        int x, y, z;
+        if (sscanf(stem.c_str(), "%d_%d_%d", &x, &y, &z) == 3)
+            result.push_back({x, y, z});
+    }
+    return result;
 }
 
 }  // namespace persistence

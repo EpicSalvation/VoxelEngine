@@ -46,6 +46,10 @@ std::vector<uint8_t> encodeChunkFile(const Chunk& chunk, const WorldIdentity& id
 std::unique_ptr<Chunk> decodeChunkFile(const uint8_t* data, size_t size,
                                        const WorldIdentity& id);
 
+// Like decodeChunkFile but skips the identity check. Used by the network
+// handshake path where the client accepts any identity embedded in the file.
+std::unique_ptr<Chunk> decodeChunkFilePermissive(const uint8_t* data, size_t size);
+
 // Manages a directory of saved chunks for one world. One file per ChunkCoord.
 class WorldSave {
 public:
@@ -66,6 +70,15 @@ public:
     std::unique_ptr<Chunk> tryLoadChunk(ChunkCoord coord) const;
 
     const std::string& directory() const { return dir_; }
+
+    // List all chunk coordinates that have a saved file in this directory.
+    std::vector<ChunkCoord> listSavedChunks() const;
+
+    // Read raw file bytes for a saved chunk without decoding. Returns empty if not found.
+    std::vector<uint8_t> loadRawChunkBytes(ChunkCoord coord) const;
+
+    // Expose the world identity this save was created with.
+    const WorldIdentity& identity() const { return id_; }
 
 private:
     std::string filePath(ChunkCoord coord) const;
