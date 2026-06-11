@@ -22,6 +22,7 @@ If you are an AI agent: read this document before modifying any subsystem. The c
 12. [Build, Packaging, and the Engine Library Boundary](#12-build-packaging-and-the-engine-library-boundary)
 13. [Subsystem Dependency Map](#13-subsystem-dependency-map)
 14. [Guidance for AI Coding Agents](#14-guidance-for-ai-coding-agents)
+15. [Networking and Multiplayer](#15-networking-and-multiplayer)
 
 ---
 
@@ -594,6 +595,15 @@ PhysicsSystem
 IO (VoxImporter/VoxExporter)
     └── depends on: World (write voxels), LayerConfig (layer assignment)
     └── must NOT depend on: Renderer, PhysicsSystem
+
+NetworkManager (src/net/)
+    └── depends on: World (apply incoming edits via setVoxel), PluginManager (fire network hooks),
+                    ChunkPersistence/WorldSave (serve dirty chunks on join), ENetTransport
+    └── must NOT depend on: Renderer, PhysicsSystem, DecompositionWorker
+
+ENetTransport (src/net/)
+    └── depends on: ENet (transport library only)
+    └── must NOT depend on: any engine subsystem (it is a pure I/O adapter)
 ```
 
 Keep these dependency boundaries. A subsystem that reaches outside its declared dependencies creates hidden coupling that makes isolated testing and agent-assisted development much harder.
@@ -638,3 +648,103 @@ This section is written directly for AI coding agents working on this codebase.
 Proceed independently when: adding a new plugin that registers via `plugin_api.h`, adding a new material definition, writing a new feature generator, adding tests.
 
 Raise as a design question when: a new feature requires a dependency not in the Section 13 map, a new feature requires modifying `plugin_api.h`, a new feature requires changing the `WorldCoord` type or the floating-origin pipeline, a new layer mode beyond the three defined ones seems necessary.
+
+---
+
+## 15. Networking and Multiplayer
+
+**Files (planned):** `src/net/NetworkManager.{h,cpp}`, `src/net/ENetTransport.{h,cpp}`, `include/plugin_api.h` (network hook additions)
+
+### Design Decisions (M11)
+
+This section records the design decisions made for M11. Implementation details will be added as the milestone is built out.
+
+### Authority Model
+
+The engine supports two authority models, both implemented as plugin policies rather than hard-coded behavior:
+
+- **Authoritative server** — one dedicated process owns world truth; clients send edit intents, the server validates and broadcasts the result.
+- **Host-as-authority P2P** — one peer acts as the authority node; structurally identical to the server model but without a separate process.
+
+**Authority is a policy, not an engine assumption.** The engine asks "who validates this edit?" and defers to whatever is registered. This means a developer can implement a third model (e.g. CRDT-based true P2P with no single authority) as a plugin without modifying the engine core — they implement their own conflict-resolution logic in the `on_edit_received` hook and manage peer consensus themselves. The two supported models are two implementations of the same interface, not special cases baked into the sync path.
+
+### Transport Library
+
+**ENet** (MIT license) is the default built-in transport. It provides reliable and unreliable UDP channels, has no external dependencies, and integrates trivially via CMake subdirectory. It is the right default for the hobbyist and indie audience this engine targets.
+
+The transport sits behind the plugin interface. A developer who needs Steam NAT traversal (GameNetworkingSockets), encryption (yojimbo + libsodium), or any other transport can register a replacement transport plugin. The engine ships with ENet as a zero-configuration starting point and does not trap more capable use cases behind it.
+
+### Sync Strategy
+
+The engine synchronizes only what cannot be re-derived:
+
+- **Shared on join:** `LayerConfig` and the world seed. The joining client re-derives the entire clean world from these two inputs. Only dirty data travels the wire.
+- **Ongoing:** player edits (dirty voxel writes) and player positions. Never generated chunks — the deterministic decomposition guarantee (§4) means every client re-derives clean child grids identically from the shared seed and its own approach triggers.
+- **On join, dirty chunks:** the server sends the joining client all dirty chunk data for chunks within the client's current interest region. The client overlays these onto its locally re-derived world.
+
+Decomposition events do not need to be synchronized. A remote player triggering decomposition of a macro voxel has no effect on other clients' visual state — each client decomposes on its own approach trigger and gets the identical clean child grid from the seed. If a remote edit lands inside a region a client has not yet decomposed, the edit's `VoxelCoord` is in the child layer; when the client eventually decomposes that macro voxel it loads the dirty chunk (which carries the edit) rather than regenerating it clean — the M5/M7b persistence path handles this transparently.
+
+### Conflict Resolution
+
+**Default: last-write-wins at the authority node.** The authority applies edits in arrival order and broadcasts the committed result. A client whose edit lost receives a correction. This is stateless, has no per-voxel bookkeeping overhead, and is unnoticeable in practice for the single-hosted-session games this engine targets.
+
+**Plugin escape hatch:** the `on_edit_received` hook fires at the authority node *before* an edit is committed. The default implementation returns "apply and broadcast." A developer who needs CRDT, operational transforms, or any other policy registers their own handler. The engine defers to it entirely.
+
+**The authority's edit-application path must be a single choke point.** All edits — regardless of origin — become real through one code path that calls `on_edit_received` before committing. If edits can bypass this path, the escape hatch does not work. This is the same rule as `on_voxel_modified`: one place where voxels change, one hook call there.
+
+### Interest Management
+
+**Default: broadcast all edits to all clients.** A single voxel edit is approximately 64 bytes on the wire (3× int64 coord + material properties + layer id + sequence number). At 10 players all actively editing simultaneously, broadcast traffic per client is under 1 KB/sec — negligible. For the vast majority of indie and hobbyist games, broadcasting eliminates the complexity of interest management entirely.
+
+**Pre-wired option: mirror the local streaming radius.** Each layer's `view_distance_chunks` (already computed by `LODManager`) can be used as the network interest boundary: the server only sends a client edits that fall within chunks it has streamed. No new concept or configuration is required. This is the appropriate choice when player count or world size grows to where broadcast bandwidth is a concern.
+
+**Plugin escape hatch:** an interest-filter plugin can implement arbitrary interest management — per-layer radii tighter than the render distance, faction visibility, line-of-sight, custom spatial queries — by registering a handler the server calls to decide whether a given client should receive a given edit. The engine provides no default geometry for this; the plugin owns the entire decision.
+
+### World-Join Handshake
+
+When a client connects mid-session the server sends, in order:
+
+1. `LayerConfig` + world seed — the client re-derives the entire clean world locally.
+2. Dirty chunk data for all chunks within the joining client's current interest region — overlaid on top of the re-derived world.
+
+Nothing else is sent on join. The client does not receive generated chunks (re-derived locally), decomposition state (rebuilt on approach), or out-of-interest dirty chunks (streamed as the client moves).
+
+### Player Messaging
+
+The engine provides a thin typed message envelope usable by any plugin:
+
+```cpp
+struct MessageEnvelope {
+    const char*  channel_id;   // namespaced by plugin, e.g. "myplugin.trade_offer"
+    PlayerId     sender_id;
+    MessageTarget target;      // Broadcast | Server | specific PlayerId
+    Reliability  reliability;  // Reliable | Unreliable
+    const void*  payload;      // opaque; plugin owns the schema
+    size_t       payload_size;
+};
+```
+
+The engine routes the envelope according to `target` and `reliability`. ENet's reliable and unreliable channels map directly to `Reliability`. The receiving side fires `on_network_message`. Plugins filter by `channel_id`; the engine never inspects the payload.
+
+**Player chat** ships as a built-in plugin that registers the `"engine.chat"` channel with `Broadcast` + `Reliable` and displays received messages via the HUD debug-text overlay. It is intentionally a plugin — a game that does not want in-engine chat removes it with no engine change.
+
+**Player position updates** use `Unreliable` messages on a `"engine.player_position"` channel. High-frequency, drop-on-lag delivery is correct for position; using the reliable channel would add unnecessary retransmit overhead and head-of-line blocking.
+
+### Plugin API Surface for Networking
+
+The following additions to `plugin_api.h` are planned for M11. The existing `on_voxel_modified` hook is extended; all others are new:
+
+| Hook / function | Direction | Purpose |
+|---|---|---|
+| `on_voxel_modified` (extended) | Engine → Plugin | Post-commit notification, now carries an optional `source` field (local vs. remote `PlayerId`). Single-player plugins that ignore `source` continue working in multiplayer without modification. |
+| `on_edit_received` | Engine → Plugin (authority only) | Pre-commit intercept. Called at the authority node before an edit is applied. Returns a `Resolution` (apply / discard / transform). Default built-in: last-write-wins. |
+| `on_player_joined` | Engine → Plugin | A player has connected and completed the join handshake. |
+| `on_player_left` | Engine → Plugin | A player has disconnected or been dropped. |
+| `on_network_message` | Engine → Plugin | A `MessageEnvelope` addressed to this node has arrived. |
+| `send_network_message` | Plugin → Engine | Send a `MessageEnvelope`; the engine routes by `target` and `reliability`. |
+
+`on_decomposition_triggered` is intentionally absent. Decomposition state does not require synchronization — see *Sync Strategy* above.
+
+### Dependency Boundaries
+
+`NetworkManager` sits in a new `src/net/` tier. It depends on `World` (to apply incoming edits via `setVoxel`), `PluginManager` (to fire network hooks), and `ChunkPersistence`/`WorldSave` (to serve dirty chunks on join). It must not depend on `Renderer`, `PhysicsSystem`, or `DecompositionWorker`. The transport (`ENetTransport`) is a dependency of `NetworkManager` only — nothing else in the engine knows ENet exists.
