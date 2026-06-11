@@ -23,6 +23,10 @@ enum class NetPacketKind : uint8_t {
     EditIntent    = 1,  // client → server: propose a voxel write
     CommittedEdit = 2,  // server → client: apply this committed write
     NetMessage    = 3,  // either direction: plugin MessageEnvelope payload
+    JoinResponse  = 4,  // server → client: world seed + layer config
+    DirtyChunkData = 5, // server → client: raw chunk file bytes
+    JoinComplete  = 6,  // server → client: handshake done
+    ResyncRequest = 7,  // client → server: request full resync
 };
 
 // ---------------------------------------------------------------------------
@@ -32,6 +36,12 @@ enum class NetPacketKind : uint8_t {
 inline void write_u8(std::vector<uint8_t>& buf, uint8_t v)
 {
     buf.push_back(v);
+}
+
+inline void write_u64(std::vector<uint8_t>& buf, uint64_t v)
+{
+    for (int i = 0; i < 8; ++i)
+        buf.push_back(static_cast<uint8_t>(v >> (8 * i)));
 }
 
 inline void write_u32(std::vector<uint8_t>& buf, uint32_t v)
@@ -66,6 +76,15 @@ inline void write_f64(std::vector<uint8_t>& buf, double v)
 // ---------------------------------------------------------------------------
 // Primitive read helpers — consume from a buffer at a given offset
 // ---------------------------------------------------------------------------
+
+inline uint64_t read_u64(const std::vector<uint8_t>& buf, size_t& off)
+{
+    uint64_t v = 0;
+    for (int i = 0; i < 8; ++i)
+        v |= (static_cast<uint64_t>(buf[off + i]) << (8 * i));
+    off += 8;
+    return v;
+}
 
 inline uint8_t read_u8(const std::vector<uint8_t>& buf, size_t& off)
 {
@@ -268,6 +287,74 @@ inline bool decode_net_message(const std::vector<uint8_t>& buf, NetMessagePayloa
     if (off + pay_len > buf.size()) return false;
     out.payload.assign(buf.begin() + static_cast<ptrdiff_t>(off),
                        buf.begin() + static_cast<ptrdiff_t>(off) + pay_len);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// JoinResponse  (server → client)
+//
+//   [kind:u8][world_seed:u64][config_len:u32][config_bytes...]
+// ---------------------------------------------------------------------------
+
+struct JoinResponsePayload {
+    uint64_t             world_seed   = 0;
+    std::vector<uint8_t> config_bytes;
+};
+
+inline std::vector<uint8_t> encode_join_response(const JoinResponsePayload& p)
+{
+    std::vector<uint8_t> buf;
+    write_u8 (buf, static_cast<uint8_t>(NetPacketKind::JoinResponse));
+    write_u64(buf, p.world_seed);
+    write_u32(buf, static_cast<uint32_t>(p.config_bytes.size()));
+    buf.insert(buf.end(), p.config_bytes.begin(), p.config_bytes.end());
+    return buf;
+}
+
+inline bool decode_join_response(const std::vector<uint8_t>& buf, JoinResponsePayload& out)
+{
+    if (buf.empty() || buf[0] != static_cast<uint8_t>(NetPacketKind::JoinResponse))
+        return false;
+    size_t off = 1;
+    if (off + 8 > buf.size()) return false;
+    out.world_seed = read_u64(buf, off);
+    if (off + 4 > buf.size()) return false;
+    uint32_t len = read_u32(buf, off);
+    if (off + len > buf.size()) return false;
+    out.config_bytes.assign(buf.begin() + static_cast<ptrdiff_t>(off),
+                             buf.begin() + static_cast<ptrdiff_t>(off) + len);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// DirtyChunkData  (server → client)
+//
+//   [kind:u8][data_len:u32][chunk_file_bytes...]
+// ---------------------------------------------------------------------------
+
+struct DirtyChunkDataPayload {
+    std::vector<uint8_t> chunk_bytes;
+};
+
+inline std::vector<uint8_t> encode_dirty_chunk_data(const DirtyChunkDataPayload& p)
+{
+    std::vector<uint8_t> buf;
+    write_u8 (buf, static_cast<uint8_t>(NetPacketKind::DirtyChunkData));
+    write_u32(buf, static_cast<uint32_t>(p.chunk_bytes.size()));
+    buf.insert(buf.end(), p.chunk_bytes.begin(), p.chunk_bytes.end());
+    return buf;
+}
+
+inline bool decode_dirty_chunk_data(const std::vector<uint8_t>& buf, DirtyChunkDataPayload& out)
+{
+    if (buf.empty() || buf[0] != static_cast<uint8_t>(NetPacketKind::DirtyChunkData))
+        return false;
+    size_t off = 1;
+    if (off + 4 > buf.size()) return false;
+    uint32_t len = read_u32(buf, off);
+    if (off + len > buf.size()) return false;
+    out.chunk_bytes.assign(buf.begin() + static_cast<ptrdiff_t>(off),
+                            buf.begin() + static_cast<ptrdiff_t>(off) + len);
     return true;
 }
 

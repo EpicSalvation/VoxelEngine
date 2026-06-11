@@ -2,11 +2,17 @@
 #include "net/ITransport.h"
 #include "net/ENetTransport.h"
 #include "net/NetPackets.h"
+#include "net/NetJoinHandshake.h"
 #include "core/Logger.h"
 #include "core/PluginManager.h"
+#include "core/LayerConfig.h"
 #include "world/World.h"
 #include "world/Voxel.h"
+#include "world/LODManager.h"
+#include "io/ChunkPersistence.h"
 
+#include <cmath>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -211,17 +217,43 @@ void NetworkManager::broadcastCommittedEdit(uint32_t seq, PlayerId source,
 
     auto buf = encode_committed_edit(p);
 
-    // Interest filter: if registered, ask the plugin whether to send to each peer.
-    const auto& filters = pm_->interestFilters();
+    // Interest filter: plugin escape hatch takes priority over built-in modes.
+    const auto* filters_ptr = pm_ ? &pm_->interestFilters() : nullptr;
 
     for (auto& [peer_id, player_id] : peerToPlayer_) {
         if (peer_id == exclude_peer) continue;
 
-        // Apply the interest filter when registered.
         bool send = true;
-        if (!filters.empty()) {
-            send = filters[0].fn(player_id, pos, filters[0].user_data);
+        if (filters_ptr && !filters_ptr->empty()) {
+            // Plugin filter overrides built-in mode entirely.
+            send = (*filters_ptr)[0].fn(player_id, pos, (*filters_ptr)[0].user_data);
+        } else if (interestMode_ == InterestMode::StreamingRadius && layerConfig_) {
+            // Mirrored-streaming-radius: only send if the edit is within the
+            // peer's streaming radius based on last known peer position.
+            auto pit = peerPositions_.find(player_id);
+            if (pit != peerPositions_.end()) {
+                // Use the first terminal layer for radius check.
+                const LayerDef* primary = nullptr;
+                for (const auto& ld : layerConfig_->layers()) {
+                    if (ld.mode == VoxelMode::terminal) { primary = &ld; break; }
+                }
+                if (!primary) primary = &layerConfig_->layers().front();
+                const std::string& layerName = primary->name;
+                double csz = static_cast<double>(primary->chunk_size_voxels) * primary->voxel_size_m;
+                ChunkCoord edit_chunk{
+                    static_cast<int>(std::floor(pos.value.x / csz)),
+                    static_cast<int>(std::floor(pos.value.y / csz)),
+                    static_cast<int>(std::floor(pos.value.z / csz))};
+                const WorldCoord& peer_pos = pit->second;
+                ChunkCoord peer_chunk{
+                    static_cast<int>(std::floor(peer_pos.value.x / csz)),
+                    static_cast<int>(std::floor(peer_pos.value.y / csz)),
+                    static_cast<int>(std::floor(peer_pos.value.z / csz))};
+                if (lodManager_)
+                    send = lodManager_->withinViewDistance(peer_chunk, edit_chunk, layerName);
+            }
         }
+        // BroadcastAll: send == true (default, already set above).
         if (send) {
             transport_->send(peer_id, 0, buf.data(), buf.size(), Reliability::Reliable);
         }
@@ -298,6 +330,20 @@ void NetworkManager::handlePacket(InboundPacket& pkt)
                 case NetPacketKind::NetMessage:
                     handleNetMessage(pkt);
                     break;
+                case NetPacketKind::JoinResponse:
+                    handleJoinResponse(pkt);
+                    break;
+                case NetPacketKind::DirtyChunkData:
+                    handleDirtyChunkData(pkt);
+                    break;
+                case NetPacketKind::JoinComplete:
+                    handleJoinComplete(pkt);
+                    break;
+                case NetPacketKind::ResyncRequest:
+                    handleResyncRequest(pkt.peer_id, pkt);
+                    break;
+                default:
+                    break;
             }
             break;
     }
@@ -344,6 +390,23 @@ void NetworkManager::handleCommittedEdit(const InboundPacket& pkt)
         return;
     }
 
+    // Sequence-gap detection: if we miss more than kResyncGapThreshold edits,
+    // request a full dirty-chunk resync from the server.
+    static constexpr uint32_t kResyncGapThreshold = 32;
+    if (lastAppliedSeq_ > 0 && p.seq > lastAppliedSeq_ + kResyncGapThreshold) {
+        Log::warn("[NetworkManager] sequence gap detected — requesting resync");
+        std::vector<uint8_t> resync_buf;
+        write_u8(resync_buf, static_cast<uint8_t>(NetPacketKind::ResyncRequest));
+        for (auto& [peer_id, player_id] : peerToPlayer_) {
+            if (transport_) transport_->send(peer_id, 0, resync_buf.data(),
+                                             resync_buf.size(), Reliability::Reliable);
+            break;
+        }
+        lastAppliedSeq_ = p.seq;
+    } else if (p.seq >= lastAppliedSeq_) {
+        lastAppliedSeq_ = p.seq;
+    }
+
     WorldCoord pos(p.x, p.y, p.z);
     Voxel v;
     v.material.density              = p.density;
@@ -382,6 +445,15 @@ void NetworkManager::handleNetMessage(const InboundPacket& pkt)
     env.payload       = p.payload.empty() ? nullptr : p.payload.data();
     env.payload_size  = p.payload.size();
 
+    // Built-in: decode player position updates and store in peerPositions_.
+    if (p.channel_id == "engine.player_position" && p.payload.size() >= 24) {
+        size_t poff = 0;
+        double px = read_f64(p.payload, poff);
+        double py = read_f64(p.payload, poff);
+        double pz = read_f64(p.payload, poff);
+        peerPositions_[env.sender_id] = WorldCoord(px, py, pz);
+    }
+
     for (const auto& hook : pm_->networkMessageHooks()) {
         if (hook.fn && !p.channel_id.empty() &&
             p.channel_id.substr(0, hook.channel_prefix.size()) == hook.channel_prefix)
@@ -398,6 +470,12 @@ void NetworkManager::onPeerConnected(PeerId peer_id)
     playerToPeer_[player_id] = peer_id;
     std::cout << "[NetworkManager] peer " << peer_id
               << " connected → player " << player_id << '\n';
+
+    if (role_ == SessionRole::Server || role_ == SessionRole::HostPeer) {
+        sendHandshakeToPeer(peer_id);
+        // on_player_joined fires after the client completes its side of the handshake;
+        // on the server it fires immediately since the server is already live.
+    }
 
     // Fire on_player_joined hooks.
     if (pm_) {
@@ -426,6 +504,172 @@ void NetworkManager::onPeerDisconnected(PeerId peer_id)
         playerToPeer_.erase(player_id);
         peerToPlayer_.erase(it);
     }
+}
+
+// ── World-state setters for handshake ─────────────────────────────────────────
+
+void NetworkManager::setWorldSave(persistence::WorldSave* ws) { worldSave_ = ws; }
+void NetworkManager::setWorldSeed(uint64_t seed)               { worldSeed_ = seed; }
+void NetworkManager::setLayerConfig(const LayerConfig* config) {
+    layerConfig_ = config;
+    if (config) lodManager_ = std::make_unique<LODManager>(*config);
+    else        lodManager_.reset();
+}
+
+// ── Streaming-radius interest management ──────────────────────────────────────
+
+void NetworkManager::setInterestMode(InterestMode mode) { interestMode_ = mode; }
+
+void NetworkManager::updatePeerPosition(PlayerId player_id, WorldCoord pos)
+{
+    peerPositions_[player_id] = pos;
+}
+
+// ── Player position replication ───────────────────────────────────────────────
+
+const std::unordered_map<PlayerId, WorldCoord>& NetworkManager::playerPositions() const
+{
+    return peerPositions_;
+}
+
+void NetworkManager::broadcastLocalPosition(WorldCoord pos)
+{
+    if (role_ == SessionRole::Offline || !transport_) return;
+
+    // Encode as 24 bytes: x:f64 y:f64 z:f64
+    std::vector<uint8_t> payload;
+    payload.reserve(24);
+    write_f64(payload, pos.value.x);
+    write_f64(payload, pos.value.y);
+    write_f64(payload, pos.value.z);
+
+    MessageEnvelope env;
+    env.channel_id    = "engine.player_position";
+    env.sender_id     = localPlayerId_;
+    env.target        = MessageTarget::Broadcast;
+    env.target_player = 0;
+    env.reliability   = MessageReliability::Unreliable;
+    env.payload       = payload.data();
+    env.payload_size  = payload.size();
+    sendNetworkMessage(env);
+}
+
+// ── Join handshake — server side ──────────────────────────────────────────────
+
+void NetworkManager::sendHandshakeToPeer(PeerId peer_id)
+{
+    if (!transport_) return;
+
+    // 1. Send JoinResponse (world seed + LayerConfig).
+    JoinResponsePayload jr;
+    jr.world_seed = worldSeed_;
+    if (layerConfig_) {
+        jr.config_bytes = serializeLayerConfig(*layerConfig_);
+    }
+    auto jr_buf = encode_join_response(jr);
+    transport_->send(peer_id, 0, jr_buf.data(), jr_buf.size(), Reliability::Reliable);
+
+    // 2. Send dirty chunks if WorldSave is available.
+    sendDirtyChunksToPeer(peer_id);
+
+    // 3. Signal end of handshake with JoinComplete.
+    std::vector<uint8_t> jc_buf;
+    write_u8(jc_buf, static_cast<uint8_t>(NetPacketKind::JoinComplete));
+    transport_->send(peer_id, 0, jc_buf.data(), jc_buf.size(), Reliability::Reliable);
+
+    transport_->flush();
+    std::cout << "[NetworkManager] handshake sent to peer " << peer_id << '\n';
+}
+
+void NetworkManager::sendDirtyChunksToPeer(PeerId peer_id)
+{
+    if (!worldSave_ || !transport_) return;
+
+    // Read raw .vxc file bytes directly — avoids decode/re-encode and preserves
+    // the original WorldIdentity so the client can validate on receive.
+    const std::string& dir = worldSave_->directory();
+    auto coords = worldSave_->listSavedChunks();
+    for (const auto& coord : coords) {
+        const std::string path = dir + "/c_" +
+                                 std::to_string(coord.x) + "_" +
+                                 std::to_string(coord.y) + "_" +
+                                 std::to_string(coord.z) + ".vxc";
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (!f) continue;
+        auto sz = f.tellg();
+        if (sz <= 0) continue;
+        f.seekg(0);
+        DirtyChunkDataPayload dcd;
+        dcd.chunk_bytes.resize(static_cast<size_t>(sz));
+        if (!f.read(reinterpret_cast<char*>(dcd.chunk_bytes.data()), sz)) continue;
+
+        auto buf = encode_dirty_chunk_data(dcd);
+        transport_->send(peer_id, 0, buf.data(), buf.size(), Reliability::Reliable);
+    }
+}
+
+// ── Join handshake — client side ──────────────────────────────────────────────
+
+void NetworkManager::handleJoinResponse(const InboundPacket& pkt)
+{
+    JoinResponsePayload p;
+    if (!decode_join_response(pkt.data, p)) {
+        Log::warn("[NetworkManager] malformed JoinResponse");
+        return;
+    }
+    worldSeed_ = p.world_seed;
+    std::cout << "[NetworkManager] join response received: seed=" << p.world_seed
+              << " config_bytes=" << p.config_bytes.size() << '\n';
+    // The demo is responsible for reinitialising its World from the received
+    // config bytes (available via receivedConfigBytes_). For now we store them.
+    receivedConfigBytes_ = std::move(p.config_bytes);
+}
+
+void NetworkManager::handleDirtyChunkData(const InboundPacket& pkt)
+{
+    DirtyChunkDataPayload p;
+    if (!decode_dirty_chunk_data(pkt.data, p)) {
+        Log::warn("[NetworkManager] malformed DirtyChunkData");
+        return;
+    }
+    if (!world_ || p.chunk_bytes.empty()) return;
+
+    // Use the permissive decode — the server sends raw .vxc bytes that already
+    // have the correct WorldIdentity in their header; we accept any identity here
+    // since the client may not yet have initialised its World to match.
+    auto chunk = persistence::decodeChunkFilePermissive(
+        p.chunk_bytes.data(), p.chunk_bytes.size());
+    if (!chunk) {
+        Log::warn("[NetworkManager] DirtyChunkData: could not decode chunk");
+        return;
+    }
+    world_->insertChunk(std::move(chunk));
+}
+
+void NetworkManager::handleJoinComplete(const InboundPacket& /*pkt*/)
+{
+    std::cout << "[NetworkManager] join handshake complete\n";
+    // Fire on_player_joined for the local player now that we have the world state.
+    if (pm_) {
+        WorldCoord initial_pos(0.0, 0.0, 0.0);
+        for (const auto& hook : pm_->playerJoinedHooks()) {
+            if (hook.fn) hook.fn(localPlayerId_, initial_pos, hook.user_data);
+        }
+    }
+}
+
+// ── Resync — client requests / server responds ────────────────────────────────
+
+void NetworkManager::handleResyncRequest(PeerId sender_peer, const InboundPacket& /*pkt*/)
+{
+    if (role_ != SessionRole::Server && role_ != SessionRole::HostPeer) return;
+    std::cout << "[NetworkManager] resync requested by peer " << sender_peer << '\n';
+    sendDirtyChunksToPeer(sender_peer);
+    // Re-send JoinComplete so the client knows the stream ended.
+    std::vector<uint8_t> jc_buf;
+    write_u8(jc_buf, static_cast<uint8_t>(NetPacketKind::JoinComplete));
+    if (transport_)
+        transport_->send(sender_peer, 0, jc_buf.data(), jc_buf.size(), Reliability::Reliable);
 }
 
 } // namespace net
