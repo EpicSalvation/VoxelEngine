@@ -71,6 +71,45 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glfw)
 
+# ENet — lightweight UDP networking library (MIT), transport backend for M11.
+# ENet v1.3.17 ships no CMakeLists.txt, so we populate and build it manually.
+FetchContent_Declare(
+  enet
+  GIT_REPOSITORY https://github.com/lsalzman/enet.git
+  GIT_TAG        v1.3.17
+)
+FetchContent_GetProperties(enet)
+if(NOT enet_POPULATED)
+  FetchContent_Populate(enet)
+  # Build the platform-correct set of C files.
+  set(ENET_SOURCES
+    ${enet_SOURCE_DIR}/callbacks.c
+    ${enet_SOURCE_DIR}/compress.c
+    ${enet_SOURCE_DIR}/host.c
+    ${enet_SOURCE_DIR}/list.c
+    ${enet_SOURCE_DIR}/packet.c
+    ${enet_SOURCE_DIR}/peer.c
+    ${enet_SOURCE_DIR}/protocol.c
+  )
+  if(WIN32)
+    list(APPEND ENET_SOURCES ${enet_SOURCE_DIR}/win32.c)
+  else()
+    list(APPEND ENET_SOURCES ${enet_SOURCE_DIR}/unix.c)
+  endif()
+  add_library(enet STATIC ${ENET_SOURCES})
+  target_include_directories(enet PUBLIC "${enet_SOURCE_DIR}/include")
+  if(WIN32)
+    target_link_libraries(enet PRIVATE ws2_32 winmm)
+  else()
+    # HAS_SOCKLEN_T suppresses ENet's `typedef int socklen_t` which conflicts
+    # with the POSIX definition already provided by <sys/socket.h> on Linux/macOS.
+    target_compile_definitions(enet PRIVATE HAS_SOCKLEN_T=1)
+  endif()
+  # Suppress warnings in fetched code.
+  set_target_properties(enet PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+    "${enet_SOURCE_DIR}/include")
+endif()
+
 # GoogleTest
 set(gtest_SOURCE_DIR "${CMAKE_SOURCE_DIR}/external/googletest")
 if(EXISTS "${gtest_SOURCE_DIR}/CMakeLists.txt")
@@ -94,6 +133,7 @@ endif()
 file(GLOB_RECURSE ENGINE_SOURCES
     src/core/*.cpp
     src/io/*.cpp
+    src/net/*.cpp
     src/platform/*.cpp
     src/plugins/*.cpp
     src/renderer/*.cpp
@@ -121,6 +161,7 @@ target_link_libraries(voxel-engine
     bimg
     glfw                  # windowing/input; native handles wrapped by src/platform
     yaml-cpp::yaml-cpp
+    enet                  # M11 networking transport (ENet types must not appear in include/)
 )
 
 # Warning flags applied to first-party targets only (not fetched dependencies).
