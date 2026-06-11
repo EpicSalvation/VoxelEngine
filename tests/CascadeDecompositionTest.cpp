@@ -30,13 +30,18 @@ namespace {
 // ── Helper: solid generator ────────────────────────────────────────────────────
 
 // Fills every voxel solid (palette_index = 1). Deterministic and pure.
+// Use Voxel{} (aggregate value-initialization) so ALL bytes — including the
+// compiler-inserted padding in MaterialProperties — are deterministically zero
+// before the named fields are written. Without this, GCC compiles the struct
+// assignment as memcpy which propagates indeterminate padding bytes from the
+// stack, causing memcmp-based determinism checks to spuriously fail.
 void solidGen(WorldCoord /*origin*/, int n, Voxel* out, void*) {
-    MaterialProperties mp;
-    mp.palette_index = 1;
-    mp.density = 100.0f;
-    mp.hardness = 1.0f;
+    Voxel v{};  // zero-initialize including padding
+    v.material.palette_index = 1;
+    v.material.density       = 100.0f;
+    v.material.hardness      = 1.0f;
     for (int i = 0; i < n * n * n; ++i)
-        out[i] = Voxel{mp};
+        out[i] = v;
 }
 
 // Plugin init that registers a solid generator for four layer names.
