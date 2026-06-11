@@ -22,6 +22,7 @@
 // pass. Terminal and immutable layers are streamed by the demo independently.
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -90,6 +91,15 @@ public:
                                     int loadPerFrame   = 4,
                                     int decompPerFrame = 64);
 
+    // Register a callback invoked before a dirty (player-edited) chunk is evicted
+    // from any managed layer. The callback receives a const reference to the chunk
+    // and the layer name; it should persist the chunk (e.g. via WorldSave::saveChunk)
+    // before returning. Clean chunks are dropped silently (they regenerate
+    // deterministically on re-approach). Called from cascadeEvict and the budget
+    // enforcement pass (ARCHITECTURE §11).
+    using DirtyEvictFn = std::function<void(const Chunk&, const std::string& layerName)>;
+    void setDirtyEvictCallback(DirtyEvictFn fn) { onDirtyEvict_ = std::move(fn); }
+
     // State queries.
     bool   isDecomposed(const std::string& layerName, chunkmath::VoxelCoord macro) const;
     bool   isPending   (const std::string& layerName, chunkmath::VoxelCoord macro) const;
@@ -120,16 +130,30 @@ private:
                                                         const Layer& child);
 
     // Recursively evict every decomposed descendant of macro in composite layer ci.
+    // Saves dirty child chunks via onDirtyEvict_ before dropping them.
     // Inserts eviction records into diffs. Called before the parent composite chunk
     // is removed from its ChunkStore.
     void cascadeEvict(size_t ci, chunkmath::VoxelCoord macro,
                       std::vector<LayerTickDiff>& diffs);
 
+    // Enforce the per-layer resident-chunk budget for composite layer ci, then
+    // (if the child is terminal) for its child layer. Evicts farthest-first clean
+    // non-pending chunks until the resident count is within the budget. Dirty and
+    // near-camera chunks are pinned. Never blocks the main thread.
+    void enforceLayerBudget(size_t ci, ChunkCoord camChunkComp,
+                            std::vector<LayerTickDiff>& diffs);
+
+    // Fire registered ChunkLifecycle hooks for a chunk being created or evicted.
+    void fireChunkCreated(const Layer& layer, const Chunk& chunk) const;
+    void fireChunkEvicted(const Layer& layer, ChunkCoord cc) const;
+
     World&          world_;
     PluginManager&  pm_;
+    const LayerConfig& config_;
     LODManager      lod_;
     uint64_t        worldSeed_;
     DecompositionWorker                  worker_;
     std::vector<CompositeLayerInfo>      composites_;   // coarsest-first order
     std::unordered_map<std::string, size_t> compositeIdx_; // layerName → composites_ index
+    DirtyEvictFn    onDirtyEvict_;  // called before evicting a dirty chunk; may be null
 };

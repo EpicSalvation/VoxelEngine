@@ -19,6 +19,12 @@ struct LayerDef {
     // Chunk streaming parameters (M3). Optional in the config; defaults applied when omitted.
     int chunk_size_voxels    = 32;  // voxels per chunk side; the chunk grid is chunk_size_voxels³
     int view_distance_chunks = 8;   // load/evict radius around the camera, measured in chunks
+
+    // Per-layer resident-chunk cap (M10, ARCHITECTURE §11). 0 = unlimited.
+    // When the manager's resident set for this layer exceeds the cap, the
+    // farthest-first clean non-pending chunks are evicted to fit. Near chunks
+    // and dirty (player-edited) chunks are always pinned regardless of the cap.
+    int resident_chunk_budget = 0;
 };
 
 // Parses and validates a layer stack from a YAML project config file.

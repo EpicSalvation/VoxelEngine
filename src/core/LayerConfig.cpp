@@ -75,6 +75,13 @@ LayerConfig LayerConfig::parseAndValidate(const std::string& yamlContent) {
                     "Layer '" + def.name + "': view_distance_chunks must be >= 0 (got " +
                     std::to_string(def.view_distance_chunks) + ").");
         }
+        if (node["resident_chunk_budget"]) {
+            def.resident_chunk_budget = node["resident_chunk_budget"].as<int>();
+            if (def.resident_chunk_budget < 0)
+                throw std::runtime_error(
+                    "Layer '" + def.name + "': resident_chunk_budget must be >= 0 (got " +
+                    std::to_string(def.resident_chunk_budget) + "). Use 0 for unlimited.");
+        }
 
         config.layers_.push_back(def);
     }

@@ -19,7 +19,7 @@ DecompositionManager::DecompositionManager(World& world, PluginManager& pm,
                                            const LayerConfig& config,
                                            uint64_t worldSeed,
                                            unsigned workerThreads)
-    : world_(world), pm_(pm), lod_(config), worldSeed_(worldSeed),
+    : world_(world), pm_(pm), config_(config), lod_(config), worldSeed_(worldSeed),
       worker_(workerThreads) {
     // Build one CompositeLayerInfo per composite layer, coarsest-first
     // (config order is coarsest-to-finest by validation rule).
@@ -100,6 +100,20 @@ DecompositionJob DecompositionManager::makeJob(const CompositeLayerInfo& info,
 
 // ── Cascade eviction ──────────────────────────────────────────────────────────
 
+void DecompositionManager::fireChunkCreated(const Layer& layer, const Chunk& chunk) const {
+    for (const auto& hook : pm_.chunkCreatedHooks())
+        if (hook.layer_name == layer.name())
+            hook.fn(chunk.origin(), hook.user_data);
+}
+
+void DecompositionManager::fireChunkEvicted(const Layer& layer, ChunkCoord cc) const {
+    const Chunk* chunk = layer.getChunk(cc);
+    if (!chunk) return;
+    for (const auto& hook : pm_.chunkEvictedHooks())
+        if (hook.layer_name == layer.name())
+            hook.fn(chunk->origin(), hook.user_data);
+}
+
 void DecompositionManager::cascadeEvict(size_t ci, chunkmath::VoxelCoord macro,
                                         std::vector<LayerTickDiff>& diffs) {
     CompositeLayerInfo& info = composites_[ci];
@@ -109,8 +123,17 @@ void DecompositionManager::cascadeEvict(size_t ci, chunkmath::VoxelCoord macro,
     LayerTickDiff& diff = diffs[ci];
 
     // Remove child chunks from this level's child layer.
+    // Only terminal-layer chunks can carry player edits worth saving; composite
+    // chunks may be flagged dirty by the setVoxel(empty) call in the drain step
+    // (a rendered-state update, not a player edit) and must NOT be persisted.
+    const bool childIsTerminal = (childLayer.mode() == VoxelMode::terminal);
     for (const ChunkCoord& cc : childChunksForMacro(macro, *info.layer, childLayer)) {
-        if (childLayer.getChunk(cc)) {
+        const Chunk* chunk = childLayer.getChunk(cc);
+        if (chunk) {
+            // Save dirty terminal chunks before dropping them (ARCHITECTURE §11).
+            if (childIsTerminal && chunk->dirty() && onDirtyEvict_)
+                onDirtyEvict_(*chunk, childLayer.name());
+            fireChunkEvicted(childLayer, cc);
             diff.evictedChildChunks.push_back(cc);
             childLayer.unloadChunk(cc);
         }
@@ -139,6 +162,66 @@ void DecompositionManager::cascadeEvict(size_t ci, chunkmath::VoxelCoord macro,
     diff.newlyAtomic.push_back(macro);
 }
 
+// ── Budget enforcement ────────────────────────────────────────────────────────
+
+void DecompositionManager::enforceLayerBudget(size_t ci, ChunkCoord camChunkComp,
+                                               std::vector<LayerTickDiff>& diffs) {
+    CompositeLayerInfo& info = composites_[ci];
+    Layer& layer = *info.layer;
+    const LayerDef* def = config_.findLayer(layer.name());
+    if (!def || def->resident_chunk_budget <= 0) return;
+
+    const int budget = def->resident_chunk_budget;
+    int current = static_cast<int>(layer.chunks().size());
+    if (current <= budget) return;
+
+    // Collect evictable (clean, non-pending) chunks with their camera distance.
+    struct Candidate { ChunkCoord coord; int dist; };
+    std::vector<Candidate> candidates;
+    candidates.reserve(layer.chunks().size());
+    const int n = layer.chunkSizeVoxels();
+    for (const auto& kv : layer.chunks()) {
+        const ChunkCoord& cc = kv.first;
+        if (kv.second->dirty()) continue;  // pin dirty
+
+        bool anyPending = false;
+        for (int z = 0; z < n && !anyPending; ++z)
+            for (int y = 0; y < n && !anyPending; ++y)
+                for (int x = 0; x < n && !anyPending; ++x)
+                    if (info.state.isPending(chunkmath::chunkLocalToVoxel(cc, x, y, z, n)))
+                        anyPending = true;
+        if (anyPending) continue;
+
+        int dist = std::max({std::abs(cc.x - camChunkComp.x),
+                             std::abs(cc.y - camChunkComp.y),
+                             std::abs(cc.z - camChunkComp.z)});
+        candidates.push_back({cc, dist});
+    }
+    // Farthest first.
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate& a, const Candidate& b){ return a.dist > b.dist; });
+
+    LayerTickDiff& diff = diffs[ci];
+    for (const auto& cand : candidates) {
+        if (current <= budget) break;
+        // Cascade-evict all decomposed descendants.
+        for (int z = 0; z < n; ++z)
+            for (int y = 0; y < n; ++y)
+                for (int x = 0; x < n; ++x) {
+                    chunkmath::VoxelCoord macro = chunkmath::chunkLocalToVoxel(
+                        cand.coord, x, y, z, n);
+                    if (info.state.isDecomposed(macro))
+                        cascadeEvict(ci, macro, diffs);
+                    else
+                        info.state.clear(macro);
+                }
+        fireChunkEvicted(layer, cand.coord);
+        diff.evictedCompChunks.push_back(cand.coord);
+        layer.unloadChunk(cand.coord);
+        --current;
+    }
+}
+
 // ── Main tick ─────────────────────────────────────────────────────────────────
 
 std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPos,
@@ -163,7 +246,8 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
 
         for (auto& chunk : result.chunks) {
             const ChunkCoord cc = chunk->coord();
-            childLayer.insertChunk(std::move(chunk));
+            Chunk* inserted = childLayer.insertChunk(std::move(chunk));
+            if (inserted) fireChunkCreated(childLayer, *inserted);
             diff.newChildChunks.push_back(cc);
         }
         info.state.markDecomposed(result.macro);
@@ -199,9 +283,9 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
             if (layer.getChunk(cc)) continue;
             if (loaded >= loadPerFrame) break;
             if (Chunk* chunk = layer.loadChunk(cc, genFn, genUD)) {
+                fireChunkCreated(layer, *chunk);
                 diff.newCompChunks.push_back(cc);
                 ++loaded;
-                (void)chunk;
             }
         }
 
@@ -235,9 +319,15 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
                             info.state.clear(macro);
                     }
 
+            fireChunkEvicted(layer, cc);
             diff.evictedCompChunks.push_back(cc);
             layer.unloadChunk(cc);
         }
+
+        // ── 2b. Budget enforcement ───────────────────────────────────────────
+        // If the layer's resident set still exceeds its configured cap after the
+        // normal LOD eviction, evict farthest-first clean non-pending chunks.
+        enforceLayerBudget(ci, camChunk, diffs);
     }
 
     // ── 3. Approach-trigger: enqueue undecomposed macro voxels near camera ───
