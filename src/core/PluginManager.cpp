@@ -364,9 +364,12 @@ PluginContext PluginManager::buildContext() {
         mgr->networkMessageHooks_.push_back({prefix ? prefix : "", fn, ud, mgr->currentOwner_});
     };
 
-    ctx.send_network_message = [](PluginContext* /*c*/, const MessageEnvelope* /*envelope*/) {
+    ctx.send_network_message = [](PluginContext* c, const MessageEnvelope* envelope) {
         // Routing is handled by NetworkManager (M11); PluginManager stores the registry
-        // only. NetworkManager wires this pointer to its own send implementation on init.
+        // only. NetworkManager wires its send implementation in via setNetworkSendHandler
+        // on init. With no handler installed (single-player) the send is a no-op.
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (mgr->netSendFn_ && envelope) mgr->netSendFn_(envelope, mgr->netSendUser_);
     };
 
     ctx.register_authority_policy = [](PluginContext* c, AuthorityPolicyFn fn, void* ud) {

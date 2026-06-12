@@ -205,4 +205,11 @@ void ENetTransport::flush()
 bool ENetTransport::isListening() const { return impl_->listening; }
 bool ENetTransport::isConnected()  const { return !impl_->idToPeer.empty(); }
 
+uint32_t ENetTransport::roundTripTimeMs(PeerId peer_id) const
+{
+    auto it = impl_->idToPeer.find(peer_id);
+    if (it == impl_->idToPeer.end()) return 0;
+    return static_cast<uint32_t>(it->second->roundTripTime);
+}
+
 } // namespace net

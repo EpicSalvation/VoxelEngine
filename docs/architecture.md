@@ -726,6 +726,8 @@ struct MessageEnvelope {
 
 The engine routes the envelope according to `target` and `reliability`. ENet's reliable and unreliable channels map directly to `Reliability`. The receiving side fires `on_network_message`. Plugins filter by `channel_id`; the engine never inspects the payload.
 
+Clients only ever hold a connection to the authority node, so the authority is also the message router: a `Broadcast` envelope arriving from a peer is relayed to every other connected peer, and a `Player`-targeted envelope is forwarded to its destination peer. On any inbound envelope the authority overwrites `sender_id` with the player id mapped to the connection the packet physically arrived on — the connection is trusted, not the payload, so a peer cannot spoof another player's identity.
+
 **Player chat** ships as a built-in plugin that registers the `"engine.chat"` channel with `Broadcast` + `Reliable` and displays received messages via the HUD debug-text overlay. It is intentionally a plugin — a game that does not want in-engine chat removes it with no engine change.
 
 **Player position updates** use `Unreliable` messages on a `"engine.player_position"` channel. High-frequency, drop-on-lag delivery is correct for position; using the reliable channel would add unnecessary retransmit overhead and head-of-line blocking.

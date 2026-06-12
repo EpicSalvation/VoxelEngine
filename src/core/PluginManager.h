@@ -159,6 +159,16 @@ public:
     // Engine::init() before any plugins are loaded.
     void registerBuiltinNoise();
 
+    // Outbound network-message routing. PluginManager stores the registries only;
+    // the actual send is performed by NetworkManager, which installs its handler
+    // here during init (see ctx.send_network_message). A null fn (the default)
+    // makes plugin sends a silent no-op — the single-player behaviour.
+    using NetworkSendFn = void(*)(const MessageEnvelope* envelope, void* user);
+    void setNetworkSendHandler(NetworkSendFn fn, void* user) {
+        netSendFn_   = fn;
+        netSendUser_ = user;
+    }
+
     // Wire in a plugin that is compiled directly into the executable rather than loaded
     // as a .so. Useful for the example plugin and for testing without a .so build step.
     // Returns the new plugin's id (no library handle is associated), or kInvalidPluginId
@@ -254,4 +264,7 @@ private:
 
     PluginId nextPluginId_ = 1;          // 0 is reserved for kInvalidPluginId
     PluginId currentOwner_ = kInvalidPluginId;  // set around a plugin's init() call
+
+    NetworkSendFn netSendFn_   = nullptr;  // installed by NetworkManager::init
+    void*         netSendUser_ = nullptr;
 };

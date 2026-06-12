@@ -74,6 +74,29 @@ public:
     bool        isActive()      const { return role_ != SessionRole::Offline; }
     PlayerId    localPlayerId() const { return localPlayerId_; }
 
+    // ── Session observability (tests, demo HUDs) ──────────────────────────
+    // Number of currently connected remote peers.
+    size_t connectedPeerCount() const { return peerToPlayer_.size(); }
+    // The world seed: as configured on the authority, or as received in the
+    // JoinResponse on a client.
+    uint64_t worldSeed() const { return worldSeed_; }
+    // The serialized LayerConfig received during the join handshake (client
+    // side; empty before JoinResponse arrives). Decode with
+    // net::deserializeLayerConfig to initialise the World the single-player way.
+    const std::vector<uint8_t>& receivedConfigBytes() const { return receivedConfigBytes_; }
+    // True once the JoinComplete packet ending the dirty-chunk stream has been
+    // processed (client side).
+    bool joinComplete() const { return joinComplete_; }
+    // Total inbound packets dispatched since start — a demo HUD divides the
+    // delta per second into a packet-rate readout (e.g. to show decomposition
+    // adds no traffic).
+    uint64_t packetsReceived() const { return packetsReceived_; }
+    // Committed edits suppressed by interest management (authority side).
+    uint64_t suppressedEditCount() const { return suppressedEdits_; }
+    // Smoothed round-trip time to a connected player in milliseconds (0 if
+    // unknown or not measured by the transport backend).
+    uint32_t rttMs(PlayerId player_id) const;
+
     // Replace the default ENetTransport with a custom backend. Must be called
     // before startServer / startClient; the replaced transport is destroyed.
     void setTransport(std::unique_ptr<ITransport> transport);
@@ -147,6 +170,9 @@ private:
     PlayerId                    nextPlayerId_  = 1;
     uint32_t                    nextSeqNo_     = 1;
     uint32_t                    lastAppliedSeq_ = 0;
+    bool                        joinComplete_   = false;
+    uint64_t                    packetsReceived_ = 0;
+    uint64_t                    suppressedEdits_ = 0;
 
     InterestMode interestMode_ = InterestMode::BroadcastAll;
 
