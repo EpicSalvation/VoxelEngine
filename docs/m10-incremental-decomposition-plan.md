@@ -239,7 +239,7 @@ per-layer merged base params (only `__altitude`/`__parent_material` vary per
 macro). Moot for the demo if item 3 drops recipes, still worth doing for
 recipe-driven worlds.
 
-### 14. [ ] Frustum culling in the demo render loop
+### 14. [x] Frustum culling in the demo render loop
 
 `main.cpp` ~lines 424–434 draws every resident mesh unconditionally. Fine at
 current scale; revisit before view distances grow.

@@ -57,6 +57,49 @@ const glm::dvec3 kPlayerHalf(0.3, 0.9, 0.3);
 
 constexpr uint64_t kWorldSeed = 0xDECAFBAD12345678ull;
 
+// Must match the renderer: BgfxRenderer::render uses a 60° vertical FOV, and
+// the far clip is whatever setFarClip received (see the setFarClip call below).
+constexpr float  kFarClipM = 4000.0f;
+constexpr double kVFovDeg  = 60.0;
+
+// Conservative view-frustum test for chunk bounding spheres, built from the
+// same camera basis and projection parameters the renderer uses. Plane-distance
+// tests against the bounding sphere err on the side of "visible" — this never
+// culls geometry the renderer would actually draw, it only skips submitting
+// chunks behind the camera or outside the view cone.
+struct Frustum {
+    glm::dvec3 pos{}, fwd{}, right{}, up{};
+    double tanH = 0.0, tanV = 0.0, cosH = 1.0, cosV = 1.0, farClip = 0.0;
+
+    void update(const WorldCoord& camPos, float pitch, float yaw,
+                double aspect, double vfovDeg, double farClipM) {
+        pos = camPos.value;
+        const double cp = std::cos(pitch), sp = std::sin(pitch);
+        const double cy = std::cos(yaw),   sy = std::sin(yaw);
+        fwd   = glm::dvec3(cp * sy, sp, cp * cy);  // matches BgfxRenderer::render
+        right = glm::dvec3(cy, 0.0, -sy);
+        up    = glm::cross(fwd, right);
+        tanV  = std::tan(glm::radians(vfovDeg) * 0.5);
+        tanH  = tanV * aspect;
+        cosV  = 1.0 / std::sqrt(1.0 + tanV * tanV);
+        cosH  = 1.0 / std::sqrt(1.0 + tanH * tanH);
+        farClip = farClipM;
+    }
+
+    bool sphereVisible(const glm::dvec3& center, double radius) const {
+        const glm::dvec3 rel = center - pos;
+        const double z = glm::dot(rel, fwd);
+        if (z + radius < 0.0 || z - radius > farClip) return false;
+        // Side planes pass through the camera; signed distance outside the
+        // right/left (top/bottom) plane is (|x| − z·tan)·cos.
+        const double x = glm::dot(rel, right);
+        if ((std::abs(x) - z * tanH) * cosH > radius) return false;
+        const double y = glm::dot(rel, up);
+        if ((std::abs(y) - z * tanV) * cosV > radius) return false;
+        return true;
+    }
+};
+
 using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
 
 // Replace (or create) the mesh for a chunk. The existing mesh's GPU buffers must
@@ -232,7 +275,7 @@ layers:
     // Shallow cascade: continental chunks are 256 m and the resident bubble is a
     // few hundred metres. 4 km far clip comfortably covers it while keeping good
     // depth precision for the 1 m terrain (the default 1000 m would clip context).
-    renderer.setFarClip(4000.0f);
+    renderer.setFarClip(kFarClipM);
     renderer.setCrosshair(true);
 
     // One MeshStore per layer (all four, plus terminal).
@@ -464,17 +507,29 @@ layers:
         renderer.setCameraPosition(camPos);
         renderer.setCameraRotation(pitch, yaw, 0.0f);
 
+        Frustum frustum;
+        frustum.update(camPos, pitch, yaw,
+                       static_cast<double>(fbW) / static_cast<double>(fbH),
+                       kVFovDeg, kFarClipM);
+
         // Render all layers in reverse order (coarsest first, so finer voxels
-        // occlude coarser ones via depth test).
+        // occlude coarser ones via depth test), frustum-culling per chunk —
+        // after a long flight the mesh stores hold thousands of chunks, most of
+        // them behind the camera or outside the view cone.
         for (const auto& layerName : std::vector<std::string>{
                 "continental", "regional", "local", "terrain"}) {
             Layer* lyr = world.layer(layerName);
             if (!lyr) continue;
+            const double chunkWorld = lyr->voxelSizeM() * lyr->chunkSizeVoxels();
+            const double sphereRadius = chunkWorld * 0.8660254;  // half diagonal, √3/2
             const MeshStore& ms = meshStores[layerName];
             for (const auto& kv : ms) {
                 const Chunk* chunk = lyr->getChunk(kv.first);
-                if (chunk && !kv.second.empty())
-                    renderer.renderChunk(kv.second, chunk->origin(), lyr->voxelSizeM());
+                if (!chunk || kv.second.empty()) continue;
+                const glm::dvec3 center =
+                    chunk->origin().value + glm::dvec3(chunkWorld * 0.5);
+                if (!frustum.sphereVisible(center, sphereRadius)) continue;
+                renderer.renderChunk(kv.second, chunk->origin(), lyr->voxelSizeM());
             }
         }
 
