@@ -142,6 +142,13 @@ private:
         int64_t            ratio;      // child voxels per parent voxel edge
         int                parentIdx;  // index in composites_ of the coarser composite, or -1
         DecompositionState state;
+        // Per-layer caches computed once at construction (after plugin load, so
+        // every recipe is already registered — late recipe registration is not
+        // supported once a manager exists). makeJob runs per enqueued macro;
+        // without these it re-walks the ancestor chain and re-merges ancestor
+        // seed_parameters through string-keyed lookups on every call.
+        std::vector<int>              ancestorIdxs;       // root-first ancestor chain
+        std::vector<RecipeParamValue> ancestorSeedParams; // merged root→parent seed params
         // Block voxel of each currently decomposed macro, captured just before the
         // drain step clears it, so bottom-up re-atomization can restore the block
         // without re-running the generator. Entries are erased whenever the macro's

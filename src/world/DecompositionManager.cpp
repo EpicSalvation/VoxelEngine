@@ -79,6 +79,27 @@ DecompositionManager::DecompositionManager(World& world, PluginManager& pm,
             }
         }
     }
+
+    // Cache each layer's ancestor chain (root-first) and the merged ancestor
+    // seed_parameters (M10 cross-step cascade). Both are pure functions of the
+    // layer topology and the registered recipes, which are fixed by the time a
+    // manager exists (plugins register recipes at init) — makeJob would
+    // otherwise redo this walk and merge for every enqueued macro.
+    for (auto& info : composites_) {
+        const size_t selfIdx = compositeIdx_.at(info.layer->name());
+        for (int ai = composites_[selfIdx].parentIdx; ai >= 0;
+             ai = composites_[ai].parentIdx)
+            info.ancestorIdxs.push_back(ai);
+        std::reverse(info.ancestorIdxs.begin(), info.ancestorIdxs.end());
+
+        for (int ai : info.ancestorIdxs) {
+            const Recipe* ancestorRecipe =
+                pm_.findRecipe(composites_[ai].layer->name());
+            if (ancestorRecipe)
+                info.ancestorSeedParams = mergeRecipeParams(
+                    info.ancestorSeedParams, ancestorRecipe->seed_parameters);
+        }
+    }
 }
 
 // ── Job building ──────────────────────────────────────────────────────────────
@@ -126,25 +147,12 @@ DecompositionJob DecompositionManager::makeJob(const CompositeLayerInfo& info,
         matParam.number = static_cast<double>(
             info.layer->getVoxel(macroCenter).material.palette_index);
 
-        std::vector<RecipeParamValue> inherited{altParam, matParam};
-
-        // Merge ancestor recipe seed_parameters root → immediate parent.
-        // Each ancestor's params override the preceding (and the reserved base).
-        // The inherited set is a pure function of (world_seed, ancestor coords,
+        // Merge the cached ancestor seed_parameters (root → immediate parent,
+        // precomputed at construction) over the reserved per-macro base. The
+        // inherited set is a pure function of (world_seed, ancestor coords,
         // recipes), so it re-derives identically after a clean evict (§4/§11).
-        const size_t ci = compositeIdx_.at(info.layer->name());
-        std::vector<int> ancestorIdxs;
-        for (int ai = composites_[ci].parentIdx; ai >= 0;
-             ai = composites_[ai].parentIdx)
-            ancestorIdxs.push_back(ai);
-        std::reverse(ancestorIdxs.begin(), ancestorIdxs.end());  // root first
-        for (int ai : ancestorIdxs) {
-            const Recipe* ancestorRecipe =
-                pm_.findRecipe(composites_[ai].layer->name());
-            if (ancestorRecipe)
-                inherited = mergeRecipeParams(
-                    inherited, ancestorRecipe->seed_parameters);
-        }
+        const std::vector<RecipeParamValue> inherited = mergeRecipeParams(
+            {altParam, matParam}, info.ancestorSeedParams);
 
         job.recipe = std::make_shared<ResolvedRecipe>(
             resolveRecipe(*recipe, pm_, inherited));

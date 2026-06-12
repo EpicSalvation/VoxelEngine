@@ -231,7 +231,7 @@ little decomposition was happening.
 512 m / ratio-8 stack; generators now hardcode the shallow 64/16/4 sizes.
 Will likely be rewritten as part of item 3.
 
-### 13. [ ] Cache recipe-resolution work in `makeJob`
+### 13. [x] Cache recipe-resolution work in `makeJob`
 
 `DecompositionManager.cpp` `makeJob` re-resolves the recipe and re-walks the
 ancestor chain per macro on the main thread. Cache the ancestor index walk and
