@@ -35,6 +35,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifndef VOXEL_DRILL_PLUGIN_PATH
@@ -58,6 +59,20 @@ constexpr uint64_t kWorldSeed = 0xDECAFBAD12345678ull;
 
 using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
 
+// Replace (or create) the mesh for a chunk. The existing mesh's GPU buffers must
+// be destroyed first: plain map assignment leaks the old bgfx handles, and the
+// static-buffer pool is capped at 4096 (ARCHITECTURE §10) — leaking on every
+// decomposition exhausts it into silent invisible-but-solid chunks.
+void rebuildMesh(MeshStore& ms, const ChunkCoord& cc, const Chunk& chunk) {
+    auto it = ms.find(cc);
+    if (it != ms.end()) {
+        it->second.destroy();
+        it->second = ChunkMesh::build(chunk);
+    } else {
+        ms.emplace(cc, ChunkMesh::build(chunk));
+    }
+}
+
 // Apply the diffs from DecompositionManager::tick() to the per-layer mesh stores.
 // For each composite layer: build meshes for new chunks, destroy evicted meshes.
 // For each child layer:      build meshes for new child chunks, destroy evicted.
@@ -73,7 +88,7 @@ void applyDiffs(const std::vector<LayerTickDiff>& diffs, World& world,
         for (const ChunkCoord& cc : d.newCompChunks) {
             if (!compLayer) continue;
             const Chunk* chunk = compLayer->getChunk(cc);
-            if (chunk) compMeshes[cc] = ChunkMesh::build(*chunk);
+            if (chunk) rebuildMesh(compMeshes, cc, *chunk);
         }
         // Evicted composite chunks (destroy mesh).
         for (const ChunkCoord& cc : d.evictedCompChunks) {
@@ -82,20 +97,24 @@ void applyDiffs(const std::vector<LayerTickDiff>& diffs, World& world,
         }
 
         // Macro voxels just decomposed: remesh the composite chunk they live in
-        // (the block voxel was cleared — the mesh needs updating).
-        for (const chunkmath::VoxelCoord& macro : d.newlyDecomposed) {
-            if (!compLayer) continue;
-            const chunkmath::LocalVoxel lv =
-                chunkmath::voxelToChunkLocal(macro, compLayer->chunkSizeVoxels());
-            const Chunk* chunk = compLayer->getChunk(lv.chunk);
-            if (chunk) compMeshes[lv.chunk] = ChunkMesh::build(*chunk);
+        // (the block voxel was cleared — the mesh needs updating). Many macros
+        // can share one chunk; dedupe so each chunk is rebuilt at most once.
+        if (compLayer) {
+            std::unordered_set<ChunkCoord, ChunkCoordHash> remesh;
+            for (const chunkmath::VoxelCoord& macro : d.newlyDecomposed)
+                remesh.insert(chunkmath::voxelToChunkLocal(
+                    macro, compLayer->chunkSizeVoxels()).chunk);
+            for (const ChunkCoord& cc : remesh) {
+                const Chunk* chunk = compLayer->getChunk(cc);
+                if (chunk) rebuildMesh(compMeshes, cc, *chunk);
+            }
         }
 
         // New child chunks (build fine mesh).
         for (const ChunkCoord& cc : d.newChildChunks) {
             if (!childLayer) continue;
             const Chunk* chunk = childLayer->getChunk(cc);
-            if (chunk) childMeshes[cc] = ChunkMesh::build(*chunk);
+            if (chunk) rebuildMesh(childMeshes, cc, *chunk);
         }
         // Evicted child chunks (destroy fine mesh).
         for (const ChunkCoord& cc : d.evictedChildChunks) {

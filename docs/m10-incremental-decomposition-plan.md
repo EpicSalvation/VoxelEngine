@@ -33,7 +33,7 @@ little decomposition was happening.
 
 ## P0 — Correctness (the incremental-decomposition conceit itself)
 
-### 1. [ ] Approach trigger: measure to voxel AABB, not center
+### 1. [x] Approach trigger: measure to voxel AABB, not center
 
 - **Where:** `src/world/DecompositionManager.cpp` (`tick` step 3, distance check
   near lines 402–405).
@@ -131,7 +131,7 @@ little decomposition was happening.
 - **Verify:** Decomposed 1 m terrain shows surface contour, soil cap, and cave
   openings; digging down reaches the hollow core.
 
-### 5. [ ] Fix GPU buffer leak on remesh; dedupe remeshes
+### 5. [x] Fix GPU buffer leak on remesh; dedupe remeshes
 
 - **Where:** demo `applyDiffs`, `demos/10-drill-to-the-core/main.cpp` lines
   ~76, ~91, ~98.
@@ -275,3 +275,4 @@ recipes for surface terrain.
 | Date | Session | Items touched | Notes |
 |------|---------|---------------|-------|
 | 2026-06-12 | review | — | Initial review and this plan. No code changes yet. |
+| 2026-06-12 | fixes-1 | 1, 5 | AABB approach distance in `DecompositionManager::tick`; destroy-before-rebuild + per-chunk remesh dedupe in demo `applyDiffs`. New regression test `CascadeDecompositionTest.ApproachTriggerUsesVoxelSurfaceDistance` (verified failing on the old code). Full suite green. **In-demo verification still pending** (this environment is headless): walk/fly around, confirm cascade spreads to neighbors and no invisible chunks after long sessions. |

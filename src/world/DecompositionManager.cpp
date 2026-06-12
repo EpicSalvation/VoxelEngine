@@ -398,14 +398,21 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
                         if (!parent.state.isDecomposed(parentMacro)) continue;
                     }
 
-                    // Distance check (sphere, not cube).
-                    const WorldCoord macroCenter = chunkmath::voxelCenter(macro, voxelSize);
-                    const glm::dvec3 delta = macroCenter.value - cameraPos.value;
-                    const double distSq = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
+                    // Distance check: camera to the macro voxel's AABB (its
+                    // closest point), not its center. A center test under-
+                    // triggers by up to voxelSize*√3/2 — with 64 m voxels and a
+                    // 64 m radius, the neighbors of the block underfoot never
+                    // qualify and the cascade stalls at one block.
+                    const glm::dvec3 lo = chunkmath::voxelOrigin(macro, voxelSize).value;
+                    const glm::dvec3 closest =
+                        glm::clamp(cameraPos.value, lo, lo + glm::dvec3(voxelSize));
+                    const glm::dvec3 delta = closest - cameraPos.value;
+                    const double distSq = glm::dot(delta, delta);
                     if (distSq > approachRadiusM * approachRadiusM) continue;
 
                     // The macro voxel must be solid in the composite layer
                     // (a cleared voxel was already decomposed and its block removed).
+                    const WorldCoord macroCenter = chunkmath::voxelCenter(macro, voxelSize);
                     if (layer.getVoxel(macroCenter).isEmpty()) continue;
 
                     if (info.state.markPending(macro)) {

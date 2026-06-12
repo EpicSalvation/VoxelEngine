@@ -323,6 +323,36 @@ TEST(CascadeDecompositionTest, DecompositionStateConsistentPerLayer) {
     EXPECT_EQ(mgr.inFlight(),  0u);
 }
 
+// ── Approach trigger geometry ─────────────────────────────────────────────────
+//
+// The approach test must measure camera distance to the macro voxel's AABB
+// (closest point), not its center: a center test under-triggers by up to
+// voxelSize*√3/2, which with voxel-scale radii stalls the cascade at the single
+// block under the camera (the M10 demo's "only the landed chunk decomposes" bug).
+TEST(CascadeDecompositionTest, ApproachTriggerUsesVoxelSurfaceDistance) {
+    auto cfg = LayerConfig::loadFromString(kFourLayerYaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin(solidPluginInit);
+    DecompositionManager mgr(world, pm, cfg, 0x5EED5EEDull, 1);
+
+    // Continental voxels are 8 m. Camera hovers 1 m above the top face of voxel
+    // (0,0,0), on its center column. With a 5 m approach radius:
+    //   voxel (0,0,0): surface distance 1 m        (center distance 5 m)
+    //   voxel (1,0,0): surface distance √17 ≈ 4.1 m (center distance √89 ≈ 9.4 m)
+    // A center-based test would never decompose (1,0,0).
+    const WorldCoord cam(4.0, 9.0, 4.0);
+    constexpr double kApproach = 5.0;
+
+    mgr.tick(cam, kApproach);
+    drainUntilDone(mgr, world, cam, kApproach);
+
+    EXPECT_TRUE(mgr.isDecomposed("continental", {0, 0, 0}))
+        << "the block directly under the camera must decompose";
+    EXPECT_TRUE(mgr.isDecomposed("continental", {1, 0, 0}))
+        << "a neighbor whose face (not center) is within range must decompose";
+}
+
 // ── Cache-miss determinism across the cascade ─────────────────────────────────
 //
 // Decompose the full chain in a region, capture terminal voxel data, move the
