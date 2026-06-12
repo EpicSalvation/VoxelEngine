@@ -323,6 +323,34 @@ TEST(CascadeDecompositionTest, DecompositionStateConsistentPerLayer) {
     EXPECT_EQ(mgr.inFlight(),  0u);
 }
 
+// ── Single source of truth per layer ──────────────────────────────────────────
+//
+// Only the root composite layer is generator-streamed. A non-root composite
+// layer's chunks must come exclusively from its parent's decomposition —
+// generator-streaming them too creates a second source of truth for the same
+// chunks (insertChunk silently overwrites) and renders fine content under macro
+// blocks that never decomposed.
+TEST(CascadeDecompositionTest, NonRootCompositeLayersNotStreamedDirectly) {
+    auto cfg = LayerConfig::loadFromString(kFourLayerYaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin(solidPluginInit);  // registers generators for ALL four layers
+    DecompositionManager mgr(world, pm, cfg, 0x0123ull, 1);
+
+    const WorldCoord cam(256.0, 256.0, 256.0);
+    // Stream only: decompPerFrame=0 so no decomposition can populate child layers.
+    for (int i = 0; i < 10; ++i)
+        mgr.tick(cam, /*approachRadiusM=*/100.0, /*loadPerFrame=*/64,
+                 /*decompPerFrame=*/0);
+
+    EXPECT_GT(world.layer("continental")->chunks().size(), 0u)
+        << "root composite layer must be generator-streamed";
+    EXPECT_EQ(world.layer("regional")->chunks().size(), 0u)
+        << "non-root composite layer must not be generator-streamed";
+    EXPECT_EQ(world.layer("local")->chunks().size(), 0u)
+        << "non-root composite layer must not be generator-streamed";
+}
+
 // ── Approach trigger geometry ─────────────────────────────────────────────────
 //
 // The approach test must measure camera distance to the macro voxel's AABB

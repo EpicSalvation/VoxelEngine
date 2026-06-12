@@ -19,7 +19,11 @@
 // The manager fully owns composite-layer chunk streaming (load + evict) so that
 // eviction can cascade correctly: when a composite chunk leaves view range, every
 // decomposed descendant across all deeper layers is evicted in one consistent
-// pass. Terminal and immutable layers are streamed by the demo independently.
+// pass. Only the ROOT composite layer (the one that is no other composite's
+// decompose_to target) is generator-loaded; every non-root composite layer's
+// chunks are produced exclusively by its parent's decomposition (ARCHITECTURE §4
+// step 5), keeping a single source of truth per chunk. Terminal and immutable
+// layers are streamed by the demo independently.
 
 #include <cstdint>
 #include <functional>
@@ -47,7 +51,9 @@ struct LayerTickDiff {
     std::string childLayerName;      // its direct child (decompose_to target)
 
     // Composite-layer chunks: load/evict events the front-end uses to build/destroy
-    // coarse block meshes.
+    // coarse block meshes. newCompChunks is populated only for the root composite
+    // layer (non-root layers' chunks arrive via the parent diff's newChildChunks);
+    // evictedCompChunks fires for every composite layer.
     std::vector<ChunkCoord> newCompChunks;
     std::vector<ChunkCoord> evictedCompChunks;
 

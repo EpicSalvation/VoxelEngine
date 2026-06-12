@@ -82,7 +82,7 @@ little decomposition was happening.
   visibly restored (no holes). Fly back in: blocks re-decompose identically
   (determinism check). Repeat for the local-layer band (~150–380 m).
 
-### 3. [ ] Single source of truth for child-layer content
+### 3. [x] Single source of truth for child-layer content
 
 - **Where:** `src/world/DecompositionManager.cpp` (`tick` step 2 streams every
   composite layer with its registered generator, lines ~303–326);
@@ -116,7 +116,7 @@ little decomposition was happening.
   block visibly refines its silhouette rather than just recoloring it.
   Decompose → evict → re-approach yields identical content.
 
-### 4. [ ] Cave-carved 1 m terrain actually generates
+### 4. [x] Cave-carved 1 m terrain actually generates
 
 - **Where:** `src/world/DecompositionManager.cpp` `makeJob` (~line 83) prefers
   a recipe when registered; `plugins/drill-world/plugin.cpp` registers
@@ -225,7 +225,7 @@ little decomposition was happening.
 
 ## P2 — Polish / follow-ups
 
-### 12. [ ] Update stale drill-world plugin header comment
+### 12. [x] Update stale drill-world plugin header comment
 
 `plugins/drill-world/plugin.cpp` lines 1–11 still describe the old
 512 m / ratio-8 stack; generators now hardcode the shallow 64/16/4 sizes.
@@ -276,3 +276,4 @@ recipes for surface terrain.
 |------|---------|---------------|-------|
 | 2026-06-12 | review | — | Initial review and this plan. No code changes yet. |
 | 2026-06-12 | fixes-1 | 1, 5 | AABB approach distance in `DecompositionManager::tick`; destroy-before-rebuild + per-chunk remesh dedupe in demo `applyDiffs`. New regression test `CascadeDecompositionTest.ApproachTriggerUsesVoxelSurfaceDistance` (verified failing on the old code). Full suite green. **In-demo verification still pending** (this environment is headless): walk/fly around, confirm cascade spreads to neighbors and no invisible chunks after long sessions. |
+| 2026-06-12 | fixes-2 | 3, 4, 12 | Engine: only root composite layers are generator-streamed (`tick` step 2 gated on `parentIdx < 0`); non-root composite chunks now come exclusively from parent decomposition. Plugin: dropped all three recipes so every cascade step uses the M6 generator path (`regionalGen`/`localGen`/`terrainGen`) — caves now reachable; rewrote the stale plugin header. New regression test `CascadeDecompositionTest.NonRootCompositeLayersNotStreamedDirectly` (verified failing on the old code). Full suite green. **In-demo verification pending:** no z-fighting on undecomposed surfaces, silhouette refines per level (16 m → 4 m → 1 m), caves/soil cap present, decompose→evict→re-approach identical. Item 2's holes (fly-away bands) are now the most visible remaining P0. |

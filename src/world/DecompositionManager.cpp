@@ -308,20 +308,27 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
         const ChunkCoord camChunk =
             chunkmath::worldToChunk(cameraPos, layer.voxelSizeM(), layer.chunkSizeVoxels());
 
-        // Load: use the layer's generator to fill composite chunks.
-        LayerGeneratorFn genFn = nullptr;
-        void* genUD = nullptr;
-        for (const auto& g : pm_.layerGenerators())
-            if (g.layer_name == layer.name()) { genFn = g.fn; genUD = g.user_data; break; }
+        // Load: only the ROOT composite layer (no composite parent) is streamed
+        // from its generator. A non-root composite layer's chunks come exclusively
+        // from its parent's decomposition (ARCHITECTURE §4 step 5) — generator-
+        // streaming them too would create a second source of truth for the same
+        // chunks, racing decomposition output (insertChunk silently overwrites)
+        // and rendering fine content under macro blocks that never decomposed.
+        if (info.parentIdx < 0) {
+            LayerGeneratorFn genFn = nullptr;
+            void* genUD = nullptr;
+            for (const auto& g : pm_.layerGenerators())
+                if (g.layer_name == layer.name()) { genFn = g.fn; genUD = g.user_data; break; }
 
-        int loaded = 0;
-        for (const ChunkCoord& cc : lod_.desiredChunks(camChunk, layer.name())) {
-            if (layer.getChunk(cc)) continue;
-            if (loaded >= loadPerFrame) break;
-            if (Chunk* chunk = layer.loadChunk(cc, genFn, genUD)) {
-                fireChunkCreated(layer, *chunk);
-                diff.newCompChunks.push_back(cc);
-                ++loaded;
+            int loaded = 0;
+            for (const ChunkCoord& cc : lod_.desiredChunks(camChunk, layer.name())) {
+                if (layer.getChunk(cc)) continue;
+                if (loaded >= loadPerFrame) break;
+                if (Chunk* chunk = layer.loadChunk(cc, genFn, genUD)) {
+                    fireChunkCreated(layer, *chunk);
+                    diff.newCompChunks.push_back(cc);
+                    ++loaded;
+                }
             }
         }
 
