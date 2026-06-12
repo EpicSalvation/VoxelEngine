@@ -381,6 +381,74 @@ TEST(CascadeDecompositionTest, ApproachTriggerUsesVoxelSurfaceDistance) {
         << "a neighbor whose face (not center) is within range must decompose";
 }
 
+// ── Bottom-up re-atomization ──────────────────────────────────────────────────
+//
+// Each composite layer's LOD eviction runs on its own (smaller) radius, so a
+// decomposed parent's child chunks can leave view range while the parent chunk
+// is still resident. The parent macro must then collapse back to atomic — state
+// cleared AND its block voxel restored — or the world is left with an invisible,
+// non-collidable, re-trigger-proof hole (the block was cleared at decomposition
+// and nothing else restores it).
+TEST(CascadeDecompositionTest, BottomUpEvictionReatomizesParent) {
+    auto cfg = LayerConfig::loadFromString(kFourLayerYaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin(solidPluginInit);
+    DecompositionManager mgr(world, pm, cfg, 0xA70A70ull, 2);
+
+    // Decompose the neighborhood of continental voxel (0,0,0) (8 m cells).
+    const WorldCoord camNear(4.0, 4.0, 4.0);
+    constexpr double kApproach = 6.0;
+    for (int i = 0; i < 40; ++i) {
+        mgr.tick(camNear, kApproach);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    drainUntilDone(mgr, world, camNear, kApproach);
+
+    Layer* continental = world.layer("continental");
+    ASSERT_NE(continental, nullptr);
+    ASSERT_TRUE(mgr.isDecomposed("continental", {0, 0, 0}));
+    // The macro's block voxel was cleared on decomposition.
+    ASSERT_TRUE(continental->getVoxel(WorldCoord(4.0, 4.0, 4.0)).isEmpty());
+    ASSERT_GT(world.layer("regional")->chunks().size(), 0u);
+
+    // Move to a MID distance: every regional (4 m·1, evict radius 12 m), local,
+    // and terrain chunk leaves its own layer's eviction radius, while continental
+    // chunks 0..1 (8 m·1, evict radius 24 m) stay resident. Without
+    // re-atomization this is exactly the hole band.
+    const WorldCoord camMid(28.0, 4.0, 4.0);
+    for (int i = 0; i < 10; ++i)
+        mgr.tick(camMid, /*approachRadiusM=*/0.0, /*loadPerFrame=*/8,
+                 /*decompPerFrame=*/0);
+
+    // Parent chunk still resident, macro back to atomic, block voxel restored.
+    EXPECT_NE(continental->getChunk(ChunkCoord{0, 0, 0}), nullptr)
+        << "continental chunk must stay resident at mid distance";
+    EXPECT_FALSE(mgr.isDecomposed("continental", {0, 0, 0}))
+        << "parent macro must re-atomize when its children evict bottom-up";
+    EXPECT_EQ(mgr.decomposedCount("continental"), 0u)
+        << "every decomposed macro must be re-atomized or top-down evicted";
+    const Voxel restored = continental->getVoxel(WorldCoord(4.0, 4.0, 4.0));
+    EXPECT_FALSE(restored.isEmpty())
+        << "the parent's block voxel must be restored — no invisible hole";
+    EXPECT_EQ(restored.material.palette_index, 1);
+
+    // All descendant layers fully collapsed back to the coarse block.
+    EXPECT_EQ(world.layer("regional")->chunks().size(), 0u);
+    EXPECT_EQ(world.layer("local")->chunks().size(),    0u);
+    EXPECT_EQ(world.layer("terrain")->chunks().size(),  0u);
+
+    // Re-approach: the macro must decompose again (it is re-trigger-able).
+    for (int i = 0; i < 40; ++i) {
+        mgr.tick(camNear, kApproach);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    drainUntilDone(mgr, world, camNear, kApproach);
+    EXPECT_TRUE(mgr.isDecomposed("continental", {0, 0, 0}))
+        << "a re-atomized macro must decompose again on re-approach";
+    EXPECT_GT(world.layer("terrain")->chunks().size(), 0u);
+}
+
 // ── Cache-miss determinism across the cascade ─────────────────────────────────
 //
 // Decompose the full chain in a region, capture terminal voxel data, move the

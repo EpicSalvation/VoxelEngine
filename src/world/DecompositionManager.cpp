@@ -13,6 +13,22 @@
 #include "core/LayerConfig.h"
 #include "core/PluginManager.h"
 
+namespace {
+
+// Squared distance from a point to the closest point of a macro voxel's AABB.
+// Zero when the point is inside the voxel. This — not center distance — is what
+// "within the approach radius" means: a center test under-triggers by up to
+// voxelSize*√3/2, stalling the cascade at the single block under the camera.
+double macroSurfaceDistSq(chunkmath::VoxelCoord macro, double voxelSize,
+                          const WorldCoord& point) {
+    const glm::dvec3 lo = chunkmath::voxelOrigin(macro, voxelSize).value;
+    const glm::dvec3 closest = glm::clamp(point.value, lo, lo + glm::dvec3(voxelSize));
+    const glm::dvec3 delta = closest - point.value;
+    return glm::dot(delta, delta);
+}
+
+}  // namespace
+
 // ── Construction ──────────────────────────────────────────────────────────────
 
 DecompositionManager::DecompositionManager(World& world, PluginManager& pm,
@@ -191,16 +207,76 @@ void DecompositionManager::cascadeEvict(size_t ci, chunkmath::VoxelCoord macro,
                     if (childInfo.state.isDecomposed(childMacro))
                         cascadeEvict(childCi, childMacro, diffs);
                     childInfo.state.clear(childMacro);
+                    childInfo.originalVoxel.erase(childMacro);
                 }
     }
 
     info.state.clear(macro);
+    info.originalVoxel.erase(macro);
     diff.newlyAtomic.push_back(macro);
+}
+
+// ── Bottom-up re-atomization ──────────────────────────────────────────────────
+
+bool DecompositionManager::subtreePending(size_t ci, chunkmath::VoxelCoord macro) const {
+    const CompositeLayerInfo& info = composites_[ci];
+    if (info.state.isPending(macro)) return true;
+    if (!info.state.isDecomposed(macro)) return false;
+
+    auto childIt = compositeIdx_.find(info.childLayer->name());
+    if (childIt == compositeIdx_.end()) return false;  // child is terminal
+
+    const chunkmath::VoxelCoord childMin = chunkmath::childVoxelMin(macro, info.ratio);
+    for (int64_t dz = 0; dz < info.ratio; ++dz)
+        for (int64_t dy = 0; dy < info.ratio; ++dy)
+            for (int64_t dx = 0; dx < info.ratio; ++dx)
+                if (subtreePending(childIt->second,
+                        {childMin.x + dx, childMin.y + dy, childMin.z + dz}))
+                    return true;
+    return false;
+}
+
+void DecompositionManager::reatomize(size_t ci, chunkmath::VoxelCoord macro,
+                                     const WorldCoord& cameraPos, bool force,
+                                     std::vector<LayerTickDiff>& diffs) {
+    CompositeLayerInfo& info = composites_[ci];
+    if (!info.state.isDecomposed(macro)) return;
+    if (subtreePending(ci, macro)) return;  // jobs in flight below; retry next tick
+
+    if (!force) {
+        // Collapse only once ALL of the macro's child chunks have left the child
+        // layer's eviction radius. With span > 1 some siblings may still be in
+        // view; collapsing then would evict chunks that immediately re-decompose.
+        const Layer& childLayer = *info.childLayer;
+        const ChunkCoord childCam = chunkmath::worldToChunk(
+            cameraPos, childLayer.voxelSizeM(), childLayer.chunkSizeVoxels());
+        for (const ChunkCoord& cc : childChunksForMacro(macro, *info.layer, childLayer))
+            if (!lod_.shouldEvict(childCam, cc, childLayer.name()))
+                return;
+    }
+
+    // Copy the cached block voxel before cascadeEvict erases the cache entry.
+    Voxel restored = Voxel::empty();
+    bool haveVoxel = false;
+    if (auto it = info.originalVoxel.find(macro); it != info.originalVoxel.end()) {
+        restored  = it->second;
+        haveVoxel = true;
+    }
+
+    cascadeEvict(ci, macro, diffs);  // also pushes macro into newlyAtomic
+
+    // Restore the block so the macro renders (and collides) atomically again.
+    // The owning composite chunk is still resident — only its children left view
+    // range — and the front-end remeshes it via the newlyAtomic diff.
+    if (haveVoxel)
+        info.layer->setVoxel(
+            chunkmath::voxelCenter(macro, info.layer->voxelSizeM()), restored);
 }
 
 // ── Budget enforcement ────────────────────────────────────────────────────────
 
 void DecompositionManager::enforceLayerBudget(size_t ci, ChunkCoord camChunkComp,
+                                               const WorldCoord& cameraPos,
                                                std::vector<LayerTickDiff>& diffs) {
     CompositeLayerInfo& info = composites_[ci];
     Layer& layer = *info.layer;
@@ -224,7 +300,7 @@ void DecompositionManager::enforceLayerBudget(size_t ci, ChunkCoord camChunkComp
         for (int z = 0; z < n && !anyPending; ++z)
             for (int y = 0; y < n && !anyPending; ++y)
                 for (int x = 0; x < n && !anyPending; ++x)
-                    if (info.state.isPending(chunkmath::chunkLocalToVoxel(cc, x, y, z, n)))
+                    if (subtreePending(ci, chunkmath::chunkLocalToVoxel(cc, x, y, z, n)))
                         anyPending = true;
         if (anyPending) continue;
 
@@ -239,22 +315,43 @@ void DecompositionManager::enforceLayerBudget(size_t ci, ChunkCoord camChunkComp
 
     LayerTickDiff& diff = diffs[ci];
     for (const auto& cand : candidates) {
+        // A re-atomization can remove several sibling chunks at once, so track
+        // the resident count from the store rather than hand-decrementing.
+        current = static_cast<int>(layer.chunks().size());
         if (current <= budget) break;
+        if (!layer.getChunk(cand.coord)) continue;  // collapsed via a sibling
+
+        if (info.parentIdx >= 0) {
+            // Non-root layer: shed this chunk by collapsing its parent macro
+            // (forced — budget pressure overrides the view-range check), which
+            // restores the parent's block voxel instead of leaving a hole.
+            const CompositeLayerInfo& parent = composites_[info.parentIdx];
+            const chunkmath::VoxelCoord parentMacro = chunkmath::childToParentVoxel(
+                chunkmath::chunkLocalToVoxel(cand.coord, 0, 0, 0, n), parent.ratio);
+            if (parent.state.isDecomposed(parentMacro)) {
+                reatomize(static_cast<size_t>(info.parentIdx), parentMacro,
+                          cameraPos, /*force=*/true, diffs);
+                continue;
+            }
+            // Orphan: fall through to a direct unload.
+        }
+
         // Cascade-evict all decomposed descendants.
         for (int z = 0; z < n; ++z)
             for (int y = 0; y < n; ++y)
                 for (int x = 0; x < n; ++x) {
                     chunkmath::VoxelCoord macro = chunkmath::chunkLocalToVoxel(
                         cand.coord, x, y, z, n);
-                    if (info.state.isDecomposed(macro))
+                    if (info.state.isDecomposed(macro)) {
                         cascadeEvict(ci, macro, diffs);
-                    else
+                    } else {
                         info.state.clear(macro);
+                        info.originalVoxel.erase(macro);
+                    }
                 }
         fireChunkEvicted(layer, cand.coord);
         diff.evictedCompChunks.push_back(cand.coord);
         layer.unloadChunk(cand.coord);
-        --current;
     }
 }
 
@@ -290,10 +387,12 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
         diff.newlyDecomposed.push_back(result.macro);
 
         // Clear the atomic block voxel in the composite layer so the composite
-        // chunk mesh no longer shows it (the child voxels render instead).
-        info.layer->setVoxel(
-            chunkmath::voxelCenter(result.macro, info.layer->voxelSizeM()),
-            Voxel::empty());
+        // chunk mesh no longer shows it (the child voxels render instead), caching
+        // it first so bottom-up re-atomization can restore the block (plan item 2).
+        const WorldCoord macroCenter =
+            chunkmath::voxelCenter(result.macro, info.layer->voxelSizeM());
+        info.originalVoxel[result.macro] = info.layer->getVoxel(macroCenter);
+        info.layer->setVoxel(macroCenter, Voxel::empty());
     }
 
     // ── 2. Stream composite-layer chunks (load + evict) ──────────────────────
@@ -333,33 +432,65 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
         }
 
         // Evict: composite chunks that have moved out of the eviction radius.
-        // A chunk with pending jobs is pinned to avoid draining into a removed slot.
+        // A chunk whose macros have jobs in flight (at any depth) is pinned to
+        // avoid draining into a state the eviction just cleared.
         std::vector<ChunkCoord> toEvict;
         for (const auto& kv : layer.chunks())
             if (lod_.shouldEvict(camChunk, kv.first, layer.name()))
                 toEvict.push_back(kv.first);
 
+        const int n = layer.chunkSizeVoxels();
         for (const ChunkCoord& cc : toEvict) {
-            // Pin chunks that contain pending macro voxels (job in flight).
-            const int n = layer.chunkSizeVoxels();
+            if (!layer.getChunk(cc)) continue;  // already collapsed via a sibling
+
             bool anyPending = false;
             for (int z = 0; z < n && !anyPending; ++z)
                 for (int y = 0; y < n && !anyPending; ++y)
                     for (int x = 0; x < n && !anyPending; ++x)
-                        if (info.state.isPending(chunkmath::chunkLocalToVoxel(cc, x, y, z, n)))
+                        if (subtreePending(ci, chunkmath::chunkLocalToVoxel(cc, x, y, z, n)))
                             anyPending = true;
             if (anyPending) continue;
 
-            // Cascade-evict every decomposed child of every macro voxel in this chunk.
-            const int n2 = layer.chunkSizeVoxels();
-            for (int z = 0; z < n2; ++z)
-                for (int y = 0; y < n2; ++y)
-                    for (int x = 0; x < n2; ++x) {
-                        chunkmath::VoxelCoord macro = chunkmath::chunkLocalToVoxel(cc, x, y, z, n2);
-                        if (info.state.isDecomposed(macro))
+            if (info.parentIdx >= 0) {
+                // Non-root layer: this chunk exists because a parent macro
+                // decomposed. Dropping it directly would leave that macro's
+                // cleared block as a hole; instead collapse the parent macro
+                // back to atomic (which evicts this chunk, all its siblings,
+                // and every deeper descendant in one consistent pass).
+                const CompositeLayerInfo& parent = composites_[info.parentIdx];
+                // Integer-exact: this chunk's min voxel, collapsed to the parent
+                // grid (parent.ratio is parent-voxel : this-layer-voxel).
+                const chunkmath::VoxelCoord parentMacro = chunkmath::childToParentVoxel(
+                    chunkmath::chunkLocalToVoxel(cc, 0, 0, 0, n), parent.ratio);
+                if (parent.state.isDecomposed(parentMacro)) {
+                    // Pin while the parent macro is still inside the approach
+                    // radius: collapsing it would just re-trigger decomposition
+                    // next tick (decompose/collapse thrash when a child layer's
+                    // eviction radius is smaller than the approach radius).
+                    if (macroSurfaceDistSq(parentMacro, parent.layer->voxelSizeM(),
+                                           cameraPos) >
+                        approachRadiusM * approachRadiusM) {
+                        reatomize(static_cast<size_t>(info.parentIdx), parentMacro,
+                                  cameraPos, /*force=*/false, diffs);
+                    }
+                    continue;
+                }
+                // Orphan (no decomposed parent on record): fall through and
+                // unload directly so it cannot stay resident forever.
+            }
+
+            // Root layer (or orphan): cascade-evict every decomposed macro in
+            // this chunk, then drop the chunk itself.
+            for (int z = 0; z < n; ++z)
+                for (int y = 0; y < n; ++y)
+                    for (int x = 0; x < n; ++x) {
+                        chunkmath::VoxelCoord macro = chunkmath::chunkLocalToVoxel(cc, x, y, z, n);
+                        if (info.state.isDecomposed(macro)) {
                             cascadeEvict(ci, macro, diffs);
-                        else
+                        } else {
                             info.state.clear(macro);
+                            info.originalVoxel.erase(macro);
+                        }
                     }
 
             fireChunkEvicted(layer, cc);
@@ -370,7 +501,7 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
         // ── 2b. Budget enforcement ───────────────────────────────────────────
         // If the layer's resident set still exceeds its configured cap after the
         // normal LOD eviction, evict farthest-first clean non-pending chunks.
-        enforceLayerBudget(ci, camChunk, diffs);
+        enforceLayerBudget(ci, camChunk, cameraPos, diffs);
     }
 
     // ── 3. Approach-trigger: enqueue undecomposed macro voxels near camera ───
@@ -405,17 +536,11 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
                         if (!parent.state.isDecomposed(parentMacro)) continue;
                     }
 
-                    // Distance check: camera to the macro voxel's AABB (its
-                    // closest point), not its center. A center test under-
-                    // triggers by up to voxelSize*√3/2 — with 64 m voxels and a
-                    // 64 m radius, the neighbors of the block underfoot never
-                    // qualify and the cascade stalls at one block.
-                    const glm::dvec3 lo = chunkmath::voxelOrigin(macro, voxelSize).value;
-                    const glm::dvec3 closest =
-                        glm::clamp(cameraPos.value, lo, lo + glm::dvec3(voxelSize));
-                    const glm::dvec3 delta = closest - cameraPos.value;
-                    const double distSq = glm::dot(delta, delta);
-                    if (distSq > approachRadiusM * approachRadiusM) continue;
+                    // Distance check: camera to the macro voxel's AABB surface
+                    // (see macroSurfaceDistSq).
+                    if (macroSurfaceDistSq(macro, voxelSize, cameraPos) >
+                        approachRadiusM * approachRadiusM)
+                        continue;
 
                     // The macro voxel must be solid in the composite layer
                     // (a cleared voxel was already decomposed and its block removed).

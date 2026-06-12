@@ -96,12 +96,19 @@ void applyDiffs(const std::vector<LayerTickDiff>& diffs, World& world,
             if (it != compMeshes.end()) { it->second.destroy(); compMeshes.erase(it); }
         }
 
-        // Macro voxels just decomposed: remesh the composite chunk they live in
-        // (the block voxel was cleared — the mesh needs updating). Many macros
-        // can share one chunk; dedupe so each chunk is rebuilt at most once.
+        // Macro voxels whose block state changed: newly decomposed macros had
+        // their block voxel cleared; re-atomized macros had it restored (their
+        // children left view range and collapsed back to the coarse block).
+        // Either way the owning composite chunk must be remeshed. For top-down
+        // eviction the newlyAtomic macro's chunk was itself evicted — getChunk
+        // returns null and the remesh is skipped. Many macros can share one
+        // chunk; dedupe so each chunk is rebuilt at most once.
         if (compLayer) {
             std::unordered_set<ChunkCoord, ChunkCoordHash> remesh;
             for (const chunkmath::VoxelCoord& macro : d.newlyDecomposed)
+                remesh.insert(chunkmath::voxelToChunkLocal(
+                    macro, compLayer->chunkSizeVoxels()).chunk);
+            for (const chunkmath::VoxelCoord& macro : d.newlyAtomic)
                 remesh.insert(chunkmath::voxelToChunkLocal(
                     macro, compLayer->chunkSizeVoxels()).chunk);
             for (const ChunkCoord& cc : remesh) {

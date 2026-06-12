@@ -36,6 +36,7 @@
 #include "DecompositionWorker.h"
 #include "LODManager.h"
 #include "MacroVoxel.h"
+#include "Voxel.h"
 
 class Layer;
 class PluginManager;
@@ -63,12 +64,17 @@ struct LayerTickDiff {
     std::vector<ChunkCoord> evictedChildChunks;
 
     // Macro voxel state changes in the composite layer, used to remesh the composite
-    // chunk (the coarse block disappears on decomposition and reappears only when the
-    // parent chunk is reloaded — the composite chunk is evicted alongside its children
-    // so newlyAtomic coords are informational only; the parent chunk mesh is already
-    // destroyed via evictedCompChunks).
-    std::vector<chunkmath::VoxelCoord> newlyDecomposed;  // clear the block voxel, remesh comp chunk
-    std::vector<chunkmath::VoxelCoord> newlyAtomic;      // parent chunk also evicted
+    // chunk:
+    //   newlyDecomposed — the macro's block voxel was cleared (children render
+    //                     instead); remesh the owning composite chunk.
+    //   newlyAtomic     — the macro returned to atomic. For top-down eviction the
+    //                     owning composite chunk was itself evicted (already handled
+    //                     via evictedCompChunks, so the remesh lookup finds no chunk
+    //                     and is a no-op). For bottom-up re-atomization (the child
+    //                     chunks left their own layer's view range) the parent chunk
+    //                     is still resident with its block voxel restored — remesh it.
+    std::vector<chunkmath::VoxelCoord> newlyDecomposed;
+    std::vector<chunkmath::VoxelCoord> newlyAtomic;
 };
 
 class DecompositionManager {
@@ -120,6 +126,12 @@ private:
         int64_t            ratio;      // child voxels per parent voxel edge
         int                parentIdx;  // index in composites_ of the coarser composite, or -1
         DecompositionState state;
+        // Block voxel of each currently decomposed macro, captured just before the
+        // drain step clears it, so bottom-up re-atomization can restore the block
+        // without re-running the generator. Entries are erased whenever the macro's
+        // decomposition state clears (cascade eviction, chunk unload, re-atomize).
+        std::unordered_map<chunkmath::VoxelCoord, Voxel, chunkmath::VoxelCoordHash>
+            originalVoxel;
     };
 
     // Build a decomposition job for the given macro voxel in its composite layer.
@@ -138,15 +150,41 @@ private:
     // Recursively evict every decomposed descendant of macro in composite layer ci.
     // Saves dirty child chunks via onDirtyEvict_ before dropping them.
     // Inserts eviction records into diffs. Called before the parent composite chunk
-    // is removed from its ChunkStore.
+    // is removed from its ChunkStore (top-down) or by reatomize (bottom-up).
     void cascadeEvict(size_t ci, chunkmath::VoxelCoord macro,
                       std::vector<LayerTickDiff>& diffs);
+
+    // True if macro has a decomposition job in flight, or any decomposed
+    // descendant (at any depth) does. Such a macro must not be evicted or
+    // re-atomized this tick: a draining job would insert chunks into a state
+    // the eviction just cleared.
+    bool subtreePending(size_t ci, chunkmath::VoxelCoord macro) const;
+
+    // Collapse a decomposed macro back to its atomic block (the inverse of one
+    // decomposition step): cascade-evict every decomposed descendant, then restore
+    // the macro's cached block voxel so it renders and collides atomically again.
+    // Driven bottom-up: when a child layer's own LOD eviction (or budget pass)
+    // wants to drop chunks that exist because this macro decomposed, the macro
+    // must return to atomic or the world is left with a hole — the block voxel
+    // was cleared at decomposition and nothing else restores it (plan item 2).
+    //
+    // Skipped (left for a later tick) while the macro's subtree has jobs in
+    // flight. Unless force is set, also skipped while any of the macro's child
+    // chunks is still within the child layer's eviction radius (span > 1 configs:
+    // collapsing would evict in-view children that immediately re-decompose).
+    // force is used by the budget pass, which must shed chunks regardless.
+    void reatomize(size_t ci, chunkmath::VoxelCoord macro,
+                   const WorldCoord& cameraPos, bool force,
+                   std::vector<LayerTickDiff>& diffs);
 
     // Enforce the per-layer resident-chunk budget for composite layer ci, then
     // (if the child is terminal) for its child layer. Evicts farthest-first clean
     // non-pending chunks until the resident count is within the budget. Dirty and
-    // near-camera chunks are pinned. Never blocks the main thread.
+    // near-camera chunks are pinned. Never blocks the main thread. Non-root
+    // layers shed chunks by re-atomizing the owning parent macro (forced), so
+    // the parent's block voxel is restored rather than leaving a hole.
     void enforceLayerBudget(size_t ci, ChunkCoord camChunkComp,
+                            const WorldCoord& cameraPos,
                             std::vector<LayerTickDiff>& diffs);
 
     // Fire registered ChunkLifecycle hooks for a chunk being created or evicted.
