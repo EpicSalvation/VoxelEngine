@@ -63,14 +63,17 @@ using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
 // be destroyed first: plain map assignment leaks the old bgfx handles, and the
 // static-buffer pool is capped at 4096 (ARCHITECTURE §10) — leaking on every
 // decomposition exhausts it into silent invisible-but-solid chunks.
+// All-air chunks produce no faces; they are kept OUT of the store entirely so
+// the per-frame render loop isn't iterating thousands of empty entries.
 void rebuildMesh(MeshStore& ms, const ChunkCoord& cc, const Chunk& chunk) {
     auto it = ms.find(cc);
     if (it != ms.end()) {
         it->second.destroy();
-        it->second = ChunkMesh::build(chunk);
-    } else {
-        ms.emplace(cc, ChunkMesh::build(chunk));
+        ms.erase(it);
     }
+    ChunkMesh mesh = ChunkMesh::build(chunk);
+    if (mesh.empty()) return;  // empty mesh holds no buffers; nothing to keep
+    ms.emplace(cc, mesh);
 }
 
 // Apply the diffs from DecompositionManager::tick() to the per-layer mesh stores.
@@ -143,6 +146,11 @@ int main() {
     //   regional    16 m, chunk 4 →   4 m/chunk  (ratio 4 to local)
     //   local        4 m, chunk 4 →   1 m/chunk  (ratio 4 to terrain)
     //   terrain      1 m, chunk 4 →   1 m/chunk  (terminal)
+    // Resident budgets keep total mesh count under bgfx's 4096 static-buffer
+    // cap (each non-empty chunk mesh = 1 vertex + 1 index buffer); the terrain
+    // cap matters most — fine chunks dominate the handle load. The manager
+    // collapses the farthest decomposed macros (restoring their coarse blocks)
+    // when a cap is exceeded, so the fine bubble shrinks instead of breaking.
     LayerConfig cfg = [] {
         try {
             return LayerConfig::loadFromString(R"(
@@ -153,6 +161,7 @@ layers:
     decompose_to: regional
     chunk_size_voxels: 4
     view_distance_chunks: 3
+    resident_chunk_budget: 128
 
   - name: regional
     voxel_size_m: 16.0
@@ -160,6 +169,7 @@ layers:
     decompose_to: local
     chunk_size_voxels: 4
     view_distance_chunks: 4
+    resident_chunk_budget: 256
 
   - name: local
     voxel_size_m: 4.0
@@ -167,12 +177,14 @@ layers:
     decompose_to: terrain
     chunk_size_voxels: 4
     view_distance_chunks: 5
+    resident_chunk_budget: 1024
 
   - name: terrain
     voxel_size_m: 1.0
     mode: terminal
     chunk_size_voxels: 4
     view_distance_chunks: 8
+    resident_chunk_budget: 2048
 )");
         } catch (const std::exception& e) {
             std::cerr << "[main] Fatal: " << e.what() << "\n";
@@ -205,6 +217,10 @@ layers:
 
     // ── Engine-owned cascade orchestrator ─────────────────────────────────────
     DecompositionManager decompMgr(world, pm, cfg, kWorldSeed);
+    // The drill world is a surface slab (top at ~58 m): the entire crust fits in
+    // continental chunk row y=0 (a 256 m slab). Banding root streaming to that
+    // row avoids loading and iterating ~6× empty sky/underground chunks.
+    decompMgr.setVerticalBand(0, 0);
 
     // ── Renderer ──────────────────────────────────────────────────────────────
     platform::Window window(1280, 720, "VoxelEngine — M10 Drill to the Core");
@@ -348,11 +364,14 @@ layers:
         }
 
         // ── DecompositionManager tick ─────────────────────────────────────────
-        // The manager streams all composite layers, runs decomposition, and cascade-
-        // evicts chunks that leave view range. The returned diffs tell us which
-        // meshes to build or destroy.
+        // The manager streams the root composite layer, runs decomposition, and
+        // cascade-evicts/collapses chunks that leave view range. The returned
+        // diffs tell us which meshes to build or destroy. applyPerFrame bounds
+        // how many completed jobs land per frame — and therefore how many meshes
+        // this frame builds — so bursts of completions don't hitch.
         auto diffs = decompMgr.tick(camPos, kApproachRadiusM,
-                                    /*loadPerFrame=*/32, /*decompPerFrame=*/128);
+                                    /*loadPerFrame=*/32, /*decompPerFrame=*/128,
+                                    /*applyPerFrame=*/16);
         applyDiffs(diffs, world, meshStores);
 
         // ── Terminal terrain: stream independently ────────────────────────────

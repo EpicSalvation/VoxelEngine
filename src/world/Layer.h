@@ -56,6 +56,13 @@ public:
     Voxel getVoxel(const WorldCoord& pos) const;
     bool  setVoxel(const WorldCoord& pos, const Voxel& voxel);
 
+    // Like setVoxel but leaves the chunk's dirty flag untouched. The dirty flag
+    // means "player-edited, must persist" (M5); engine-internal rendered-state
+    // writes — DecompositionManager clearing a decomposed macro's block voxel or
+    // restoring it on re-atomization — must not pin the chunk against budget
+    // eviction or trick persistence into saving regenerable state.
+    bool  setVoxelNoDirty(const WorldCoord& pos, const Voxel& voxel);
+
     // ── Dirty tracking (M5) ───────────────────────────────────────────────
     bool isChunkDirty(ChunkCoord coord) const;
     std::vector<ChunkCoord> dirtyChunkCoords() const;

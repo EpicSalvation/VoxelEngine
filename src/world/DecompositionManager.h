@@ -26,6 +26,7 @@
 // layers are streamed by the demo independently.
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -90,18 +91,31 @@ public:
     //
     // cameraPos       — world-space camera position (drives LOD streaming and approach)
     // approachRadiusM — radius within which undecomposed macro voxels are enqueued
+    //                   (camera distance to the macro's AABB surface, not center)
     // loadPerFrame    — max composite chunks to load per tick (caps hitching)
-    // decompPerFrame  — max decomposition jobs to enqueue per tick
+    // decompPerFrame  — max decomposition jobs to enqueue per tick, nearest-first
+    // applyPerFrame   — max completed jobs APPLIED per tick. Completed results
+    //                   beyond the budget stay queued in the manager (they still
+    //                   count as inFlight), spreading chunk insertion — and the
+    //                   caller's mesh builds — across frames instead of hitching.
     //
     // Returns one LayerTickDiff per composite layer. The caller must:
     //   - Build meshes for all chunks in newCompChunks / newChildChunks
     //   - Destroy meshes for all chunks in evictedCompChunks / evictedChildChunks
     //   - Remesh the composite chunk containing each coord in newlyDecomposed
-    //     (the macro voxel's block was cleared; only that composite chunk changes)
+    //     and newlyAtomic (block voxel cleared / restored)
     std::vector<LayerTickDiff> tick(const WorldCoord& cameraPos,
                                     double approachRadiusM,
                                     int loadPerFrame   = 4,
-                                    int decompPerFrame = 64);
+                                    int decompPerFrame = 64,
+                                    int applyPerFrame  = 16);
+
+    // Restrict ROOT-layer streaming to a vertical band of root-layer chunk-Y
+    // indices (forwarded to LODManager::setVerticalBand). Only the root composite
+    // layer is generator-streamed, so the band is expressed in its chunk units;
+    // a vertically bounded world (e.g. a surface slab) avoids loading and meshing
+    // empty sky and underground chunks.
+    void setVerticalBand(int yMin, int yMax) { lod_.setVerticalBand(yMin, yMax); }
 
     // Register a callback invoked before a dirty (player-edited) chunk is evicted
     // from any managed layer. The callback receives a const reference to the chunk
@@ -117,7 +131,9 @@ public:
     bool   isPending   (const std::string& layerName, chunkmath::VoxelCoord macro) const;
     size_t decomposedCount(const std::string& layerName) const;
     size_t pendingCount   (const std::string& layerName) const;
-    size_t inFlight() const { return worker_.inFlight(); }
+    // Jobs not yet applied to the world: queued/running in the worker plus
+    // completed results awaiting their applyPerFrame slot.
+    size_t inFlight() const { return worker_.inFlight() + backlog_.size(); }
 
 private:
     struct CompositeLayerInfo {
@@ -132,6 +148,12 @@ private:
         // decomposition state clears (cascade eviction, chunk unload, re-atomize).
         std::unordered_map<chunkmath::VoxelCoord, Voxel, chunkmath::VoxelCoordHash>
             originalVoxel;
+        // Count of pending (in-flight) macro voxels per owning chunk, maintained
+        // at markPending/markDecomposed time so eviction pinning is an O(1) map
+        // lookup instead of an n³ voxel scan per chunk per tick. Pending macros
+        // are never cleared outside the drain (pinning forbids it), so the
+        // counters cannot drift.
+        std::unordered_map<ChunkCoord, int, ChunkCoordHash> pendingChunks;
     };
 
     // Build a decomposition job for the given macro voxel in its composite layer.
@@ -160,6 +182,13 @@ private:
     // the eviction just cleared.
     bool subtreePending(size_t ci, chunkmath::VoxelCoord macro) const;
 
+    // Chunk-level pin test for eviction: true if any macro in chunk cc of layer
+    // ci has a pending job in its subtree. O(1) in the common case — the layer's
+    // own pendingChunks counter plus a global "any deeper layer pending" check —
+    // falling back to the exhaustive per-macro subtree scan only while deeper
+    // jobs are actually in flight.
+    bool chunkPinned(size_t ci, ChunkCoord cc) const;
+
     // Collapse a decomposed macro back to its atomic block (the inverse of one
     // decomposition step): cascade-evict every decomposed descendant, then restore
     // the macro's cached block voxel so it renders and collides atomically again.
@@ -179,12 +208,15 @@ private:
 
     // Enforce the per-layer resident-chunk budget for composite layer ci, then
     // (if the child is terminal) for its child layer. Evicts farthest-first clean
-    // non-pending chunks until the resident count is within the budget. Dirty and
-    // near-camera chunks are pinned. Never blocks the main thread. Non-root
-    // layers shed chunks by re-atomizing the owning parent macro (forced), so
-    // the parent's block voxel is restored rather than leaving a hole.
+    // non-pending chunks until the resident count is within the budget. Never
+    // blocks the main thread. Pinned (never shed): dirty chunks, chunks with
+    // jobs in flight below them, and chunks within the approach radius — budget
+    // eviction of an in-approach chunk would re-decompose next tick (churn), so
+    // the cap is soft inside the approach bubble and hard outside it. Non-root
+    // and terminal-child layers shed chunks by re-atomizing the owning parent
+    // macro (forced), restoring its block voxel rather than leaving a hole.
     void enforceLayerBudget(size_t ci, ChunkCoord camChunkComp,
-                            const WorldCoord& cameraPos,
+                            const WorldCoord& cameraPos, double approachRadiusM,
                             std::vector<LayerTickDiff>& diffs);
 
     // Fire registered ChunkLifecycle hooks for a chunk being created or evicted.
@@ -197,6 +229,7 @@ private:
     LODManager      lod_;
     uint64_t        worldSeed_;
     DecompositionWorker                  worker_;
+    std::deque<DecompositionResult>      backlog_;      // completed, not yet applied
     std::vector<CompositeLayerInfo>      composites_;   // coarsest-first order
     std::unordered_map<std::string, size_t> compositeIdx_; // layerName → composites_ index
     DirtyEvictFn    onDirtyEvict_;  // called before evicting a dirty chunk; may be null

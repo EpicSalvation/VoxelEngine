@@ -15,16 +15,29 @@
 
 namespace {
 
-// Squared distance from a point to the closest point of a macro voxel's AABB.
-// Zero when the point is inside the voxel. This — not center distance — is what
-// "within the approach radius" means: a center test under-triggers by up to
-// voxelSize*√3/2, stalling the cascade at the single block under the camera.
-double macroSurfaceDistSq(chunkmath::VoxelCoord macro, double voxelSize,
-                          const WorldCoord& point) {
-    const glm::dvec3 lo = chunkmath::voxelOrigin(macro, voxelSize).value;
-    const glm::dvec3 closest = glm::clamp(point.value, lo, lo + glm::dvec3(voxelSize));
+// Squared distance from a point to the closest point of a cube AABB (zero when
+// the point is inside).
+double aabbDistSq(const glm::dvec3& lo, double size, const WorldCoord& point) {
+    const glm::dvec3 closest = glm::clamp(point.value, lo, lo + glm::dvec3(size));
     const glm::dvec3 delta = closest - point.value;
     return glm::dot(delta, delta);
+}
+
+// Squared distance from a point to a macro voxel's AABB surface. This — not
+// center distance — is what "within the approach radius" means: a center test
+// under-triggers by up to voxelSize*√3/2, stalling the cascade at the single
+// block under the camera.
+double macroSurfaceDistSq(chunkmath::VoxelCoord macro, double voxelSize,
+                          const WorldCoord& point) {
+    return aabbDistSq(chunkmath::voxelOrigin(macro, voxelSize).value, voxelSize, point);
+}
+
+// Squared distance from a point to a whole chunk's AABB surface, for rejecting
+// chunks wholesale before scanning their voxels.
+double chunkSurfaceDistSq(ChunkCoord cc, double voxelSize, int chunkSizeVoxels,
+                          const WorldCoord& point) {
+    return aabbDistSq(chunkmath::chunkOrigin(cc, voxelSize, chunkSizeVoxels).value,
+                      voxelSize * chunkSizeVoxels, point);
 }
 
 }  // namespace
@@ -174,10 +187,10 @@ void DecompositionManager::cascadeEvict(size_t ci, chunkmath::VoxelCoord macro,
     Layer& childLayer = *info.childLayer;
     LayerTickDiff& diff = diffs[ci];
 
-    // Remove child chunks from this level's child layer.
-    // Only terminal-layer chunks can carry player edits worth saving; composite
-    // chunks may be flagged dirty by the setVoxel(empty) call in the drain step
-    // (a rendered-state update, not a player edit) and must NOT be persisted.
+    // Remove child chunks from this level's child layer. Only terminal-layer
+    // chunks can carry player edits worth saving (the manager's own block-voxel
+    // writes use setVoxelNoDirty, so a dirty composite chunk cannot occur from
+    // engine activity).
     const bool childIsTerminal = (childLayer.mode() == VoxelMode::terminal);
     for (const ChunkCoord& cc : childChunksForMacro(macro, *info.layer, childLayer)) {
         const Chunk* chunk = childLayer.getChunk(cc);
@@ -236,6 +249,30 @@ bool DecompositionManager::subtreePending(size_t ci, chunkmath::VoxelCoord macro
     return false;
 }
 
+bool DecompositionManager::chunkPinned(size_t ci, ChunkCoord cc) const {
+    const CompositeLayerInfo& info = composites_[ci];
+
+    // Own layer: O(1) counter maintained at markPending/markDecomposed time.
+    auto it = info.pendingChunks.find(cc);
+    if (it != info.pendingChunks.end() && it->second > 0) return true;
+
+    // Deeper layers: the exhaustive per-macro subtree scan is only needed while
+    // some finer layer actually has jobs in flight — rare during eviction, and
+    // free to rule out via the per-layer pending totals.
+    bool deeperPending = false;
+    for (size_t cj = ci + 1; cj < composites_.size() && !deeperPending; ++cj)
+        deeperPending = composites_[cj].state.pendingCount() > 0;
+    if (!deeperPending) return false;
+
+    const int n = info.layer->chunkSizeVoxels();
+    for (int z = 0; z < n; ++z)
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x)
+                if (subtreePending(ci, chunkmath::chunkLocalToVoxel(cc, x, y, z, n)))
+                    return true;
+    return false;
+}
+
 void DecompositionManager::reatomize(size_t ci, chunkmath::VoxelCoord macro,
                                      const WorldCoord& cameraPos, bool force,
                                      std::vector<LayerTickDiff>& diffs) {
@@ -267,9 +304,10 @@ void DecompositionManager::reatomize(size_t ci, chunkmath::VoxelCoord macro,
 
     // Restore the block so the macro renders (and collides) atomically again.
     // The owning composite chunk is still resident — only its children left view
-    // range — and the front-end remeshes it via the newlyAtomic diff.
+    // range — and the front-end remeshes it via the newlyAtomic diff. NoDirty:
+    // rendered-state update, not a player edit.
     if (haveVoxel)
-        info.layer->setVoxel(
+        info.layer->setVoxelNoDirty(
             chunkmath::voxelCenter(macro, info.layer->voxelSizeM()), restored);
 }
 
@@ -277,81 +315,124 @@ void DecompositionManager::reatomize(size_t ci, chunkmath::VoxelCoord macro,
 
 void DecompositionManager::enforceLayerBudget(size_t ci, ChunkCoord camChunkComp,
                                                const WorldCoord& cameraPos,
+                                               double approachRadiusM,
                                                std::vector<LayerTickDiff>& diffs) {
     CompositeLayerInfo& info = composites_[ci];
     Layer& layer = *info.layer;
-    const LayerDef* def = config_.findLayer(layer.name());
-    if (!def || def->resident_chunk_budget <= 0) return;
-
-    const int budget = def->resident_chunk_budget;
-    int current = static_cast<int>(layer.chunks().size());
-    if (current <= budget) return;
-
-    // Collect evictable (clean, non-pending) chunks with their camera distance.
-    struct Candidate { ChunkCoord coord; int dist; };
-    std::vector<Candidate> candidates;
-    candidates.reserve(layer.chunks().size());
+    const double radiusSq = approachRadiusM * approachRadiusM;
     const int n = layer.chunkSizeVoxels();
-    for (const auto& kv : layer.chunks()) {
-        const ChunkCoord& cc = kv.first;
-        if (kv.second->dirty()) continue;  // pin dirty
 
-        bool anyPending = false;
-        for (int z = 0; z < n && !anyPending; ++z)
-            for (int y = 0; y < n && !anyPending; ++y)
-                for (int x = 0; x < n && !anyPending; ++x)
-                    if (subtreePending(ci, chunkmath::chunkLocalToVoxel(cc, x, y, z, n)))
-                        anyPending = true;
-        if (anyPending) continue;
+    const LayerDef* def = config_.findLayer(layer.name());
+    if (def && def->resident_chunk_budget > 0 &&
+        static_cast<int>(layer.chunks().size()) > def->resident_chunk_budget) {
+        const int budget = def->resident_chunk_budget;
 
-        int dist = std::max({std::abs(cc.x - camChunkComp.x),
-                             std::abs(cc.y - camChunkComp.y),
-                             std::abs(cc.z - camChunkComp.z)});
-        candidates.push_back({cc, dist});
-    }
-    // Farthest first.
-    std::sort(candidates.begin(), candidates.end(),
-              [](const Candidate& a, const Candidate& b){ return a.dist > b.dist; });
+        // Collect evictable (clean, non-pending, out-of-approach) chunks with
+        // their camera distance. Chunks within the approach radius are pinned:
+        // budget-evicting them would re-decompose next tick (churn), so the cap
+        // is soft inside the approach bubble and hard outside it.
+        struct Candidate { ChunkCoord coord; int dist; };
+        std::vector<Candidate> candidates;
+        candidates.reserve(layer.chunks().size());
+        for (const auto& kv : layer.chunks()) {
+            const ChunkCoord& cc = kv.first;
+            if (kv.second->dirty()) continue;  // pin dirty (player-edited)
+            if (chunkPinned(ci, cc)) continue; // pin in-flight subtrees
+            if (chunkSurfaceDistSq(cc, layer.voxelSizeM(), n, cameraPos) <= radiusSq)
+                continue;                      // pin near (approach bubble)
 
-    LayerTickDiff& diff = diffs[ci];
-    for (const auto& cand : candidates) {
-        // A re-atomization can remove several sibling chunks at once, so track
-        // the resident count from the store rather than hand-decrementing.
-        current = static_cast<int>(layer.chunks().size());
-        if (current <= budget) break;
-        if (!layer.getChunk(cand.coord)) continue;  // collapsed via a sibling
-
-        if (info.parentIdx >= 0) {
-            // Non-root layer: shed this chunk by collapsing its parent macro
-            // (forced — budget pressure overrides the view-range check), which
-            // restores the parent's block voxel instead of leaving a hole.
-            const CompositeLayerInfo& parent = composites_[info.parentIdx];
-            const chunkmath::VoxelCoord parentMacro = chunkmath::childToParentVoxel(
-                chunkmath::chunkLocalToVoxel(cand.coord, 0, 0, 0, n), parent.ratio);
-            if (parent.state.isDecomposed(parentMacro)) {
-                reatomize(static_cast<size_t>(info.parentIdx), parentMacro,
-                          cameraPos, /*force=*/true, diffs);
-                continue;
-            }
-            // Orphan: fall through to a direct unload.
+            int dist = std::max({std::abs(cc.x - camChunkComp.x),
+                                 std::abs(cc.y - camChunkComp.y),
+                                 std::abs(cc.z - camChunkComp.z)});
+            candidates.push_back({cc, dist});
         }
+        // Farthest first.
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const Candidate& a, const Candidate& b){ return a.dist > b.dist; });
 
-        // Cascade-evict all decomposed descendants.
-        for (int z = 0; z < n; ++z)
-            for (int y = 0; y < n; ++y)
-                for (int x = 0; x < n; ++x) {
-                    chunkmath::VoxelCoord macro = chunkmath::chunkLocalToVoxel(
-                        cand.coord, x, y, z, n);
-                    if (info.state.isDecomposed(macro)) {
-                        cascadeEvict(ci, macro, diffs);
-                    } else {
-                        info.state.clear(macro);
-                        info.originalVoxel.erase(macro);
-                    }
+        LayerTickDiff& diff = diffs[ci];
+        for (const auto& cand : candidates) {
+            // A re-atomization can remove several sibling chunks at once, so
+            // track the resident count from the store, not by hand.
+            if (static_cast<int>(layer.chunks().size()) <= budget) break;
+            if (!layer.getChunk(cand.coord)) continue;  // collapsed via a sibling
+
+            if (info.parentIdx >= 0) {
+                // Non-root layer: shed this chunk by collapsing its parent macro
+                // (forced — budget pressure overrides the view-range check),
+                // restoring the parent's block voxel instead of leaving a hole.
+                const CompositeLayerInfo& parent = composites_[info.parentIdx];
+                const chunkmath::VoxelCoord parentMacro = chunkmath::childToParentVoxel(
+                    chunkmath::chunkLocalToVoxel(cand.coord, 0, 0, 0, n), parent.ratio);
+                if (parent.state.isDecomposed(parentMacro)) {
+                    reatomize(static_cast<size_t>(info.parentIdx), parentMacro,
+                              cameraPos, /*force=*/true, diffs);
+                    continue;
                 }
-        fireChunkEvicted(layer, cand.coord);
-        diff.evictedCompChunks.push_back(cand.coord);
-        layer.unloadChunk(cand.coord);
+                // Orphan: fall through to a direct unload.
+            }
+
+            // Cascade-evict all decomposed descendants.
+            for (int z = 0; z < n; ++z)
+                for (int y = 0; y < n; ++y)
+                    for (int x = 0; x < n; ++x) {
+                        chunkmath::VoxelCoord macro = chunkmath::chunkLocalToVoxel(
+                            cand.coord, x, y, z, n);
+                        if (info.state.isDecomposed(macro)) {
+                            cascadeEvict(ci, macro, diffs);
+                        } else {
+                            info.state.clear(macro);
+                            info.originalVoxel.erase(macro);
+                        }
+                    }
+            fireChunkEvicted(layer, cand.coord);
+            diff.evictedCompChunks.push_back(cand.coord);
+            layer.unloadChunk(cand.coord);
+        }
+    }
+
+    // ── Terminal-child budget ─────────────────────────────────────────────────
+    // A terminal child layer has no composites_ entry (no streaming-evict loop of
+    // its own); its chunks exist only under this layer's decomposed macros and
+    // are the bulk of the GPU buffer-handle load (ARCHITECTURE §10: bgfx caps
+    // static buffers at 4096). When the child's cap is exceeded, collapse the
+    // farthest owning macros — forced re-atomization restores their block voxels,
+    // so the cap shrinks the fine bubble without leaving holes.
+    Layer& child = *info.childLayer;
+    if (child.mode() != VoxelMode::terminal) return;
+    const LayerDef* childDef = config_.findLayer(child.name());
+    if (!childDef || childDef->resident_chunk_budget <= 0) return;
+    const int childBudget = childDef->resident_chunk_budget;
+    if (static_cast<int>(child.chunks().size()) <= childBudget) return;
+
+    const ChunkCoord childCam = chunkmath::worldToChunk(
+        cameraPos, child.voxelSizeM(), child.chunkSizeVoxels());
+    struct ChildCand { ChunkCoord coord; chunkmath::VoxelCoord macro; int dist; };
+    std::vector<ChildCand> childCands;
+    childCands.reserve(child.chunks().size());
+    for (const auto& kv : child.chunks()) {
+        const ChunkCoord& cc = kv.first;
+        if (kv.second->dirty()) continue;  // pin player-edited chunks
+        const chunkmath::VoxelCoord owner = chunkmath::childToParentVoxel(
+            chunkmath::chunkLocalToVoxel(cc, 0, 0, 0, child.chunkSizeVoxels()),
+            info.ratio);
+        if (!info.state.isDecomposed(owner)) continue;  // orphan (caller-owned)
+        // Pin owners inside the approach bubble (would re-decompose: churn).
+        if (macroSurfaceDistSq(owner, layer.voxelSizeM(), cameraPos) <= radiusSq)
+            continue;
+        int dist = std::max({std::abs(cc.x - childCam.x),
+                             std::abs(cc.y - childCam.y),
+                             std::abs(cc.z - childCam.z)});
+        childCands.push_back({cc, owner, dist});
+    }
+    std::sort(childCands.begin(), childCands.end(),
+              [](const ChildCand& a, const ChildCand& b){ return a.dist > b.dist; });
+
+    for (const ChildCand& cand : childCands) {
+        if (static_cast<int>(child.chunks().size()) <= childBudget) break;
+        if (!child.getChunk(cand.coord)) continue;  // removed with a sibling
+        if (info.state.isDecomposed(cand.macro))
+            reatomize(ci, cand.macro, cameraPos, /*force=*/true, diffs);
     }
 }
 
@@ -360,7 +441,8 @@ void DecompositionManager::enforceLayerBudget(size_t ci, ChunkCoord camChunkComp
 std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPos,
                                                        double approachRadiusM,
                                                        int loadPerFrame,
-                                                       int decompPerFrame) {
+                                                       int decompPerFrame,
+                                                       int applyPerFrame) {
     // One diff per composite layer, indexed in composites_ order.
     std::vector<LayerTickDiff> diffs(composites_.size());
     for (size_t i = 0; i < composites_.size(); ++i) {
@@ -368,8 +450,25 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
         diffs[i].childLayerName     = composites_[i].childLayer->name();
     }
 
-    // ── 1. Drain completed decomposition jobs ────────────────────────────────
-    for (auto& result : worker_.drain()) {
+    // ── 1. Apply completed decomposition jobs (budgeted) ─────────────────────
+    // Completed results queue in backlog_ and at most applyPerFrame are applied
+    // per tick (non-positive = unlimited). Each application inserts child chunks
+    // and obliges the caller to build their meshes the same frame, so an
+    // unbounded drain turns a burst of completions into a single-frame hitch.
+    // Unapplied results still count as inFlight() and their macros stay pending,
+    // so eviction pinning keeps their target chunks resident.
+    {
+        auto fresh = worker_.drain();
+        backlog_.insert(backlog_.end(),
+                        std::make_move_iterator(fresh.begin()),
+                        std::make_move_iterator(fresh.end()));
+    }
+    int applied = 0;
+    while (!backlog_.empty() && (applyPerFrame <= 0 || applied < applyPerFrame)) {
+        DecompositionResult result = std::move(backlog_.front());
+        backlog_.pop_front();
+        ++applied;
+
         auto it = compositeIdx_.find(result.layerName);
         if (it == compositeIdx_.end()) continue;
         const size_t ci = it->second;
@@ -383,16 +482,28 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
             if (inserted) fireChunkCreated(childLayer, *inserted);
             diff.newChildChunks.push_back(cc);
         }
+
+        // markDecomposed clears the macro's pending state; mirror that in the
+        // per-chunk pending counter used for O(1) eviction pinning.
+        {
+            const ChunkCoord owning = chunkmath::voxelToChunkLocal(
+                result.macro, info.layer->chunkSizeVoxels()).chunk;
+            auto pit = info.pendingChunks.find(owning);
+            if (pit != info.pendingChunks.end() && --pit->second <= 0)
+                info.pendingChunks.erase(pit);
+        }
         info.state.markDecomposed(result.macro);
         diff.newlyDecomposed.push_back(result.macro);
 
         // Clear the atomic block voxel in the composite layer so the composite
         // chunk mesh no longer shows it (the child voxels render instead), caching
-        // it first so bottom-up re-atomization can restore the block (plan item 2).
+        // it first so bottom-up re-atomization can restore the block. NoDirty:
+        // this is a rendered-state update, not a player edit — it must not pin
+        // the chunk against budget eviction or be persisted.
         const WorldCoord macroCenter =
             chunkmath::voxelCenter(result.macro, info.layer->voxelSizeM());
         info.originalVoxel[result.macro] = info.layer->getVoxel(macroCenter);
-        info.layer->setVoxel(macroCenter, Voxel::empty());
+        info.layer->setVoxelNoDirty(macroCenter, Voxel::empty());
     }
 
     // ── 2. Stream composite-layer chunks (load + evict) ──────────────────────
@@ -442,14 +553,7 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
         const int n = layer.chunkSizeVoxels();
         for (const ChunkCoord& cc : toEvict) {
             if (!layer.getChunk(cc)) continue;  // already collapsed via a sibling
-
-            bool anyPending = false;
-            for (int z = 0; z < n && !anyPending; ++z)
-                for (int y = 0; y < n && !anyPending; ++y)
-                    for (int x = 0; x < n && !anyPending; ++x)
-                        if (subtreePending(ci, chunkmath::chunkLocalToVoxel(cc, x, y, z, n)))
-                            anyPending = true;
-            if (anyPending) continue;
+            if (chunkPinned(ci, cc)) continue;  // jobs in flight at some depth
 
             if (info.parentIdx >= 0) {
                 // Non-root layer: this chunk exists because a parent macro
@@ -501,57 +605,78 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
         // ── 2b. Budget enforcement ───────────────────────────────────────────
         // If the layer's resident set still exceeds its configured cap after the
         // normal LOD eviction, evict farthest-first clean non-pending chunks.
-        enforceLayerBudget(ci, camChunk, cameraPos, diffs);
+        enforceLayerBudget(ci, camChunk, cameraPos, approachRadiusM, diffs);
     }
 
     // ── 3. Approach-trigger: enqueue undecomposed macro voxels near camera ───
-    //    Coarsest-first. A fine composite layer's macro voxels are only enqueued
-    //    if their coarser ancestor is already decomposed (the chain requirement).
-    int enqueued = 0;
-    for (size_t ci = 0; ci < composites_.size() && enqueued < decompPerFrame; ++ci) {
-        CompositeLayerInfo& info = composites_[ci];
-        Layer& layer = *info.layer;
-        const double voxelSize = layer.voxelSizeM();
+    //    Candidates are gathered from RESIDENT chunks only (a macro in an
+    //    unloaded chunk reads empty and can never trigger), with whole chunks
+    //    rejected by AABB distance before their voxels are scanned and the
+    //    per-voxel gates ordered cheapest-first. Eligible macros are then
+    //    enqueued NEAREST-FIRST so the block in front of the player never waits
+    //    behind peripheral work. A fine layer's macro is only eligible once its
+    //    parent macro is decomposed (the chain requirement).
+    if (decompPerFrame > 0 && approachRadiusM > 0.0) {
+        const double radiusSq = approachRadiusM * approachRadiusM;
+        struct Candidate { double distSq; size_t ci; chunkmath::VoxelCoord macro; };
+        std::vector<Candidate> candidates;
 
-        const chunkmath::VoxelCoord camVoxel = chunkmath::worldToVoxel(cameraPos, voxelSize);
-        const int64_t halfR =
-            static_cast<int64_t>(std::ceil(approachRadiusM / voxelSize)) + 1;
+        for (size_t ci = 0; ci < composites_.size(); ++ci) {
+            CompositeLayerInfo& info = composites_[ci];
+            Layer& layer = *info.layer;
+            const double voxelSize = layer.voxelSizeM();
+            const int    n         = layer.chunkSizeVoxels();
 
-        for (int64_t dz = -halfR; dz <= halfR && enqueued < decompPerFrame; ++dz) {
-            for (int64_t dy = -halfR; dy <= halfR && enqueued < decompPerFrame; ++dy) {
-                for (int64_t dx = -halfR; dx <= halfR && enqueued < decompPerFrame; ++dx) {
-                    const chunkmath::VoxelCoord macro{
-                        camVoxel.x + dx, camVoxel.y + dy, camVoxel.z + dz};
+            for (const auto& kv : layer.chunks()) {
+                if (chunkSurfaceDistSq(kv.first, voxelSize, n, cameraPos) > radiusSq)
+                    continue;
 
-                    if (!info.state.needsDecompose(macro)) continue;
+                const Chunk& chunk = *kv.second;
+                for (int z = 0; z < n; ++z)
+                    for (int y = 0; y < n; ++y)
+                        for (int x = 0; x < n; ++x) {
+                            // Gate order, cheapest first: solid (direct array
+                            // read — a cleared voxel was already decomposed),
+                            // AABB distance, then the state hash lookups.
+                            if (chunk.at(x, y, z).isEmpty()) continue;
+                            const chunkmath::VoxelCoord macro =
+                                chunkmath::chunkLocalToVoxel(kv.first, x, y, z, n);
+                            const double distSq =
+                                macroSurfaceDistSq(macro, voxelSize, cameraPos);
+                            if (distSq > radiusSq) continue;
+                            if (!info.state.needsDecompose(macro)) continue;
+                            if (info.parentIdx >= 0) {
+                                const CompositeLayerInfo& parent =
+                                    composites_[info.parentIdx];
+                                if (!parent.state.isDecomposed(
+                                        chunkmath::childToParentVoxel(macro, parent.ratio)))
+                                    continue;
+                            }
+                            candidates.push_back({distSq, ci, macro});
+                        }
+            }
+        }
 
-                    // For layers that are not the coarsest, the parent composite
-                    // must already be decomposed and resident (chain requirement).
-                    if (info.parentIdx >= 0) {
-                        const CompositeLayerInfo& parent = composites_[info.parentIdx];
-                        const int64_t parentRatio = chunkmath::layerRatio(
-                            parent.layer->voxelSizeM(), voxelSize);
-                        const chunkmath::VoxelCoord parentMacro =
-                            chunkmath::childToParentVoxel(macro, parentRatio);
-                        if (!parent.state.isDecomposed(parentMacro)) continue;
-                    }
+        // Nearest-first; ties broken by (layer, coords) so the enqueue order is
+        // fully deterministic despite unordered chunk-store iteration.
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const Candidate& a, const Candidate& b) {
+                      if (a.distSq != b.distSq) return a.distSq < b.distSq;
+                      if (a.ci != b.ci) return a.ci < b.ci;
+                      if (a.macro.x != b.macro.x) return a.macro.x < b.macro.x;
+                      if (a.macro.y != b.macro.y) return a.macro.y < b.macro.y;
+                      return a.macro.z < b.macro.z;
+                  });
 
-                    // Distance check: camera to the macro voxel's AABB surface
-                    // (see macroSurfaceDistSq).
-                    if (macroSurfaceDistSq(macro, voxelSize, cameraPos) >
-                        approachRadiusM * approachRadiusM)
-                        continue;
-
-                    // The macro voxel must be solid in the composite layer
-                    // (a cleared voxel was already decomposed and its block removed).
-                    const WorldCoord macroCenter = chunkmath::voxelCenter(macro, voxelSize);
-                    if (layer.getVoxel(macroCenter).isEmpty()) continue;
-
-                    if (info.state.markPending(macro)) {
-                        worker_.enqueue(makeJob(info, macro));
-                        ++enqueued;
-                    }
-                }
+        int enqueued = 0;
+        for (const Candidate& c : candidates) {
+            if (enqueued >= decompPerFrame) break;
+            CompositeLayerInfo& info = composites_[c.ci];
+            if (info.state.markPending(c.macro)) {
+                ++info.pendingChunks[chunkmath::voxelToChunkLocal(
+                    c.macro, info.layer->chunkSizeVoxels()).chunk];
+                worker_.enqueue(makeJob(info, c.macro));
+                ++enqueued;
             }
         }
     }

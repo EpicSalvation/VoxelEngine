@@ -56,6 +56,15 @@ bool Layer::setVoxel(const WorldCoord& pos, const Voxel& voxel) {
     return true;
 }
 
+bool Layer::setVoxelNoDirty(const WorldCoord& pos, const Voxel& voxel) {
+    const chunkmath::VoxelCoord v = chunkmath::worldToVoxel(pos, voxelSizeM_);
+    const chunkmath::LocalVoxel lv = chunkmath::voxelToChunkLocal(v, chunkSizeVoxels_);
+    auto it = chunks_.find(lv.chunk);
+    if (it == chunks_.end()) return false;
+    it->second->at(lv.x, lv.y, lv.z) = voxel;
+    return true;
+}
+
 bool Layer::isChunkDirty(ChunkCoord coord) const {
     auto it = chunks_.find(coord);
     return it != chunks_.end() && it->second->dirty();

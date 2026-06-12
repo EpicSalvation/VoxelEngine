@@ -151,7 +151,7 @@ little decomposition was happening.
 
 ## P1 — Performance / hitching
 
-### 6. [ ] Cheapen and bound the approach scan
+### 6. [x] Cheapen and bound the approach scan
 
 - **Where:** `DecompositionManager.cpp` `tick` step 3 (lines ~373–418).
 - **Problem:** Brute-force O((2r/voxelSize)³) sweep per layer per tick — for
@@ -164,7 +164,7 @@ little decomposition was happening.
   is air or unloaded). (c) Optional frontier model: only re-examine macros when
   their parent decomposes or the camera crosses a voxel boundary.
 
-### 7. [ ] Budget the drain / spread mesh builds
+### 7. [x] Budget the drain / spread mesh builds
 
 - **Where:** `DecompositionManager.cpp` `tick` step 1 (lines ~275–297); demo
   `applyDiffs`.
@@ -175,7 +175,7 @@ little decomposition was happening.
   the manager); dedupe composite-chunk remeshes per tick. Deeper lift (later):
   move `ChunkMesh::build` data generation off the main thread.
 
-### 8. [ ] Nearest-first job ordering
+### 8. [x] Nearest-first job ordering
 
 - **Where:** `DecompositionManager.cpp` `tick` step 3 + FIFO queue in
   `DecompositionWorker`.
@@ -186,7 +186,7 @@ little decomposition was happening.
   the worker queue a priority queue keyed at enqueue time). Directly improves
   perceived decomposition latency.
 
-### 9. [ ] Per-chunk pending counters instead of voxel scans
+### 9. [x] Per-chunk pending counters instead of voxel scans
 
 - **Where:** `DecompositionManager.cpp` evict pin checks (lines ~337–344) and
   `enforceLayerBudget` (~224–229).
@@ -195,7 +195,7 @@ little decomposition was happening.
 - **Fix:** Maintain a ChunkCoord → pending-count map in `DecompositionState`
   (increment on `markPending`, decrement on `markDecomposed`/`clear`).
 
-### 10. [ ] Don't let the manager's own writes pin chunks as dirty
+### 10. [x] Don't let the manager's own writes pin chunks as dirty
 
 - **Where:** `DecompositionManager.cpp` drain step `setVoxel(empty)`
   (~lines 294–296); `enforceLayerBudget` dirty pin (~line 221).
@@ -206,7 +206,7 @@ little decomposition was happening.
   path on `Layer`, or clear the dirty flag after the manager's own write).
   Coordinate with item 2's voxel-restore mechanism.
 
-### 11. [ ] Configure budgets and vertical band; skip empty meshes
+### 11. [x] Configure budgets and vertical band; skip empty meshes
 
 - **Where:** demo layer config (`main.cpp` ~lines 122–150);
   `LODManager::desiredChunks` / `setVerticalBand`.
@@ -278,3 +278,4 @@ recipes for surface terrain.
 | 2026-06-12 | fixes-1 | 1, 5 | AABB approach distance in `DecompositionManager::tick`; destroy-before-rebuild + per-chunk remesh dedupe in demo `applyDiffs`. New regression test `CascadeDecompositionTest.ApproachTriggerUsesVoxelSurfaceDistance` (verified failing on the old code). Full suite green. **In-demo verification still pending** (this environment is headless): walk/fly around, confirm cascade spreads to neighbors and no invisible chunks after long sessions. |
 | 2026-06-12 | fixes-2 | 3, 4, 12 | Engine: only root composite layers are generator-streamed (`tick` step 2 gated on `parentIdx < 0`); non-root composite chunks now come exclusively from parent decomposition. Plugin: dropped all three recipes so every cascade step uses the M6 generator path (`regionalGen`/`localGen`/`terrainGen`) — caves now reachable; rewrote the stale plugin header. New regression test `CascadeDecompositionTest.NonRootCompositeLayersNotStreamedDirectly` (verified failing on the old code). Full suite green. **In-demo verification pending:** no z-fighting on undecomposed surfaces, silhouette refines per level (16 m → 4 m → 1 m), caves/soil cap present, decompose→evict→re-approach identical. Item 2's holes (fly-away bands) are now the most visible remaining P0. |
 | 2026-06-12 | fixes-3 | 2 | Engine: bottom-up re-atomization. Drain caches each macro's block voxel (`CompositeLayerInfo::originalVoxel`); new `reatomize()` collapses a parent macro when its child chunks leave the child layer's eviction radius — cascade-evicts descendants, restores the cached block voxel, reports via `newlyAtomic`. Non-root LOD evict and budget pass route through it. Pinning upgraded to recursive `subtreePending` (jobs in flight anywhere below pin the collapse). Anti-thrash guard: a macro still inside the approach radius is never re-atomized (collapse range = max(child evict radius, approach radius)); without this, configs where approach radius > child evict radius decompose/collapse in a loop (caught by `DecompositionStateConsistentPerLayer`). Demo: `applyDiffs` now remeshes composite chunks for `newlyAtomic` macros. New regression test `BottomUpEvictionReatomizesParent` (decompose → mid-distance collapse, block restored, no hole, re-decomposes on re-approach; verified failing on the old code). Full suite green. **In-demo verification pending:** fly out to ~500 m, look back — coarse blocks restored, no holes at any band; fly back — identical re-decomposition. |
+| 2026-06-12 | fixes-4 | 6, 7, 8, 9, 10, 11 | Engine: (7) completed jobs queue in a manager backlog and apply at most `applyPerFrame` per tick (new tick param, default 16, ≤0 = unlimited; backlog counts as `inFlight`). (8) approach trigger collects candidates and enqueues nearest-first with a fully deterministic (dist, layer, coords) sort. (6) the scan iterates resident chunks with whole-chunk AABB rejection instead of a voxel cube, gates ordered cheapest-first (direct-array solid read, distance, then hashes); frontier model left as future work. (9) per-chunk pending counters (`CompositeLayerInfo::pendingChunks`) + per-layer pending totals make eviction pinning O(1) in the common case (`chunkPinned`). (10) new `Layer::setVoxelNoDirty` used for the manager's block-voxel clear/restore so engine writes never dirty-pin chunks. (11) budget pass pins chunks inside the approach radius (soft cap in the bubble, hard outside — prevents budget/approach churn) and now also enforces a **terminal child layer's** `resident_chunk_budget` by force-collapsing farthest owning macros (the actual bgfx-handle protection); demo sets per-layer budgets (128/256/1024/2048), calls `setVerticalBand(0,0)` (new manager forwarder, root-chunk units), and keeps empty meshes out of the stores. New tests: `ApplyPerFrameBudgetSpreadsDrain`, `TerminalChildBudgetCollapsesFarthestMacros`. Full suite green. **In-demo verification pending:** no hitching while the cascade churns; nearest blocks decompose first; long flights stay under the handle cap. |
