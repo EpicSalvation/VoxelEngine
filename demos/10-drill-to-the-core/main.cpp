@@ -35,6 +35,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifndef VOXEL_DRILL_PLUGIN_PATH
@@ -56,7 +57,67 @@ const glm::dvec3 kPlayerHalf(0.3, 0.9, 0.3);
 
 constexpr uint64_t kWorldSeed = 0xDECAFBAD12345678ull;
 
+// Must match the renderer: BgfxRenderer::render uses a 60° vertical FOV, and
+// the far clip is whatever setFarClip received (see the setFarClip call below).
+constexpr float  kFarClipM = 4000.0f;
+constexpr double kVFovDeg  = 60.0;
+
+// Conservative view-frustum test for chunk bounding spheres, built from the
+// same camera basis and projection parameters the renderer uses. Plane-distance
+// tests against the bounding sphere err on the side of "visible" — this never
+// culls geometry the renderer would actually draw, it only skips submitting
+// chunks behind the camera or outside the view cone.
+struct Frustum {
+    glm::dvec3 pos{}, fwd{}, right{}, up{};
+    double tanH = 0.0, tanV = 0.0, cosH = 1.0, cosV = 1.0, farClip = 0.0;
+
+    void update(const WorldCoord& camPos, float pitch, float yaw,
+                double aspect, double vfovDeg, double farClipM) {
+        pos = camPos.value;
+        const double cp = std::cos(pitch), sp = std::sin(pitch);
+        const double cy = std::cos(yaw),   sy = std::sin(yaw);
+        fwd   = glm::dvec3(cp * sy, sp, cp * cy);  // matches BgfxRenderer::render
+        right = glm::dvec3(cy, 0.0, -sy);
+        up    = glm::cross(fwd, right);
+        tanV  = std::tan(glm::radians(vfovDeg) * 0.5);
+        tanH  = tanV * aspect;
+        cosV  = 1.0 / std::sqrt(1.0 + tanV * tanV);
+        cosH  = 1.0 / std::sqrt(1.0 + tanH * tanH);
+        farClip = farClipM;
+    }
+
+    bool sphereVisible(const glm::dvec3& center, double radius) const {
+        const glm::dvec3 rel = center - pos;
+        const double z = glm::dot(rel, fwd);
+        if (z + radius < 0.0 || z - radius > farClip) return false;
+        // Side planes pass through the camera; signed distance outside the
+        // right/left (top/bottom) plane is (|x| − z·tan)·cos.
+        const double x = glm::dot(rel, right);
+        if ((std::abs(x) - z * tanH) * cosH > radius) return false;
+        const double y = glm::dot(rel, up);
+        if ((std::abs(y) - z * tanV) * cosV > radius) return false;
+        return true;
+    }
+};
+
 using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
+
+// Replace (or create) the mesh for a chunk. The existing mesh's GPU buffers must
+// be destroyed first: plain map assignment leaks the old bgfx handles, and the
+// static-buffer pool is capped at 4096 (ARCHITECTURE §10) — leaking on every
+// decomposition exhausts it into silent invisible-but-solid chunks.
+// All-air chunks produce no faces; they are kept OUT of the store entirely so
+// the per-frame render loop isn't iterating thousands of empty entries.
+void rebuildMesh(MeshStore& ms, const ChunkCoord& cc, const Chunk& chunk) {
+    auto it = ms.find(cc);
+    if (it != ms.end()) {
+        it->second.destroy();
+        ms.erase(it);
+    }
+    ChunkMesh mesh = ChunkMesh::build(chunk);
+    if (mesh.empty()) return;  // empty mesh holds no buffers; nothing to keep
+    ms.emplace(cc, mesh);
+}
 
 // Apply the diffs from DecompositionManager::tick() to the per-layer mesh stores.
 // For each composite layer: build meshes for new chunks, destroy evicted meshes.
@@ -73,7 +134,7 @@ void applyDiffs(const std::vector<LayerTickDiff>& diffs, World& world,
         for (const ChunkCoord& cc : d.newCompChunks) {
             if (!compLayer) continue;
             const Chunk* chunk = compLayer->getChunk(cc);
-            if (chunk) compMeshes[cc] = ChunkMesh::build(*chunk);
+            if (chunk) rebuildMesh(compMeshes, cc, *chunk);
         }
         // Evicted composite chunks (destroy mesh).
         for (const ChunkCoord& cc : d.evictedCompChunks) {
@@ -81,21 +142,32 @@ void applyDiffs(const std::vector<LayerTickDiff>& diffs, World& world,
             if (it != compMeshes.end()) { it->second.destroy(); compMeshes.erase(it); }
         }
 
-        // Macro voxels just decomposed: remesh the composite chunk they live in
-        // (the block voxel was cleared — the mesh needs updating).
-        for (const chunkmath::VoxelCoord& macro : d.newlyDecomposed) {
-            if (!compLayer) continue;
-            const chunkmath::LocalVoxel lv =
-                chunkmath::voxelToChunkLocal(macro, compLayer->chunkSizeVoxels());
-            const Chunk* chunk = compLayer->getChunk(lv.chunk);
-            if (chunk) compMeshes[lv.chunk] = ChunkMesh::build(*chunk);
+        // Macro voxels whose block state changed: newly decomposed macros had
+        // their block voxel cleared; re-atomized macros had it restored (their
+        // children left view range and collapsed back to the coarse block).
+        // Either way the owning composite chunk must be remeshed. For top-down
+        // eviction the newlyAtomic macro's chunk was itself evicted — getChunk
+        // returns null and the remesh is skipped. Many macros can share one
+        // chunk; dedupe so each chunk is rebuilt at most once.
+        if (compLayer) {
+            std::unordered_set<ChunkCoord, ChunkCoordHash> remesh;
+            for (const chunkmath::VoxelCoord& macro : d.newlyDecomposed)
+                remesh.insert(chunkmath::voxelToChunkLocal(
+                    macro, compLayer->chunkSizeVoxels()).chunk);
+            for (const chunkmath::VoxelCoord& macro : d.newlyAtomic)
+                remesh.insert(chunkmath::voxelToChunkLocal(
+                    macro, compLayer->chunkSizeVoxels()).chunk);
+            for (const ChunkCoord& cc : remesh) {
+                const Chunk* chunk = compLayer->getChunk(cc);
+                if (chunk) rebuildMesh(compMeshes, cc, *chunk);
+            }
         }
 
         // New child chunks (build fine mesh).
         for (const ChunkCoord& cc : d.newChildChunks) {
             if (!childLayer) continue;
             const Chunk* chunk = childLayer->getChunk(cc);
-            if (chunk) childMeshes[cc] = ChunkMesh::build(*chunk);
+            if (chunk) rebuildMesh(childMeshes, cc, *chunk);
         }
         // Evicted child chunks (destroy fine mesh).
         for (const ChunkCoord& cc : d.evictedChildChunks) {
@@ -117,6 +189,11 @@ int main() {
     //   regional    16 m, chunk 4 →   4 m/chunk  (ratio 4 to local)
     //   local        4 m, chunk 4 →   1 m/chunk  (ratio 4 to terrain)
     //   terrain      1 m, chunk 4 →   1 m/chunk  (terminal)
+    // Resident budgets keep total mesh count under bgfx's 4096 static-buffer
+    // cap (each non-empty chunk mesh = 1 vertex + 1 index buffer); the terrain
+    // cap matters most — fine chunks dominate the handle load. The manager
+    // collapses the farthest decomposed macros (restoring their coarse blocks)
+    // when a cap is exceeded, so the fine bubble shrinks instead of breaking.
     LayerConfig cfg = [] {
         try {
             return LayerConfig::loadFromString(R"(
@@ -127,6 +204,7 @@ layers:
     decompose_to: regional
     chunk_size_voxels: 4
     view_distance_chunks: 3
+    resident_chunk_budget: 128
 
   - name: regional
     voxel_size_m: 16.0
@@ -134,6 +212,7 @@ layers:
     decompose_to: local
     chunk_size_voxels: 4
     view_distance_chunks: 4
+    resident_chunk_budget: 256
 
   - name: local
     voxel_size_m: 4.0
@@ -141,12 +220,14 @@ layers:
     decompose_to: terrain
     chunk_size_voxels: 4
     view_distance_chunks: 5
+    resident_chunk_budget: 1024
 
   - name: terrain
     voxel_size_m: 1.0
     mode: terminal
     chunk_size_voxels: 4
     view_distance_chunks: 8
+    resident_chunk_budget: 2048
 )");
         } catch (const std::exception& e) {
             std::cerr << "[main] Fatal: " << e.what() << "\n";
@@ -179,6 +260,10 @@ layers:
 
     // ── Engine-owned cascade orchestrator ─────────────────────────────────────
     DecompositionManager decompMgr(world, pm, cfg, kWorldSeed);
+    // The drill world is a surface slab (top at ~58 m): the entire crust fits in
+    // continental chunk row y=0 (a 256 m slab). Banding root streaming to that
+    // row avoids loading and iterating ~6× empty sky/underground chunks.
+    decompMgr.setVerticalBand(0, 0);
 
     // ── Renderer ──────────────────────────────────────────────────────────────
     platform::Window window(1280, 720, "VoxelEngine — M10 Drill to the Core");
@@ -190,7 +275,7 @@ layers:
     // Shallow cascade: continental chunks are 256 m and the resident bubble is a
     // few hundred metres. 4 km far clip comfortably covers it while keeping good
     // depth precision for the 1 m terrain (the default 1000 m would clip context).
-    renderer.setFarClip(4000.0f);
+    renderer.setFarClip(kFarClipM);
     renderer.setCrosshair(true);
 
     // One MeshStore per layer (all four, plus terminal).
@@ -322,11 +407,14 @@ layers:
         }
 
         // ── DecompositionManager tick ─────────────────────────────────────────
-        // The manager streams all composite layers, runs decomposition, and cascade-
-        // evicts chunks that leave view range. The returned diffs tell us which
-        // meshes to build or destroy.
+        // The manager streams the root composite layer, runs decomposition, and
+        // cascade-evicts/collapses chunks that leave view range. The returned
+        // diffs tell us which meshes to build or destroy. applyPerFrame bounds
+        // how many completed jobs land per frame — and therefore how many meshes
+        // this frame builds — so bursts of completions don't hitch.
         auto diffs = decompMgr.tick(camPos, kApproachRadiusM,
-                                    /*loadPerFrame=*/32, /*decompPerFrame=*/128);
+                                    /*loadPerFrame=*/32, /*decompPerFrame=*/128,
+                                    /*applyPerFrame=*/16);
         applyDiffs(diffs, world, meshStores);
 
         // ── Terminal terrain: stream independently ────────────────────────────
@@ -419,17 +507,29 @@ layers:
         renderer.setCameraPosition(camPos);
         renderer.setCameraRotation(pitch, yaw, 0.0f);
 
+        Frustum frustum;
+        frustum.update(camPos, pitch, yaw,
+                       static_cast<double>(fbW) / static_cast<double>(fbH),
+                       kVFovDeg, kFarClipM);
+
         // Render all layers in reverse order (coarsest first, so finer voxels
-        // occlude coarser ones via depth test).
+        // occlude coarser ones via depth test), frustum-culling per chunk —
+        // after a long flight the mesh stores hold thousands of chunks, most of
+        // them behind the camera or outside the view cone.
         for (const auto& layerName : std::vector<std::string>{
                 "continental", "regional", "local", "terrain"}) {
             Layer* lyr = world.layer(layerName);
             if (!lyr) continue;
+            const double chunkWorld = lyr->voxelSizeM() * lyr->chunkSizeVoxels();
+            const double sphereRadius = chunkWorld * 0.8660254;  // half diagonal, √3/2
             const MeshStore& ms = meshStores[layerName];
             for (const auto& kv : ms) {
                 const Chunk* chunk = lyr->getChunk(kv.first);
-                if (chunk && !kv.second.empty())
-                    renderer.renderChunk(kv.second, chunk->origin(), lyr->voxelSizeM());
+                if (!chunk || kv.second.empty()) continue;
+                const glm::dvec3 center =
+                    chunk->origin().value + glm::dvec3(chunkWorld * 0.5);
+                if (!frustum.sphereVisible(center, sphereRadius)) continue;
+                renderer.renderChunk(kv.second, chunk->origin(), lyr->voxelSizeM());
             }
         }
 

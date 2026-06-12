@@ -1,13 +1,23 @@
 // drill-world plugin — four-layer cascade world for the M10 demo.
 //
-// Layer stack (parent voxel size == child chunk world size for clean alignment):
-//   continental  512 m composite → regional   (chunk 8 → 64 m/chunk, ratio 8)
-//   regional      64 m composite → local      (chunk 8 →  8 m/chunk, ratio 8)
-//   local          8 m composite → terrain    (chunk 8 →  8 m/chunk, ratio 8)
-//   terrain        1 m terminal
+// Layer stack (parent voxel size == child chunk world size for clean alignment;
+// must match the demo's LayerConfig):
+//   continental  64 m composite → regional   (chunk 4 → 16 m/chunk, ratio 4)
+//   regional     16 m composite → local      (chunk 4 →  4 m/chunk, ratio 4)
+//   local         4 m composite → terrain    (chunk 4 →  1 m/chunk, ratio 4)
+//   terrain       1 m terminal
 //
-// Each composite layer has a recipe that fills child voxels with material. The
-// visual variety across levels: continental=dark slate, regional=gray granite,
+// Every layer's content comes from its GENERATOR, all deriving solidity from
+// one shared surface field (see below). Decomposition therefore uses the M6
+// generator-fallback path — no recipes are registered. This keeps a single
+// source of truth per layer: the child grid a decomposition produces is exactly
+// what the generator says is there, so each cascade step visibly refines the
+// silhouette (16 m → 4 m → 1 m) and the terminal step carves real caves.
+// (Recipes fill a solid macro's entire child volume — they cannot carve to a
+// surface — so a recipe-driven stack here would refine cubes into identical
+// cubes. See docs/m10-incremental-decomposition-plan.md items 3/4/15.)
+//
+// Visual variety across levels: continental=dark slate, regional=granite gray,
 // local=tan limestone, terrain=detailed soil-over-rock with caves.
 
 #include "plugin_api.h"
@@ -154,41 +164,6 @@ static void terrainGen(WorldCoord origin, int n, Voxel* out, void*) {
     }
 }
 
-// ── Recipe descriptors ────────────────────────────────────────────────────────
-
-static MaterialWeight kContWeights[]  = {{"continental_rock", 1.0f}};
-static MaterialWeight kRegWeights[]   = {{"regional_rock",    1.0f}};
-static MaterialWeight kLocalWeights[] = {{"local_rock", 0.85f}, {"soil", 0.15f}};
-static MaterialWeight kSoilWeights[]  = {{"soil", 1.0f}};
-
-static RecipeDesc kContinentalRecipe = {
-    /* interior */  {kContWeights,  1, nullptr, nullptr, 0},
-    /* features */  nullptr, 0,
-    /* top    */    {{kContWeights, 1, nullptr, nullptr, 0}, 1, false},
-    /* bottom */    {{kContWeights, 1, nullptr, nullptr, 0}, 1, false},
-    /* side   */    {{kContWeights, 1, nullptr, nullptr, 0}, 1, false},
-    /* seed params */ nullptr, 0
-};
-
-static RecipeDesc kRegionalRecipe = {
-    {kRegWeights, 1, nullptr, nullptr, 0},
-    nullptr, 0,
-    {{kRegWeights, 1, nullptr, nullptr, 0}, 1, false},
-    {{kRegWeights, 1, nullptr, nullptr, 0}, 1, false},
-    {{kRegWeights, 1, nullptr, nullptr, 0}, 1, false},
-    nullptr, 0
-};
-
-static RecipeDesc kLocalRecipe = {
-    {kLocalWeights, 2, nullptr, nullptr, 0},
-    nullptr, 0,
-    /* top: 2-voxel soil cap */
-    {{kSoilWeights, 1, nullptr, nullptr, 0}, 2, true},
-    {{kLocalWeights, 2, nullptr, nullptr, 0}, 1, false},
-    {{kLocalWeights, 2, nullptr, nullptr, 0}, 1, false},
-    nullptr, 0
-};
-
 // ── Plugin entry ──────────────────────────────────────────────────────────────
 
 VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
@@ -205,14 +180,14 @@ VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
     ctx->set_palette_color(ctx, 22, 0xff78a0c0u); // local_rock:       tan limestone
     ctx->set_palette_color(ctx, 23, 0xff204060u); // soil:             dark brown
 
+    // Generators only — no recipes. The continental generator feeds root-layer
+    // streaming; the regional/local/terrain generators feed the decomposition
+    // worker's generator path (each macro's child grid is generated over the
+    // macro's subvolume, identical to what direct streaming would produce).
     ctx->register_layer_generator(ctx, "continental", continentalGen, nullptr);
     ctx->register_layer_generator(ctx, "regional",    regionalGen,    nullptr);
     ctx->register_layer_generator(ctx, "local",       localGen,       nullptr);
     ctx->register_layer_generator(ctx, "terrain",     terrainGen,     nullptr);
-
-    ctx->register_recipe(ctx, "continental", &kContinentalRecipe);
-    ctx->register_recipe(ctx, "regional",    &kRegionalRecipe);
-    ctx->register_recipe(ctx, "local",       &kLocalRecipe);
 
     return 0;
 }

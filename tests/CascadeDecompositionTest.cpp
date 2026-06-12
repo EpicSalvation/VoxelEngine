@@ -323,6 +323,132 @@ TEST(CascadeDecompositionTest, DecompositionStateConsistentPerLayer) {
     EXPECT_EQ(mgr.inFlight(),  0u);
 }
 
+// ── Single source of truth per layer ──────────────────────────────────────────
+//
+// Only the root composite layer is generator-streamed. A non-root composite
+// layer's chunks must come exclusively from its parent's decomposition —
+// generator-streaming them too creates a second source of truth for the same
+// chunks (insertChunk silently overwrites) and renders fine content under macro
+// blocks that never decomposed.
+TEST(CascadeDecompositionTest, NonRootCompositeLayersNotStreamedDirectly) {
+    auto cfg = LayerConfig::loadFromString(kFourLayerYaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin(solidPluginInit);  // registers generators for ALL four layers
+    DecompositionManager mgr(world, pm, cfg, 0x0123ull, 1);
+
+    const WorldCoord cam(256.0, 256.0, 256.0);
+    // Stream only: decompPerFrame=0 so no decomposition can populate child layers.
+    for (int i = 0; i < 10; ++i)
+        mgr.tick(cam, /*approachRadiusM=*/100.0, /*loadPerFrame=*/64,
+                 /*decompPerFrame=*/0);
+
+    EXPECT_GT(world.layer("continental")->chunks().size(), 0u)
+        << "root composite layer must be generator-streamed";
+    EXPECT_EQ(world.layer("regional")->chunks().size(), 0u)
+        << "non-root composite layer must not be generator-streamed";
+    EXPECT_EQ(world.layer("local")->chunks().size(), 0u)
+        << "non-root composite layer must not be generator-streamed";
+}
+
+// ── Approach trigger geometry ─────────────────────────────────────────────────
+//
+// The approach test must measure camera distance to the macro voxel's AABB
+// (closest point), not its center: a center test under-triggers by up to
+// voxelSize*√3/2, which with voxel-scale radii stalls the cascade at the single
+// block under the camera (the M10 demo's "only the landed chunk decomposes" bug).
+TEST(CascadeDecompositionTest, ApproachTriggerUsesVoxelSurfaceDistance) {
+    auto cfg = LayerConfig::loadFromString(kFourLayerYaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin(solidPluginInit);
+    DecompositionManager mgr(world, pm, cfg, 0x5EED5EEDull, 1);
+
+    // Continental voxels are 8 m. Camera hovers 1 m above the top face of voxel
+    // (0,0,0), on its center column. With a 5 m approach radius:
+    //   voxel (0,0,0): surface distance 1 m        (center distance 5 m)
+    //   voxel (1,0,0): surface distance √17 ≈ 4.1 m (center distance √89 ≈ 9.4 m)
+    // A center-based test would never decompose (1,0,0).
+    const WorldCoord cam(4.0, 9.0, 4.0);
+    constexpr double kApproach = 5.0;
+
+    mgr.tick(cam, kApproach);
+    drainUntilDone(mgr, world, cam, kApproach);
+
+    EXPECT_TRUE(mgr.isDecomposed("continental", {0, 0, 0}))
+        << "the block directly under the camera must decompose";
+    EXPECT_TRUE(mgr.isDecomposed("continental", {1, 0, 0}))
+        << "a neighbor whose face (not center) is within range must decompose";
+}
+
+// ── Bottom-up re-atomization ──────────────────────────────────────────────────
+//
+// Each composite layer's LOD eviction runs on its own (smaller) radius, so a
+// decomposed parent's child chunks can leave view range while the parent chunk
+// is still resident. The parent macro must then collapse back to atomic — state
+// cleared AND its block voxel restored — or the world is left with an invisible,
+// non-collidable, re-trigger-proof hole (the block was cleared at decomposition
+// and nothing else restores it).
+TEST(CascadeDecompositionTest, BottomUpEvictionReatomizesParent) {
+    auto cfg = LayerConfig::loadFromString(kFourLayerYaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin(solidPluginInit);
+    DecompositionManager mgr(world, pm, cfg, 0xA70A70ull, 2);
+
+    // Decompose the neighborhood of continental voxel (0,0,0) (8 m cells).
+    const WorldCoord camNear(4.0, 4.0, 4.0);
+    constexpr double kApproach = 6.0;
+    for (int i = 0; i < 40; ++i) {
+        mgr.tick(camNear, kApproach);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    drainUntilDone(mgr, world, camNear, kApproach);
+
+    Layer* continental = world.layer("continental");
+    ASSERT_NE(continental, nullptr);
+    ASSERT_TRUE(mgr.isDecomposed("continental", {0, 0, 0}));
+    // The macro's block voxel was cleared on decomposition.
+    ASSERT_TRUE(continental->getVoxel(WorldCoord(4.0, 4.0, 4.0)).isEmpty());
+    ASSERT_GT(world.layer("regional")->chunks().size(), 0u);
+
+    // Move to a MID distance: every regional (4 m·1, evict radius 12 m), local,
+    // and terrain chunk leaves its own layer's eviction radius, while continental
+    // chunks 0..1 (8 m·1, evict radius 24 m) stay resident. Without
+    // re-atomization this is exactly the hole band.
+    const WorldCoord camMid(28.0, 4.0, 4.0);
+    for (int i = 0; i < 10; ++i)
+        mgr.tick(camMid, /*approachRadiusM=*/0.0, /*loadPerFrame=*/8,
+                 /*decompPerFrame=*/0);
+
+    // Parent chunk still resident, macro back to atomic, block voxel restored.
+    EXPECT_NE(continental->getChunk(ChunkCoord{0, 0, 0}), nullptr)
+        << "continental chunk must stay resident at mid distance";
+    EXPECT_FALSE(mgr.isDecomposed("continental", {0, 0, 0}))
+        << "parent macro must re-atomize when its children evict bottom-up";
+    EXPECT_EQ(mgr.decomposedCount("continental"), 0u)
+        << "every decomposed macro must be re-atomized or top-down evicted";
+    const Voxel restored = continental->getVoxel(WorldCoord(4.0, 4.0, 4.0));
+    EXPECT_FALSE(restored.isEmpty())
+        << "the parent's block voxel must be restored — no invisible hole";
+    EXPECT_EQ(restored.material.palette_index, 1);
+
+    // All descendant layers fully collapsed back to the coarse block.
+    EXPECT_EQ(world.layer("regional")->chunks().size(), 0u);
+    EXPECT_EQ(world.layer("local")->chunks().size(),    0u);
+    EXPECT_EQ(world.layer("terrain")->chunks().size(),  0u);
+
+    // Re-approach: the macro must decompose again (it is re-trigger-able).
+    for (int i = 0; i < 40; ++i) {
+        mgr.tick(camNear, kApproach);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    drainUntilDone(mgr, world, camNear, kApproach);
+    EXPECT_TRUE(mgr.isDecomposed("continental", {0, 0, 0}))
+        << "a re-atomized macro must decompose again on re-approach";
+    EXPECT_GT(world.layer("terrain")->chunks().size(), 0u);
+}
+
 // ── Cache-miss determinism across the cascade ─────────────────────────────────
 //
 // Decompose the full chain in a region, capture terminal voxel data, move the
@@ -488,6 +614,119 @@ TEST(CascadeDecompositionTest, CascadeEvictionCorrectness) {
     // Clean chunks must NOT have been passed to the save callback.
     EXPECT_LT(saved.size(), totalTerminalBefore)
         << "clean chunks must be silently dropped, not saved";
+}
+
+// ── applyPerFrame: drain budgeting ────────────────────────────────────────────
+//
+// Completed jobs must land at most applyPerFrame per tick — each application
+// obliges the front-end to build meshes the same frame, so an unbounded drain
+// turns a burst of completions into one long hitch. Unapplied results stay in
+// the manager's backlog and still count as inFlight.
+TEST(CascadeDecompositionTest, ApplyPerFrameBudgetSpreadsDrain) {
+    auto cfg = LayerConfig::loadFromString(kFourLayerYaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin(solidPluginInit);
+    DecompositionManager mgr(world, pm, cfg, 0xBEEFCAFEull, 2);
+
+    // Camera at the center of continental voxel (0,0,0): all 27 voxels of the
+    // 3³ cube around it are within an 8 m AABB radius (8 m voxels: faces at 4 m,
+    // edges √32 ≈ 5.7 m, corners √48 ≈ 6.9 m; the next shell starts at 12 m).
+    // One tick with a high load/decomp budget enqueues all 27 jobs.
+    const WorldCoord cam(4.0, 4.0, 4.0);
+    mgr.tick(cam, /*approachRadiusM=*/8.0, /*loadPerFrame=*/64,
+             /*decompPerFrame=*/64, /*applyPerFrame=*/0);
+    ASSERT_EQ(mgr.pendingCount("continental"), 27u);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));  // let jobs finish
+
+    // One tick with applyPerFrame=1: exactly one result lands.
+    mgr.tick(cam, /*approachRadiusM=*/0.0, /*loadPerFrame=*/0,
+             /*decompPerFrame=*/0, /*applyPerFrame=*/1);
+    EXPECT_EQ(mgr.decomposedCount("continental"), 1u)
+        << "exactly one completed job may be applied per tick";
+    EXPECT_EQ(mgr.inFlight(), 26u)
+        << "unapplied results must still be reported as in flight";
+
+    // Draining ticks: the backlog empties applyPerFrame at a time.
+    for (int i = 0; i < 60 && mgr.inFlight() > 0; ++i)
+        mgr.tick(cam, 0.0, 0, 0, /*applyPerFrame=*/4);
+    EXPECT_EQ(mgr.decomposedCount("continental"), 27u);
+    EXPECT_EQ(mgr.inFlight(), 0u);
+}
+
+// ── Terminal-child budget: cap the fine-chunk bubble ──────────────────────────
+//
+// A terminal child layer has no streaming-evict loop of its own; its resident
+// count is the bulk of the GPU buffer-handle load. When its cap is exceeded the
+// manager must collapse the farthest owning macros — restoring their block
+// voxels — never leaving holes.
+TEST(CascadeDecompositionTest, TerminalChildBudgetCollapsesFarthestMacros) {
+    const char* yaml = R"(
+layers:
+  - name: coarse
+    voxel_size_m: 4.0
+    mode: composite
+    decompose_to: fine
+    chunk_size_voxels: 1
+    view_distance_chunks: 3
+  - name: fine
+    voxel_size_m: 1.0
+    mode: terminal
+    chunk_size_voxels: 4
+    view_distance_chunks: 8
+    resident_chunk_budget: 6
+)";
+    auto cfg = LayerConfig::loadFromString(yaml);
+    World world(cfg);
+    PluginManager pm;
+    pm.wireInPlugin([](PluginContext* ctx) -> int {
+        for (const char* name : {"coarse", "fine"})
+            ctx->register_layer_generator(ctx, name, solidGen, nullptr);
+        return 0;
+    });
+    DecompositionManager mgr(world, pm, cfg, 0xF1FEB0B5ull, 2);
+
+    // Decompose the 3³ neighborhood (27 coarse macros → 27 fine chunks, well
+    // over the budget of 6). While the macros are inside the approach radius
+    // they are pinned (soft cap), so all 27 decompose.
+    const WorldCoord cam(2.0, 2.0, 2.0);
+    constexpr double kApproach = 5.0;
+    for (int i = 0; i < 40; ++i) {
+        mgr.tick(cam, kApproach, /*loadPerFrame=*/64, /*decompPerFrame=*/64);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    drainUntilDone(mgr, world, cam, kApproach);
+    Layer* fine = world.layer("fine");
+    ASSERT_NE(fine, nullptr);
+    ASSERT_EQ(fine->chunks().size(), 27u);
+
+    // Drop the approach radius to zero: nothing is pinned near anymore, so the
+    // budget pass must shed farthest-first down to the cap.
+    for (int i = 0; i < 10; ++i)
+        mgr.tick(cam, /*approachRadiusM=*/0.0, /*loadPerFrame=*/0,
+                 /*decompPerFrame=*/0);
+
+    EXPECT_LE(fine->chunks().size(), 6u)
+        << "terminal child layer must be shed to its resident_chunk_budget";
+    EXPECT_EQ(mgr.decomposedCount("coarse"), fine->chunks().size())
+        << "every surviving fine chunk must still have a decomposed owner";
+
+    // No holes: every coarse macro is either still decomposed (fine chunk
+    // resident) or atomic with its block voxel restored.
+    Layer* coarse = world.layer("coarse");
+    for (int64_t z = -1; z <= 1; ++z)
+        for (int64_t y = -1; y <= 1; ++y)
+            for (int64_t x = -1; x <= 1; ++x) {
+                const chunkmath::VoxelCoord m{x, y, z};
+                const Voxel v = coarse->getVoxel(chunkmath::voxelCenter(m, 4.0));
+                if (mgr.isDecomposed("coarse", m)) {
+                    EXPECT_TRUE(v.isEmpty());
+                } else {
+                    EXPECT_FALSE(v.isEmpty())
+                        << "collapsed macro (" << x << "," << y << "," << z
+                        << ") must have its block voxel restored";
+                }
+            }
 }
 
 // ── Memory budget: per-layer resident-chunk cap ───────────────────────────────
