@@ -12,6 +12,12 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#  define VOXEL_PLUGIN_EXPORT extern "C" __declspec(dllexport)
+#else
+#  define VOXEL_PLUGIN_EXPORT extern "C"
+#endif
+
 static std::vector<std::string> g_chatLog;
 static std::mutex               g_chatMutex;
 
@@ -56,7 +62,7 @@ extern "C" void chat_send(PluginContext* ctx, const char* text)
 
 extern "C" const std::vector<std::string>* chat_log() { return &g_chatLog; }
 
-extern "C" int voxel_plugin_init(PluginContext* ctx)
+VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx)
 {
     ctx->register_on_network_message(ctx, "engine.chat", on_chat_message, nullptr);
     ctx->register_on_player_joined(ctx, on_joined, nullptr);

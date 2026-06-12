@@ -89,6 +89,7 @@ BgfxRenderer::BgfxRenderer()
       cameraRot{0.0f, 0.0f, 0.0f},
       viewWidth(800),
       viewHeight(600),
+      farClip(1000.0f),
       crosshair(false),
       initialized(false)
 {}
@@ -158,7 +159,7 @@ void BgfxRenderer::render() {
     float proj[16];
     bx::mtxProj(proj, 60.0f,
                 float(viewWidth) / float(viewHeight),
-                0.01f, 1000.0f,
+                0.01f, farClip,
                 bgfx::getCaps()->homogeneousDepth);
 
     // Two views share the camera transform and the back buffer (with its depth):

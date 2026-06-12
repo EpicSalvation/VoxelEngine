@@ -23,7 +23,9 @@
 #include "world/ChunkCoordMath.h"
 #include "world/DecompositionManager.h"
 #include "world/VoxelCollision.h"
+#include "world/VoxelRaycast.h"
 #include "world/World.h"
+#include "simulation/RemovalAccumulator.h"
 
 #include <GLFW/glfw3.h>
 
@@ -41,7 +43,9 @@
 
 namespace {
 
-constexpr double kApproachRadiusM = 640.0;  // decompose when within this range
+constexpr double kApproachRadiusM = 64.0;   // decompose when within this range
+constexpr double kReachM          = 12.0;   // voxel-pick reach in metres
+constexpr float  kToolPower       = 5.0f;   // dig speed (units/s)
 constexpr float  kFlySpeed        = 120.0f;
 constexpr float  kMouseSens       = 0.002f;
 constexpr double kWalkSpeed       = 6.0;
@@ -106,40 +110,42 @@ void applyDiffs(const std::vector<LayerTickDiff>& diffs, World& world,
 int main() {
     // ── Layer config ──────────────────────────────────────────────────────────
     // Parent voxel size == child chunk world size at every level, guaranteeing
-    // the coarse-supersets-fine invariant (ARCHITECTURE §4, M10):
-    //   continental 512 m, chunk 8 → 512 m/chunk  (ratio 8 to regional)
-    //   regional     64 m, chunk 8 →  64 m/chunk  (ratio 8 to local)
-    //   local         8 m, chunk 8 →   8 m/chunk  (ratio 8 to terrain)
-    //   terrain       1 m, chunk 8 →   8 m/chunk  (terminal)
+    // the coarse-supersets-fine invariant (ARCHITECTURE §4, M10). The cascade is
+    // intentionally shallow (top 64 m, ratio 4) so a small approach radius can
+    // decompose the column under the player without unbounded fine-voxel work:
+    //   continental 64 m, chunk 4 →  16 m/chunk  (ratio 4 to regional)
+    //   regional    16 m, chunk 4 →   4 m/chunk  (ratio 4 to local)
+    //   local        4 m, chunk 4 →   1 m/chunk  (ratio 4 to terrain)
+    //   terrain      1 m, chunk 4 →   1 m/chunk  (terminal)
     LayerConfig cfg = [] {
         try {
             return LayerConfig::loadFromString(R"(
 layers:
   - name: continental
-    voxel_size_m: 512.0
-    mode: composite
-    decompose_to: regional
-    chunk_size_voxels: 8
-    view_distance_chunks: 2
-
-  - name: regional
     voxel_size_m: 64.0
     mode: composite
-    decompose_to: local
-    chunk_size_voxels: 8
+    decompose_to: regional
+    chunk_size_voxels: 4
     view_distance_chunks: 3
 
+  - name: regional
+    voxel_size_m: 16.0
+    mode: composite
+    decompose_to: local
+    chunk_size_voxels: 4
+    view_distance_chunks: 4
+
   - name: local
-    voxel_size_m: 8.0
+    voxel_size_m: 4.0
     mode: composite
     decompose_to: terrain
-    chunk_size_voxels: 8
-    view_distance_chunks: 4
+    chunk_size_voxels: 4
+    view_distance_chunks: 5
 
   - name: terrain
     voxel_size_m: 1.0
     mode: terminal
-    chunk_size_voxels: 8
+    chunk_size_voxels: 4
     view_distance_chunks: 8
 )");
         } catch (const std::exception& e) {
@@ -181,6 +187,10 @@ layers:
     window.framebufferSize(fbW, fbH);
     renderer.initialize(window.nativeHandles(),
                         static_cast<uint32_t>(fbW), static_cast<uint32_t>(fbH));
+    // Shallow cascade: continental chunks are 256 m and the resident bubble is a
+    // few hundred metres. 4 km far clip comfortably covers it while keeping good
+    // depth precision for the 1 m terrain (the default 1000 m would clip context).
+    renderer.setFarClip(4000.0f);
     renderer.setCrosshair(true);
 
     // One MeshStore per layer (all four, plus terminal).
@@ -197,14 +207,31 @@ layers:
     for (const auto& g : pm.layerGenerators())
         if (g.layer_name == "terrain") { terrainGenRec = &g; break; }
 
+    // Remesh a terrain chunk after a voxel edit.
+    auto remeshTerrainChunk = [&](const chunkmath::VoxelCoord& vc) {
+        const chunkmath::LocalVoxel lv =
+            chunkmath::voxelToChunkLocal(vc, terrain->chunkSizeVoxels());
+        const Chunk* chunk = terrain->getChunk(lv.chunk);
+        MeshStore& ms = meshStores["terrain"];
+        auto it = ms.find(lv.chunk);
+        if (chunk) {
+            if (it != ms.end()) { it->second.destroy(); it->second = ChunkMesh::build(*chunk); }
+            else ms.emplace(lv.chunk, ChunkMesh::build(*chunk));
+        }
+    };
+
+    // Held-to-mine accumulator for terrain edits.
+    sim::RemovalAccumulator remover;
+    bool prevRight = false;
+
     // ── Camera / player ───────────────────────────────────────────────────────
-    float      pitch = -0.25f, yaw = 0.0f;
-    WorldCoord camPos(256.0, 1800.0, -512.0);  // start above the continental slab
+    float      pitch = -0.35f, yaw = 0.0f;
+    WorldCoord camPos(32.0, 80.0, 32.0);  // just above the 64 m continental slab top
     double     lastMX = 0, lastMY = 0;
     bool       firstMouse = true, cursorCaptured = true;
     bool       prevF = false, prevG = false;
     bool       walkMode = false;
-    WorldCoord playerCenter(256.0, 1800.0, -512.0);
+    WorldCoord playerCenter(32.0, 80.0, 32.0);
     double     vy = 0.0;
     bool       grounded = false;
 
@@ -219,8 +246,12 @@ layers:
     // ── Main loop ─────────────────────────────────────────────────────────────
     while (!window.shouldClose()) {
         auto now = std::chrono::high_resolution_clock::now();
-        const float dt = std::chrono::duration<float>(now - prevTime).count();
+        float dt = std::chrono::duration<float>(now - prevTime).count();
         prevTime = now;
+        // Clamp: cascade decomposition hitches can spike dt to >0.5 s. An
+        // unclamped dt yanks walk-mode gravity through the floor (breaking jump)
+        // and makes held-to-mine removal fire erratically. Cap at 0.1 s.
+        if (dt > 0.1f) dt = 0.1f;
 
         window.pollEvents();
         if (glfwGetKey(glfwWin, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
@@ -295,7 +326,7 @@ layers:
         // evicts chunks that leave view range. The returned diffs tell us which
         // meshes to build or destroy.
         auto diffs = decompMgr.tick(camPos, kApproachRadiusM,
-                                    /*loadPerFrame=*/4, /*decompPerFrame=*/64);
+                                    /*loadPerFrame=*/32, /*decompPerFrame=*/128);
         applyDiffs(diffs, world, meshStores);
 
         // ── Terminal terrain: stream independently ────────────────────────────
@@ -318,6 +349,54 @@ layers:
             }
         }
 
+        // ── Terrain editing ───────────────────────────────────────────────────
+        {
+            const glm::dvec3 lookDir{
+                static_cast<double>(std::cos(pitch) * std::sin(yaw)),
+                static_cast<double>(std::sin(pitch)),
+                static_cast<double>(std::cos(pitch) * std::cos(yaw))};
+            voxelcast::RayHit hit = voxelcast::raycast(world, camPos, lookDir, kReachM);
+
+            const bool curLeft  = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS);
+            const bool curRight = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
+
+            if (hit.hit && curLeft) {
+                const Voxel target = world.getVoxel(
+                    chunkmath::voxelCenter(hit.voxel, terrain->voxelSizeM()));
+                if (remover.accrue(hit.voxel, target.material.hardness, kToolPower, dt)) {
+                    world.setVoxel(chunkmath::voxelCenter(hit.voxel, terrain->voxelSizeM()),
+                                   Voxel::empty());
+                    remeshTerrainChunk(hit.voxel);
+                    remover.reset();
+                }
+            } else {
+                remover.reset();
+            }
+
+            if (hit.hit && curRight && !prevRight) {
+                Voxel placed;
+                placed.material = pm.material("soil");
+                // The cell above a surface voxel can fall in a terrain chunk the
+                // cascade never created (no ground there = no chunk). Create an
+                // empty chunk on demand so placement into open air still lands.
+                const ChunkCoord ac =
+                    chunkmath::voxelToChunkLocal(hit.adjacent, terrain->chunkSizeVoxels()).chunk;
+                if (!terrain->getChunk(ac)) terrain->loadChunk(ac, nullptr, nullptr);
+                world.setVoxel(chunkmath::voxelCenter(hit.adjacent, terrain->voxelSizeM()), placed);
+                remeshTerrainChunk(hit.adjacent);
+            }
+            prevRight = curRight;
+
+            if (hit.hit) {
+                const float progress =
+                    (remover.hasTarget() && remover.target() == hit.voxel)
+                        ? remover.progress() : -1.0f;
+                renderer.drawVoxelHighlight(
+                    chunkmath::voxelCenter(hit.voxel, terrain->voxelSizeM()),
+                    static_cast<float>(terrain->voxelSizeM()), 0xff00ffff, progress);
+            }
+        }
+
         // ── HUD ───────────────────────────────────────────────────────────────
         {
             const int contDecomp = static_cast<int>(decompMgr.decomposedCount("continental"));
@@ -327,7 +406,8 @@ layers:
             const int terrChunks = static_cast<int>(terrain->chunks().size());
             char hud[256];
             std::snprintf(hud, sizeof(hud),
-                "Decomposed: cont=%d  reg=%d  loc=%d | terrain chunks=%d | in-flight=%d",
+                "Decomposed: cont=%d  reg=%d  loc=%d | terrain chunks=%d | in-flight=%d"
+                " | LMB=break  RMB=place soil",
                 contDecomp, regDecomp, locDecomp, terrChunks, inFlight);
             renderer.setHudText({std::string(hud)});
         }

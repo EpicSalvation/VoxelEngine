@@ -373,6 +373,15 @@ struct PluginContext {
         MaterialProperties props
     );
 
+    // Install an ABGR colour (0xAABBGGRR) at the given palette index. Lets plugins
+    // pair a material's palette_index with a meaningful visual colour rather than
+    // relying on the default cycling palette (where some slots are translucent).
+    void (*set_palette_color)(
+        PluginContext* ctx,
+        uint8_t        index,
+        uint32_t       abgr
+    );
+
     void (*register_on_voxel_modified)(
         PluginContext*     ctx,
         OnVoxelModifiedFn  fn,

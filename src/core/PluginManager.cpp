@@ -1,4 +1,5 @@
 #include "PluginManager.h"
+#include "renderer/Palette.h"
 #include "world/Noise.h"
 #include <algorithm>
 #include <filesystem>
@@ -290,6 +291,10 @@ PluginContext PluginManager::buildContext() {
         // Plugin entries are appended (isBuiltin = false); resolveNoise prefers
         // them over a built-in of the same id, so this overrides the floor.
         mgr->noises_.push_back({id, fn, ud, mgr->currentOwner_, false});
+    };
+
+    ctx.set_palette_color = [](PluginContext*, uint8_t index, uint32_t abgr) {
+        palette::setColor(index, abgr);
     };
 
     ctx.register_material = [](PluginContext* c, const char* id, MaterialProperties props) {

@@ -16,6 +16,12 @@
 #include <cmath>
 #include <cstdint>
 
+#ifdef _WIN32
+#  define VOXEL_PLUGIN_EXPORT extern "C" __declspec(dllexport)
+#else
+#  define VOXEL_PLUGIN_EXPORT extern "C"
+#endif
+
 // ── Deterministic inline value noise ─────────────────────────────────────────
 
 static uint64_t hashCoord(int64_t ix, int64_t iy, int64_t iz, uint64_t seed) {
@@ -54,59 +60,91 @@ static const MaterialProperties kRegionalRock   {2500.f,120.f,2.f,0.03f, 5.f,21}
 static const MaterialProperties kLocalRock      {2200.f, 90.f,2.f,0.04f, 3.f,22};
 static const MaterialProperties kSoil           {1400.f, 30.f,.5f,0.30f, 1.f,23};
 
-// ── Layer generators ──────────────────────────────────────────────────────────
+// ── Shared surface + finite crust ─────────────────────────────────────────────
+//
+// ALL four layers derive solidity from this single height field so the coarse
+// LOD blocks tightly superset the fine terrain (ARCHITECTURE §4 coarse-supersets-
+// fine). The cascade is deliberately SHALLOW (top voxel 64 m, not 512 m): a 512 m
+// top layer forced a large approach radius, and decomposing a large solid sphere
+// down to 1 m is unbounded work — terrain never kept up and the player stood on
+// undecomposed composite blocks. Here the surface sits just under the 64 m
+// continental cell boundary (range ~[50, 58] m) so coarse blocks overshoot the
+// real terrain by ≤ ~14 m, and the rock is a FINITE crust over a hollow core, so
+// the fine-voxel workload inside the approach radius is bounded.
+static constexpr double kCrustThickness = 16.0;  // metres of solid rock; hollow below
 
-// Continental (512 m): solid dark-rock slab up to ~1024 m altitude.
-static void continentalGen(WorldCoord origin, int n, Voxel* out, void*) {
-    const double vs = 512.0;
-    for (int z = 0; z < n; ++z)
-        for (int y = 0; y < n; ++y)
-            for (int x = 0; x < n; ++x) {
-                const double cy = origin.value.y + (y + 0.5) * vs;
-                const double limit = 1024.0 + 256.0 * (double)valueNoise(
-                    origin.value.x + x*vs, 0, origin.value.z + z*vs, 4096.0, 0xC041C041C041ull);
-                out[x + n*(y + n*z)] = (cy < limit) ? Voxel{kContinentalRock} : Voxel::empty();
-            }
+static double surfaceHeight(double wx, double wz) {
+    return 54.0 + 4.0 * (double)valueNoise(wx, 0, wz, 256.0, 0xBEEF1234ull);
 }
 
-// Regional (64 m): solid gray-granite slab up to ~800 m altitude.
-static void regionalGen(WorldCoord origin, int n, Voxel* out, void*) {
+// A composite-layer cell [yb, yb+vs] is solid when it OVERLAPS the crust band
+// (surface - thickness, surface]. Testing the cell extent (not just a point)
+// guarantees a coarse cell straddling the band is solid, so it fully contains the
+// finer detail beneath it (coarse-supersets-fine).
+static bool cellSolid(double cellBottomY, double vs, double wx, double wz) {
+    const double s = surfaceHeight(wx, wz);
+    return cellBottomY < s && (cellBottomY + vs) > (s - kCrustThickness);
+}
+
+// ── Layer generators ──────────────────────────────────────────────────────────
+
+// Continental (64 m): dark-rock slab — the coarse top of the cascade.
+static void continentalGen(WorldCoord origin, int n, Voxel* out, void*) {
     const double vs = 64.0;
     for (int z = 0; z < n; ++z)
         for (int y = 0; y < n; ++y)
             for (int x = 0; x < n; ++x) {
-                const double cy = origin.value.y + (y + 0.5) * vs;
-                const double limit = 800.0 + 64.0 * (double)valueNoise(
-                    origin.value.x + x*vs, 0, origin.value.z + z*vs, 512.0, 0xE6404E6404ull);
-                out[x + n*(y + n*z)] = (cy < limit) ? Voxel{kRegionalRock} : Voxel::empty();
+                const double yb = origin.value.y + y * vs;
+                const double wx = origin.value.x + (x + 0.5) * vs;
+                const double wz = origin.value.z + (z + 0.5) * vs;
+                out[x + n*(y + n*z)] =
+                    cellSolid(yb, vs, wx, wz) ? Voxel{kContinentalRock} : Voxel::empty();
             }
 }
 
-// Local (8 m): solid tan-limestone slab up to ~700 m altitude.
-static void localGen(WorldCoord origin, int n, Voxel* out, void*) {
-    const double vs = 8.0;
+// Regional (16 m): gray-granite slab, same shared surface + crust.
+static void regionalGen(WorldCoord origin, int n, Voxel* out, void*) {
+    const double vs = 16.0;
     for (int z = 0; z < n; ++z)
         for (int y = 0; y < n; ++y)
             for (int x = 0; x < n; ++x) {
-                const double cy = origin.value.y + (y + 0.5) * vs;
-                const double limit = 700.0 + 80.0 * (double)valueNoise(
-                    origin.value.x + x*vs, 0, origin.value.z + z*vs, 64.0, 0xA0CA1A0CA1ull);
-                out[x + n*(y + n*z)] = (cy < limit) ? Voxel{kLocalRock} : Voxel::empty();
+                const double yb = origin.value.y + y * vs;
+                const double wx = origin.value.x + (x + 0.5) * vs;
+                const double wz = origin.value.z + (z + 0.5) * vs;
+                out[x + n*(y + n*z)] =
+                    cellSolid(yb, vs, wx, wz) ? Voxel{kRegionalRock} : Voxel::empty();
             }
 }
 
-// Terrain (1 m): detailed surface — soil cap over rock, cave voids.
+// Local (4 m): tan-limestone slab, same shared surface + crust.
+static void localGen(WorldCoord origin, int n, Voxel* out, void*) {
+    const double vs = 4.0;
+    for (int z = 0; z < n; ++z)
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x) {
+                const double yb = origin.value.y + y * vs;
+                const double wx = origin.value.x + (x + 0.5) * vs;
+                const double wz = origin.value.z + (z + 0.5) * vs;
+                out[x + n*(y + n*z)] =
+                    cellSolid(yb, vs, wx, wz) ? Voxel{kLocalRock} : Voxel::empty();
+            }
+}
+
+// Terrain (1 m): detailed surface — soil cap over rock, cave voids, hollow core.
+// Uses the SAME surface height so the fine detail sits exactly inside the coarse
+// blocks; empty above the surface AND below the crust (the drillable hollow core).
 static void terrainGen(WorldCoord origin, int n, Voxel* out, void*) {
     const double vs = 1.0;
     for (int z = 0; z < n; ++z) {
         for (int x = 0; x < n; ++x) {
             const double wx = origin.value.x + (x + 0.5) * vs;
             const double wz = origin.value.z + (z + 0.5) * vs;
-            const double height = 640.0 + 60.0 * (double)valueNoise(wx, 0, wz, 32.0, 0xBEEF1234ull);
+            const double height = surfaceHeight(wx, wz);
             for (int y = 0; y < n; ++y) {
                 const double wy = origin.value.y + (y + 0.5) * vs;
                 const int idx = x + n*(y + n*z);
                 if (wy >= height) { out[idx] = Voxel::empty(); continue; }
+                if (wy < height - kCrustThickness) { out[idx] = Voxel::empty(); continue; }
                 const float cave = valueNoise(wx, wy, wz, 12.0, 0xCAFEBABEull);
                 if (cave < 0.28f) { out[idx] = Voxel::empty(); continue; }
                 const bool nearSurface = (height - wy) <= 3.0;
@@ -153,11 +191,19 @@ static RecipeDesc kLocalRecipe = {
 
 // ── Plugin entry ──────────────────────────────────────────────────────────────
 
-extern "C" int voxel_plugin_init(PluginContext* ctx) {
+VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
     ctx->register_material(ctx, "continental_rock", kContinentalRock);
     ctx->register_material(ctx, "regional_rock",    kRegionalRock);
     ctx->register_material(ctx, "local_rock",       kLocalRock);
     ctx->register_material(ctx, "soil",             kSoil);
+
+    // Install opaque, visually distinct colours for each rock type.
+    // The default cycling palette maps indices 21 → the translucent water slot,
+    // making regional_rock render semi-transparent; index 22 renders brownish-red.
+    ctx->set_palette_color(ctx, 20, 0xff606050u); // continental_rock: dark slate
+    ctx->set_palette_color(ctx, 21, 0xff909090u); // regional_rock:    granite gray
+    ctx->set_palette_color(ctx, 22, 0xff78a0c0u); // local_rock:       tan limestone
+    ctx->set_palette_color(ctx, 23, 0xff204060u); // soil:             dark brown
 
     ctx->register_layer_generator(ctx, "continental", continentalGen, nullptr);
     ctx->register_layer_generator(ctx, "regional",    regionalGen,    nullptr);

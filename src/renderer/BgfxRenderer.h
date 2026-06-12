@@ -53,6 +53,10 @@ public:
     void drawVoxelHighlight(const WorldCoord& center, float size,
                             uint32_t abgr = 0xff00ffff, float progress = -1.0f);
 
+    // Set the far clip plane distance in metres (default: 1000 m; increase for
+    // multi-layer worlds where the coarsest layer extends many kilometres).
+    void setFarClip(float metres) { farClip = metres; }
+
     // Enable/disable a centered crosshair drawn via bgfx debug text.
     void setCrosshair(bool enabled) { crosshair = enabled; }
 
@@ -92,6 +96,7 @@ private:
     bx::Vec3                  cameraRot; // {pitch, yaw, roll} in radians
     uint32_t                  viewWidth;
     uint32_t                  viewHeight;
+    float                     farClip;
     bool                      crosshair;
     bool                      initialized;
 };
