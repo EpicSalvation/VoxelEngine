@@ -33,7 +33,23 @@ void AudioManager::playSound(const std::string& sound_id,
                               const WorldCoord&  pos,
                               const SoundParams* overrides) {
     if (!backend_ || !backend_->isReady()) return;
-    backend_->playOneShot(sound_id, toLocal(pos), overrides);
+    // Convert to camera-local float once: used for the cull check and submitted
+    // to the backend. World-absolute floats are never given to the audio engine
+    // (the same floating-origin rule as the GPU path, ARCHITECTURE §1/§9/§16).
+    glm::vec3 local = toLocal(pos);
+
+    // Pre-cull: skip voice allocation for sources beyond their max audible distance.
+    // Prevents distant voxel events (remote edits, off-screen collapses) from
+    // accumulating inaudible voices (ARCHITECTURE §16).
+    float maxDist = overrides ? overrides->max_distance
+                              : [&]() -> float {
+                                    const auto* r = pm_.findSound(sound_id);
+                                    return r ? r->params.max_distance : SoundParams{}.max_distance;
+                                }();
+    float distSq = local.x*local.x + local.y*local.y + local.z*local.z;
+    if (distSq > maxDist * maxDist) return;
+
+    backend_->playOneShot(sound_id, local, overrides);
 }
 
 void AudioManager::playMaterialSound(AudioEvent event,
@@ -42,7 +58,17 @@ void AudioManager::playMaterialSound(AudioEvent event,
     if (!backend_ || !backend_->isReady()) return;
     const auto* binding = pm_.findMaterialSound(event, palette_index);
     if (!binding) return;  // fail-soft: unbound material/event pair
-    backend_->playOneShot(binding->sound_id, toLocal(pos), nullptr);
+
+    glm::vec3 local = toLocal(pos);
+
+    // Pre-cull using the bound sound's registered max_distance.
+    float maxDist = SoundParams{}.max_distance;
+    if (const auto* reg = pm_.findSound(binding->sound_id))
+        maxDist = reg->params.max_distance;
+    float distSq = local.x*local.x + local.y*local.y + local.z*local.z;
+    if (distSq > maxDist * maxDist) return;
+
+    backend_->playOneShot(binding->sound_id, local, nullptr);
 }
 
 AudioEmitterId AudioManager::createEmitter(const std::string&  sound_id,
