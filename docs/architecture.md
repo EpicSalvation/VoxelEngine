@@ -23,6 +23,7 @@ If you are an AI agent: read this document before modifying any subsystem. The c
 13. [Subsystem Dependency Map](#13-subsystem-dependency-map)
 14. [Guidance for AI Coding Agents](#14-guidance-for-ai-coding-agents)
 15. [Networking and Multiplayer](#15-networking-and-multiplayer)
+16. [Audio](#16-audio)
 
 ---
 
@@ -604,6 +605,16 @@ NetworkManager (src/net/)
 ENetTransport (src/net/)
     └── depends on: ENet (transport library only)
     └── must NOT depend on: any engine subsystem (it is a pure I/O adapter)
+
+AudioManager (src/audio/)
+    └── depends on: PluginManager (read the sound + material-sound registries),
+                    WorldCoord, IAudioBackend
+    └── listener position pushed in from the front-end (it owns the camera)
+    └── must NOT depend on: Renderer, PhysicsSystem, DecompositionWorker, IO, World
+
+MiniaudioBackend (src/audio/)
+    └── depends on: miniaudio (audio library only)
+    └── must NOT depend on: any engine subsystem (it is a pure output adapter)
 ```
 
 Keep these dependency boundaries. A subsystem that reaches outside its declared dependencies creates hidden coupling that makes isolated testing and agent-assisted development much harder.
@@ -750,3 +761,92 @@ The following additions to `plugin_api.h` are planned for M11. The existing `on_
 ### Dependency Boundaries
 
 `NetworkManager` sits in a new `src/net/` tier. It depends on `World` (to apply incoming edits via `setVoxel`), `PluginManager` (to fire network hooks), and `ChunkPersistence`/`WorldSave` (to serve dirty chunks on join). It must not depend on `Renderer`, `PhysicsSystem`, or `DecompositionWorker`. The transport (`ENetTransport`) is a dependency of `NetworkManager` only — nothing else in the engine knows ENet exists.
+
+---
+
+## 16. Audio
+
+**Files (planned):** `src/audio/AudioManager.{h,cpp}`, `src/audio/IAudioBackend.{h,cpp}`, `src/audio/MiniaudioBackend.{h,cpp}`, `include/plugin_api.h` (audio registration functions, `PluginContext` playback functions, and POD/enum types)
+
+### Design Decisions (M12)
+
+This section records the design decisions made for M12. Implementation details will be added as the milestone is built out.
+
+### Audio Backend
+
+**miniaudio** (public domain / MIT-0) is the built-in audio backend. It is a single header, fetches via `FetchContent` as easily as bgfx or yaml-cpp, ships a full spatialization engine (listener + positioned sources, distance attenuation, optional Doppler/cones), and decodes WAV/FLAC/MP3 out of the box (OGG via stb_vorbis). Its permissive license fits the static-by-default, per-platform-binary MIT tree without the friction OpenAL Soft's LGPL would add.
+
+miniaudio sits **behind an adapter**, exactly as ENet sits behind `ITransport`: `IAudioBackend` is the abstract seam, and `MiniaudioBackend` is the *only* file that includes `miniaudio.h`. No miniaudio type appears in any public header (`include/`) — the same `PRIVATE`-dependency rule as bgfx and ENet (§12). A developer who wants FMOD, Wwise, or a custom mixer implements `IAudioBackend` and swaps it; nothing else in the engine knows which backend is live.
+
+**Audio is outside the determinism contract (§4).** miniaudio runs its own audio thread off the device callback, so playback never touches the deterministic main-loop path and never feeds decomposition, persistence, or the network wire. The `rand()`/threading rules that bind the decomposition pipeline do not bind audio — sound is presentation, not world state.
+
+### Sound Data Lives Beside the Palette, Not on the Voxel
+
+**A material's sounds live in a `palette_index`-keyed side table — never as a field on `MaterialProperties` or `Voxel`.** This mirrors how visual presentation already works: color is *not* on `MaterialProperties` either; the struct carries only `palette_index`, and the actual color/translucency lives in the 256-entry palette side table keyed by that index (§9, `src/renderer/Palette.h`). Sound is the audio member of exactly that family — presentation keyed by material identity — and belongs in the same kind of side table.
+
+The reasoning is independent of the M8 decision to freeze `MaterialProperties` (§5). Even with a thawed struct, sound would not belong on it:
+
+- **`Voxel` is a POD, replicated across every chunk**, and must stay trivially copyable — it crosses `DecompositionWorker`, the persistence codec, and the network wire, with explicit `_pad[3]` keeping `memcmp`-based determinism checks valid. Sound *data* (paths, decoded buffers) is strings and buffers; it cannot live on a POD regardless. The only thing the struct could hold is an integer handle — and that would re-derive a key the voxel already carries in `palette_index`, growing every voxel, every save, and every packet for nothing.
+- **A side table tears down cleanly on plugin unload** (owner-tracked, like the recipe/noise/material registries, §8). Data baked into voxels has the opposite property — §8 already notes that unregistering a material does not retroactively change voxels that already exist. A baked-in sound id would inherit that staleness; a side table resolved at event time does not.
+- **It is off the hot path.** The M8 consumption contract (§5) is "read scalar properties by value in simulation; id lookups are tooling-only." Audio triggers on discrete events (break, place, footstep), which is exactly where a lookup is the right tool. The struct's read-by-value advantage exists to serve continuous simulation math (hardness → removal cost); audio does not need it.
+
+Selection is still fully *material-driven*: it is keyed by the voxel's own `palette_index` (one of its material properties), not a hardcoded block-type branch. The registration API names materials by id for authoring ergonomics (`register_material_sound("granite", …)`) but resolves down to a `palette_index` key — the same indirection `register_material` already uses to install a color at an index.
+
+### Positional Model Under the Floating Origin
+
+Sources are stored in `WorldCoord` space and obey the floating-origin rule (§1, §9) exactly as GPU geometry does:
+
+- **The listener is pinned at the local origin; emitters are fed camera-relative floats.** Each tick every emitter is handed to the backend as `source.toLocalFloat(camera)`, with the listener at `(0,0,0)`. World-absolute floats are **never** submitted to the audio engine — the same prohibition as submitting `WorldCoord` directly to the GPU. Moving the listener in world-float instead would reintroduce the precision loss §1 exists to prevent.
+- **The listener is set by the front-end, not a plugin hook.** The front-end owns the camera, so it pushes `setListener(WorldCoord pos, forward, up)` into `AudioManager` each frame — the audio analog of how the renderer receives the camera. `AudioManager` is attached to the engine like `NetworkManager` (null when audio is disabled, so existing demos and tests are unaffected) and updated per tick.
+- **Units are meters** — `WorldCoord` units — so attenuation distances need no separate audio scale.
+- **Two emitter kinds:** fire-and-forget **one-shots** at a `WorldCoord` (break/place/footstep) and persistent **looping emitters** with a lifetime and a (possibly moving) position (ambient beds, flow loops).
+
+### Attenuation: Defaults Are Policy, Not a Ceiling
+
+The engine defaults to **inverse-distance attenuation** with a per-sound **max audible distance** and rolloff factor, and **Doppler off**. These defaults set the acoustic "size" of the world and keep distant edits from accumulating voices.
+
+The backend's other capabilities — linear/exponential rolloff, Doppler factor, min/max distance, cones, per-source volume — stay available as **optional per-sound and per-project overrides**. They are surfaced through the engine's *own* POD types and enums (`AttenuationModel`, `SoundParams`), never by leaking miniaudio types through `include/`. A sound that specifies nothing gets the defaults; one that wants exponential rolloff with Doppler sets it on its `SoundParams`.
+
+### Triggering: Engine Primitives, Behavior as a Removable Plugin
+
+The engine provides audio **primitives** — the sound registries plus the playback/emitter functions — and does **not** auto-play anything. Default behavior ships as a removable plugin, the audio sibling of the M11 chat plugin:
+
+- A built-in **`material-audio` plugin** registers `on_voxel_modified` and calls `play_material_sound` for break/place, resolving each edit's `palette_index` to its registered sound. A game that wants different audio behavior replaces or drops the plugin with no engine change.
+- **Footsteps** are fired by the front-end / kinematic path from the ground voxel's material — the engine exposes the lookup-and-play helper; the caller owns the cadence.
+
+Consequently **M12 adds no new event hook to `plugin_api.h`.** Audio rides the *existing* hooks (`on_voxel_modified`, the chunk-lifecycle hooks for decompose, and the structural/flow hooks once M13/M14 land). Because `on_voxel_modified` already carries a `source` field (M11), replicated remote edits produce local sound on every client — but no audio data ever crosses the wire (audio is out of M11's networking scope); each client sounds its own copy of the replicated edit.
+
+### Plugin API Surface for Audio
+
+The following additions to `plugin_api.h` are planned for M12. All are new; no existing hook changes.
+
+| Hook / function | Direction | Purpose |
+|---|---|---|
+| `register_sound` | Plugin → Engine | Name an audio asset by `sound_id` (path + default `SoundParams`). Owner-tracked; torn down on unload. |
+| `register_material_sound` | Plugin → Engine | Bind `(material_id, AudioEvent) → sound_id`. Resolves `material_id → palette_index` under the hood (§16 *Sound Data Lives Beside the Palette*). Owner-tracked. |
+| `play_sound` | Plugin → Engine (`PluginContext` fn ptr) | Fire a one-shot at a `WorldCoord`, with optional `SoundParams` overrides. |
+| `play_material_sound` | Plugin → Engine (`PluginContext` fn ptr) | Resolve `(AudioEvent, palette_index)` to a sound and play it at a `WorldCoord` — the lookup-and-play helper used by `material-audio` and the footstep path. |
+| `create_emitter` / `set_emitter_position` / `stop_emitter` | Plugin → Engine (`PluginContext` fn ptr) | Lifecycle for persistent positioned looping emitters; returns an opaque `AudioEmitterId`. |
+
+POD/enum types added alongside: `AudioEvent` (`Footstep`, `Break`, `Place`; `Collapse`/`Flow` reserved for M13/M14), `AttenuationModel`, and `SoundParams`/`EmitterParams` (volume, loop, attenuation model, min/max distance, rolloff, Doppler factor). No `std::` type crosses the plugin ABI, consistent with the M9/M11 surfaces.
+
+The **listener** is intentionally absent from this table — it is set by the front-end via `AudioManager`, not registered by a plugin.
+
+### Missing-Sound Validation
+
+Missing sounds are handled at two distinct points, and conflating them is the mistake to avoid: **runtime resolution is always fail-soft; startup validation is where strictness lives.**
+
+- **At play time, resolution never throws.** A `play_sound`/`play_material_sound` whose `sound_id` or `(AudioEvent, palette_index)` binding does not resolve plays nothing and returns. A missing sound must never crash a running game, and — because audio is a pure sink outside the determinism contract (§4) — must never perturb world state. This holds regardless of build type or config.
+- **At startup, a validation pass catches missing sounds up front.** After plugins load — the same stage as recipe validation (§6) — `validateAudio` walks every `register_material_sound` binding (does its `sound_id` resolve?) and every `register_sound` asset (does the file load/decode through the backend?), collecting *all* problems into one report rather than stopping at the first. Whether that report is a hard startup error or a logged warning is a policy, because audio — unlike a malformed `LayerConfig` (§2) — is genuinely optional content.
+
+The policy is tri-state and **defaults to the build type**, so a developer is told immediately without configuring anything:
+
+- `auto` (default) — **error in debug builds** (`#ifndef NDEBUG`), **warn in release**. A game developer hears about a missing sound the moment they run a debug build; a shipped release never hard-crashes on an optional sound that failed to package.
+- `error` — always a hard startup error (gate a release in CI on complete audio).
+- `warn` — always a warning (run a debug build with knowingly-incomplete audio).
+
+It is set via the project config (`audio.strict: auto | error | warn`, the one-line opt-in pattern `net.interest` established in M11) or passed directly to `validateAudio` for programmatic front-ends. This keeps the engine's "hard errors, not warnings" instinct (§2) where it pays off — the development loop — while honoring that a missing footstep sound, unlike a broken layer stack, is not a reason to refuse to run a player's game.
+
+### Dependency Boundaries
+
+`AudioManager` sits in a new `src/audio/` tier. It depends on `PluginManager` (to read the sound and material-sound registries), `WorldCoord`, and `IAudioBackend`. It must not depend on `Renderer`, `PhysicsSystem`, `DecompositionWorker`, `IO`, or `World` — callers hand it a `palette_index` and a `WorldCoord`, so it never reads world state directly. The backend (`MiniaudioBackend`) is a dependency of `AudioManager` only — nothing else in the engine knows miniaudio exists. The sound and material-sound registries live on `PluginManager` with the recipe/noise/material registries, owner-tracked and torn down on per-plugin unload by the same path.
