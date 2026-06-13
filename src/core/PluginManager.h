@@ -6,6 +6,11 @@
 #include "plugin_api.h"
 #include "world/Recipe.h"  // Recipe value type (deep-copied from RecipeDesc at registration)
 
+// Forward declarations: PluginManager.h must not include audio/ headers because
+// AudioManager.h includes PluginManager.h — circular at the .h level.
+// PluginManager.cpp includes audio/AudioManager.h for the lambda bodies.
+namespace audio { class AudioManager; }
+
 // Identifies a loaded plugin instance. Returned by loadPlugin/wireInPlugin and
 // passed to unloadPlugin. kInvalidPluginId (0) denotes a failed load.
 using PluginId = std::uint32_t;
@@ -193,6 +198,13 @@ public:
         netSendUser_ = user;
     }
 
+    // Audio playback routing (M12). AudioManager installs itself here after init
+    // so PluginContext play_sound / create_emitter / etc. route to it. Null (the
+    // default) makes plugin audio calls a silent no-op — existing demos without
+    // audio are unaffected (ARCHITECTURE §16).
+    void setAudioManager(audio::AudioManager* am) { audioManager_ = am; }
+    audio::AudioManager* audioManager() const     { return audioManager_; }
+
     // Wire in a plugin that is compiled directly into the executable rather than loaded
     // as a .so. Useful for the example plugin and for testing without a .so build step.
     // Returns the new plugin's id (no library handle is associated), or kInvalidPluginId
@@ -299,6 +311,7 @@ private:
     PluginId nextPluginId_ = 1;          // 0 is reserved for kInvalidPluginId
     PluginId currentOwner_ = kInvalidPluginId;  // set around a plugin's init() call
 
-    NetworkSendFn netSendFn_   = nullptr;  // installed by NetworkManager::init
-    void*         netSendUser_ = nullptr;
+    NetworkSendFn        netSendFn_    = nullptr;  // installed by NetworkManager::init
+    void*                netSendUser_  = nullptr;
+    audio::AudioManager* audioManager_ = nullptr;  // installed by AudioManager after init
 };

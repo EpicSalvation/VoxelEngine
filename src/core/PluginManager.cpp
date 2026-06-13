@@ -1,4 +1,5 @@
 #include "PluginManager.h"
+#include "audio/AudioManager.h"
 #include "renderer/Palette.h"
 #include "world/Noise.h"
 #include <algorithm>
@@ -185,6 +186,10 @@ bool PluginManager::unloadPlugin(PluginId id) {
     eraseOwned(interestFilters_,      id);
     eraseOwned(sounds_,               id);
     eraseOwned(materialSounds_,       id);
+
+    // Stop any live emitters the plugin created before its code is unloaded
+    // (ARCHITECTURE §16 — no emitter must dangle past its owning library handle).
+    if (audioManager_) audioManager_->stopEmittersOwnedBy(id);
 
     void* handle = it->handle;
     loaded_.erase(it);
@@ -414,6 +419,82 @@ PluginContext PluginManager::buildContext() {
             std::cerr << "[PluginManager] Warning: interest_filter already registered; overwriting.\n";
         mgr->interestFilters_.clear();
         mgr->interestFilters_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    // -----------------------------------------------------------------------
+    // Audio hooks (M12, ARCHITECTURE §16)
+    // -----------------------------------------------------------------------
+
+    ctx.register_sound = [](PluginContext* c, const char* sound_id,
+                             const char* path, SoundParams params) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!sound_id || !path) {
+            std::cerr << "[PluginManager] register_sound: null sound_id or path; ignored.\n";
+            return;
+        }
+        mgr->sounds_.push_back({sound_id, path, params, mgr->currentOwner_});
+    };
+
+    ctx.register_material_sound = [](PluginContext* c, const char* material_id,
+                                      AudioEvent event, const char* sound_id) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!material_id || !sound_id) {
+            std::cerr << "[PluginManager] register_material_sound: null argument; ignored.\n";
+            return;
+        }
+        // Resolve material_id → palette_index at registration so AudioManager's
+        // play-time lookup is keyed by the index the voxel carries (§16).
+        uint8_t palette_index = 0;
+        bool found = false;
+        for (const auto& m : mgr->materials_) {
+            if (m.material_id == material_id) {
+                palette_index = m.props.palette_index;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            std::cerr << "[PluginManager] Warning: register_material_sound: material '"
+                      << material_id << "' not yet registered; palette_index defaults to 0.\n";
+        }
+        mgr->materialSounds_.push_back({material_id, palette_index, event,
+                                        sound_id, mgr->currentOwner_});
+    };
+
+    ctx.play_sound = [](PluginContext* c, const char* sound_id,
+                         WorldCoord pos, const SoundParams* params) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (mgr->audioManager_ && sound_id)
+            mgr->audioManager_->playSound(sound_id, pos, params);
+    };
+
+    ctx.play_material_sound = [](PluginContext* c, AudioEvent event,
+                                  uint8_t palette_index, WorldCoord pos) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (mgr->audioManager_)
+            mgr->audioManager_->playMaterialSound(event, palette_index, pos);
+    };
+
+    ctx.create_emitter = [](PluginContext* c, const char* sound_id,
+                             WorldCoord pos, const EmitterParams* params) -> AudioEmitterId {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!mgr->audioManager_ || !sound_id || !params) return kInvalidEmitterId;
+        // currentOwner_ is set around the plugin's init call, but create_emitter
+        // may be called at any time (not just during init). If it is called during
+        // init, currentOwner_ is the plugin's id; otherwise kInvalidPluginId (demo
+        // emitters still get cleaned up by the explicit stop_emitter call).
+        return mgr->audioManager_->createEmitter(sound_id, pos, *params,
+                                                  mgr->currentOwner_);
+    };
+
+    ctx.set_emitter_position = [](PluginContext* c, AudioEmitterId id, WorldCoord pos) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (mgr->audioManager_) mgr->audioManager_->setEmitterPosition(id, pos);
+    };
+
+    ctx.stop_emitter = [](PluginContext* c, AudioEmitterId id) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (mgr->audioManager_) mgr->audioManager_->stopEmitter(id);
     };
 
     return ctx;

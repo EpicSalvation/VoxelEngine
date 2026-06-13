@@ -525,6 +525,76 @@ struct PluginContext {
         InterestFilterFn fn,
         void*            user_data
     );
+
+    // -----------------------------------------------------------------------
+    // Audio hooks (M12, ARCHITECTURE §16)
+    // No existing hook changes — audio rides the existing on_voxel_modified
+    // hook; these add sound registration and playback primitives only.
+    // -----------------------------------------------------------------------
+
+    // Register a named sound asset.  params sets defaults for all plays of this
+    // sound; individual play calls may override them.  Owner-tracked: the asset
+    // record is removed when the registering plugin unloads.
+    void (*register_sound)(
+        PluginContext*   ctx,
+        const char*      sound_id,
+        const char*      path,
+        SoundParams      params    // by value — POD, no std:: across the ABI
+    );
+
+    // Bind (material_id, AudioEvent) → sound_id.  The engine resolves
+    // material_id → palette_index at registration so play-time lookup is keyed
+    // by the index the voxel actually carries (ARCHITECTURE §16).  Owner-tracked.
+    void (*register_material_sound)(
+        PluginContext* ctx,
+        const char*    material_id,
+        AudioEvent     event,
+        const char*    sound_id
+    );
+
+    // Fire-and-forget positional one-shot.  pos is a WorldCoord; AudioManager
+    // projects it to camera-local float before submitting to the backend.
+    // params may be nullptr to use the defaults registered with the sound.
+    // Fail-soft: plays nothing when sound_id is unregistered or AudioManager
+    // is not attached (audio is a pure sink — §4).
+    void (*play_sound)(
+        PluginContext*     ctx,
+        const char*        sound_id,
+        WorldCoord         pos,
+        const SoundParams* params
+    );
+
+    // Resolve (AudioEvent, palette_index) → sound_id via the material-sound
+    // registry and play.  Fail-soft when the binding is not found.
+    void (*play_material_sound)(
+        PluginContext* ctx,
+        AudioEvent     event,
+        uint8_t        palette_index,
+        WorldCoord     pos
+    );
+
+    // Persistent looping emitter.  Returns kInvalidEmitterId on failure.
+    // The emitter is owner-tracked: plugin unload stops all of its emitters so
+    // none dangle past the library handle.
+    AudioEmitterId (*create_emitter)(
+        PluginContext*       ctx,
+        const char*          sound_id,
+        WorldCoord           pos,
+        const EmitterParams* params
+    );
+
+    // Re-project an emitter's WorldCoord each tick. Safe to call every frame.
+    void (*set_emitter_position)(
+        PluginContext*  ctx,
+        AudioEmitterId  id,
+        WorldCoord      pos
+    );
+
+    // Stop and destroy an emitter.  Idempotent for kInvalidEmitterId.
+    void (*stop_emitter)(
+        PluginContext*  ctx,
+        AudioEmitterId  id
+    );
 };
 
 // ---------------------------------------------------------------------------

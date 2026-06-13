@@ -5,6 +5,7 @@
 
 #include "audio/MiniaudioBackend.h"
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -154,6 +155,10 @@ bool MiniaudioBackend::loadSound(const std::string& sound_id,
                                   const std::string& path,
                                   const SoundParams& params) {
     if (!impl_->ready) return false;
+    // Verify the path is accessible before caching it. This is the check done
+    // during the validateAudio startup pass; runtime playback is fail-soft and
+    // does not re-probe (ARCHITECTURE §16 missing-sound policy).
+    if (!path.empty() && !std::filesystem::exists(path)) return false;
     impl_->assets[sound_id] = {path, params};
     return true;
 }
