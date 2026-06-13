@@ -110,6 +110,32 @@ if(NOT enet_POPULATED)
     "${enet_SOURCE_DIR}/include")
 endif()
 
+# miniaudio — single-header audio library (public-domain/MIT-0) for M12.
+# Downloaded as a single file; no git clone needed for a header-only library.
+# MiniaudioBackend.cpp is the ONLY file that includes it (MINIAUDIO_IMPLEMENTATION).
+# No miniaudio type appears in any public header (include/) — same PRIVATE rule as
+# bgfx and ENet (ARCHITECTURE §12/§16).
+set(MINIAUDIO_VERSION "0.11.21")
+set(MINIAUDIO_DIR "${CMAKE_BINARY_DIR}/_miniaudio")
+set(MINIAUDIO_HEADER "${MINIAUDIO_DIR}/miniaudio.h")
+if(NOT EXISTS "${MINIAUDIO_HEADER}")
+  message(STATUS "Downloading miniaudio ${MINIAUDIO_VERSION}...")
+  file(MAKE_DIRECTORY "${MINIAUDIO_DIR}")
+  file(DOWNLOAD
+    "https://raw.githubusercontent.com/mackron/miniaudio/${MINIAUDIO_VERSION}/miniaudio.h"
+    "${MINIAUDIO_HEADER}"
+    STATUS _ma_status
+    TLS_VERIFY ON
+  )
+  list(GET _ma_status 0 _ma_code)
+  if(NOT _ma_code EQUAL 0)
+    list(GET _ma_status 1 _ma_msg)
+    message(FATAL_ERROR "Failed to download miniaudio.h: ${_ma_msg}")
+  endif()
+  message(STATUS "miniaudio downloaded to ${MINIAUDIO_HEADER}")
+endif()
+# Expose miniaudio's directory as a PRIVATE include so only engine internals see it.
+
 # GoogleTest
 set(gtest_SOURCE_DIR "${CMAKE_SOURCE_DIR}/external/googletest")
 if(EXISTS "${gtest_SOURCE_DIR}/CMakeLists.txt")
@@ -131,6 +157,7 @@ endif()
 # ABI is unaffected either way — plugins receive a function-pointer table,
 # see include/plugin_api.h).
 file(GLOB_RECURSE ENGINE_SOURCES
+    src/audio/*.cpp
     src/core/*.cpp
     src/io/*.cpp
     src/net/*.cpp
@@ -163,6 +190,33 @@ target_link_libraries(voxel-engine
     yaml-cpp::yaml-cpp
     enet                  # M11 networking transport (ENet types must not appear in include/)
 )
+
+# miniaudio: header-only, so only the include path is needed (no static library).
+# MiniaudioBackend.cpp is the sole consumer; PRIVATE keeps it out of include/.
+target_include_directories(voxel-engine PRIVATE ${MINIAUDIO_DIR})
+
+# Platform audio libraries required by miniaudio's device I/O layer (not needed
+# for the null device / headless test path, but needed to link for real playback).
+if(WIN32)
+  target_link_libraries(voxel-engine PRIVATE ole32 user32)
+  # winmm is already pulled in by ENet on Windows; no duplicate needed.
+elseif(APPLE)
+  target_link_libraries(voxel-engine PRIVATE
+    "-framework CoreAudio"
+    "-framework AudioToolbox"
+    "-framework AudioUnit")
+else()
+  # Linux: try ALSA and/or PulseAudio; miniaudio picks whichever backend it finds.
+  find_package(ALSA QUIET)
+  if(ALSA_FOUND)
+    target_link_libraries(voxel-engine PRIVATE ALSA::ALSA)
+  endif()
+  find_library(PULSE_LIB pulse)
+  if(PULSE_LIB)
+    target_link_libraries(voxel-engine PRIVATE ${PULSE_LIB})
+  endif()
+  target_link_libraries(voxel-engine PRIVATE m pthread)
+endif()
 
 # Warning flags applied to first-party targets only (not fetched dependencies).
 function(voxel_set_warnings tgt)
@@ -323,6 +377,10 @@ foreach(_demo ${_voxel_demo_dirs})
     if(TARGET chat)
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_CHAT_PLUGIN_PATH="$<TARGET_FILE:chat>")
+    endif()
+    if(TARGET material-audio)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_MATERIAL_AUDIO_PLUGIN_PATH="$<TARGET_FILE:material-audio>")
     endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)

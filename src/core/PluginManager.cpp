@@ -93,6 +93,8 @@ PluginId PluginManager::loadPlugin(const std::string& path) {
         eraseOwned(networkMessageHooks_,id);
         eraseOwned(authorityPolicies_,  id);
         eraseOwned(interestFilters_,    id);
+        eraseOwned(sounds_,             id);
+        eraseOwned(materialSounds_,     id);
         platformDlClose(handle);
         return kInvalidPluginId;
     }
@@ -148,6 +150,8 @@ PluginId PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
         eraseOwned(networkMessageHooks_,id);
         eraseOwned(authorityPolicies_,  id);
         eraseOwned(interestFilters_,    id);
+        eraseOwned(sounds_,             id);
+        eraseOwned(materialSounds_,     id);
         return kInvalidPluginId;
     }
     loaded_.push_back({id, nullptr});
@@ -179,6 +183,8 @@ bool PluginManager::unloadPlugin(PluginId id) {
     eraseOwned(networkMessageHooks_,  id);
     eraseOwned(authorityPolicies_,    id);
     eraseOwned(interestFilters_,      id);
+    eraseOwned(sounds_,               id);
+    eraseOwned(materialSounds_,       id);
 
     void* handle = it->handle;
     loaded_.erase(it);
@@ -245,6 +251,23 @@ void PluginManager::registerBuiltinHandlers() {
     // VoxExporter directly instead.
     importers_.push_back({"vox", nullptr, nullptr, kBuiltinOwnerId, true});
     exporters_.push_back({"vox", nullptr, nullptr, kBuiltinOwnerId, true});
+}
+
+const RegisteredSound* PluginManager::findSound(const std::string& sound_id) const {
+    const RegisteredSound* found = nullptr;
+    for (const auto& s : sounds_)
+        if (s.sound_id == sound_id)
+            found = &s;  // last registration wins
+    return found;
+}
+
+const RegisteredMaterialSound* PluginManager::findMaterialSound(AudioEvent event,
+                                                                  uint8_t palette_index) const {
+    const RegisteredMaterialSound* found = nullptr;
+    for (const auto& m : materialSounds_)
+        if (m.event == event && m.palette_index == palette_index)
+            found = &m;  // last registration wins
+    return found;
 }
 
 PluginContext PluginManager::buildContext() {

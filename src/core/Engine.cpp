@@ -1,6 +1,7 @@
 #include "Engine.h"
 #include "Logger.h"
 #include "PluginManager.h"
+#include "audio/AudioManager.h"
 #include "io/VoxImporter.h"
 #include "io/VoxExporter.h"
 #include "world/Layer.h"
@@ -130,6 +131,10 @@ void Engine::update(double dt)
     // Network update runs after world update and before render (ARCHITECTURE §15).
     if (nm_ && nm_->isActive()) {
         nm_->update(dt);
+    }
+    // Audio update: re-project emitter positions to camera-local float (§16).
+    if (am_) {
+        am_->update();
     }
 }
 

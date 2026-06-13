@@ -9,7 +9,8 @@
 
 class PluginManager;
 class World;
-namespace net { class NetworkManager; }
+namespace net   { class NetworkManager; }
+namespace audio { class AudioManager;   }
 
 class Engine {
 public:
@@ -54,12 +55,18 @@ public:
     void                  setNetworkManager(net::NetworkManager* nm) { nm_ = nm; }
     net::NetworkManager*  networkManager() const { return nm_; }
 
+    // Attach an AudioManager to receive per-tick updates. Null (the default)
+    // disables audio; existing demos and tests are unaffected (ARCHITECTURE §16).
+    void                   setAudioManager(audio::AudioManager* am) { am_ = am; }
+    audio::AudioManager*   audioManager() const { return am_; }
+
 private:
     void gameLoop();
 
-    PluginManager*       pm_    = nullptr;
-    World*               world_ = nullptr;
-    net::NetworkManager* nm_    = nullptr;
+    PluginManager*        pm_    = nullptr;
+    World*                world_ = nullptr;
+    net::NetworkManager*  nm_    = nullptr;
+    audio::AudioManager*  am_    = nullptr;
 
     std::atomic<bool>  isRunning      = false;
     std::thread        gameLoopThread;

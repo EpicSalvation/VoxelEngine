@@ -99,6 +99,30 @@ struct RegisteredInterestFilter {
     PluginId         owner;
 };
 
+// ---------------------------------------------------------------------------
+// Audio registries (M12, ARCHITECTURE §16)
+// ---------------------------------------------------------------------------
+
+// A named audio asset: sound file plus its default SoundParams.
+// Keyed by sound_id; torn down on plugin unload via the standard eraseOwned path.
+struct RegisteredSound {
+    std::string sound_id;
+    std::string path;
+    SoundParams params;
+    PluginId    owner;
+};
+
+// A binding from (AudioEvent, palette_index) to a registered sound_id.
+// register_material_sound resolves material_id → palette_index at registration
+// so AudioManager's lookup is keyed by the index the voxel carries (§16).
+struct RegisteredMaterialSound {
+    std::string material_id;    // retained for validation / error messages
+    uint8_t     palette_index = 0;
+    AudioEvent  event         = AudioEvent::Break;
+    std::string sound_id;
+    PluginId    owner;
+};
+
 struct RegisteredStructuralEventHook {
     OnStructuralEventFn fn;
     void*               user_data;
@@ -198,6 +222,8 @@ public:
     const std::vector<RegisteredNetworkMessageHook>&  networkMessageHooks()  const { return networkMessageHooks_; }
     const std::vector<RegisteredAuthorityPolicy>&     authorityPolicies()    const { return authorityPolicies_; }
     const std::vector<RegisteredInterestFilter>&      interestFilters()      const { return interestFilters_; }
+    const std::vector<RegisteredSound>&               sounds()               const { return sounds_; }
+    const std::vector<RegisteredMaterialSound>&       materialSounds()       const { return materialSounds_; }
 
     // Keyed material-property lookup. These centralize the registry search that
     // importers, the build menu, and other tooling previously hand-rolled. They
@@ -234,6 +260,12 @@ public:
     // entry carries both fn and user_data for the eventual NoiseFn call.
     const RegisteredNoise* resolveNoise(const std::string& noise_id) const;
 
+    // Audio lookups (M12). Last registration of an id wins, consistent with the
+    // other registry lookup conventions. Both return nullptr when not found.
+    const RegisteredSound*         findSound(const std::string& sound_id) const;
+    const RegisteredMaterialSound* findMaterialSound(AudioEvent event,
+                                                      uint8_t palette_index) const;
+
 private:
     PluginContext buildContext();
 
@@ -254,6 +286,8 @@ private:
     std::vector<RegisteredNetworkMessageHook>  networkMessageHooks_;
     std::vector<RegisteredAuthorityPolicy>     authorityPolicies_;
     std::vector<RegisteredInterestFilter>      interestFilters_;
+    std::vector<RegisteredSound>               sounds_;
+    std::vector<RegisteredMaterialSound>       materialSounds_;
 
     // A plugin that has been loaded and whose registrations are live.
     struct LoadedPlugin {

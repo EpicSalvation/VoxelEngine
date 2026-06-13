@@ -276,6 +276,47 @@ using ExporterFn = int(*)(
 );
 
 // ---------------------------------------------------------------------------
+// Audio types (M12, docs/ARCHITECTURE.md §16)
+//
+// POD types that cross the plugin ABI for sound registration and playback.
+// No std:: type and no miniaudio type appears here — the same rule as the
+// networking types above. SoundParams/EmitterParams are the engine's own
+// override knobs surfaced through IAudioBackend, never leaking miniaudio directly.
+// ---------------------------------------------------------------------------
+enum class AudioEvent : uint8_t {
+    Footstep,
+    Break,
+    Place,
+    // Collapse / Flow reserved for M13/M14
+};
+
+enum class AttenuationModel : uint8_t {
+    Inverse,      // default — inverse-distance falloff
+    Linear,
+    Exponential,
+    None,         // no distance attenuation
+};
+
+struct SoundParams {
+    float          volume       = 1.0f;
+    AttenuationModel attenuation = AttenuationModel::Inverse;
+    float          min_distance = 1.0f;
+    float          max_distance = 100.0f;
+    float          rolloff      = 1.0f;
+    float          doppler      = 0.0f;  // 0 = Doppler off (the default)
+};
+
+struct EmitterParams {
+    SoundParams sound;
+    bool        loop = true;
+};
+
+// Opaque handle for a persistent positioned emitter. kInvalidEmitterId (0)
+// denotes a missing or failed emitter; same sentinel convention as kInvalidPeer.
+using AudioEmitterId = uint32_t;
+static constexpr AudioEmitterId kInvalidEmitterId = 0;
+
+// ---------------------------------------------------------------------------
 // Composition recipe (M9, docs/ARCHITECTURE.md §6)
 //
 // A flat, POD description a plugin passes to register_recipe for a composite
