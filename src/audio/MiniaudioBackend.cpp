@@ -151,6 +151,11 @@ bool MiniaudioBackend::isReady() const {
     return impl_->ready;
 }
 
+size_t MiniaudioBackend::activeVoiceCount() const {
+    // Live one-shots (not yet pruned by update()) plus persistent emitters.
+    return impl_->oneShots.size() + impl_->emitters.size();
+}
+
 bool MiniaudioBackend::loadSound(const std::string& sound_id,
                                   const std::string& path,
                                   const SoundParams& params) {

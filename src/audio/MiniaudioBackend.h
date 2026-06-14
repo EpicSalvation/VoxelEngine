@@ -41,6 +41,8 @@ public:
 
     bool isReady() const override;
 
+    size_t activeVoiceCount() const override;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

@@ -84,3 +84,6 @@ Testing/
 
 # ─── Demo save-game output (04-build-break-persist writes here) ──────
 voxelsave/
+
+# ─── Demo runtime-generated assets (12-soundscape synthesises this) ──
+ambient_bed.wav

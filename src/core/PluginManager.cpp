@@ -68,13 +68,17 @@ PluginId PluginManager::loadPlugin(const std::string& path) {
     }
 
     const PluginId id = nextPluginId_++;
-    PluginContext ctx = buildContext();
+    // Store the context in a stable location: the plugin may retain &ctx and call
+    // its function pointers long after init returns (see pluginContexts_ in the
+    // header). A stack-local ctx would dangle once loadPlugin returns.
+    PluginContext& ctx = pluginContexts_.emplace_back(buildContext());
     currentOwner_ = id;
     int result = init(&ctx);
     currentOwner_ = kInvalidPluginId;
     if (result != 0) {
         std::cerr << "[PluginManager] Plugin init failed for " << path
                   << " (returned " << result << ")\n";
+        pluginContexts_.pop_back();  // init failed: drop the just-added context
         // init may have registered some callbacks before failing; remove them
         // before closing the library so none dangle.
         eraseOwned(layerGenerators_,    id);
@@ -128,12 +132,14 @@ void PluginManager::loadPluginsFromDirectory(const std::string& dirPath) {
 
 PluginId PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
     const PluginId id = nextPluginId_++;
-    PluginContext ctx = buildContext();
+    // Stable context store — see the loadPlugin equivalent and pluginContexts_.
+    PluginContext& ctx = pluginContexts_.emplace_back(buildContext());
     currentOwner_ = id;
     int result = initFn(&ctx);
     currentOwner_ = kInvalidPluginId;
     if (result != 0) {
         std::cerr << "[PluginManager] Wired-in plugin init returned " << result << "\n";
+        pluginContexts_.pop_back();  // init failed: drop the just-added context
         eraseOwned(layerGenerators_,    id);
         eraseOwned(featureGenerators_,  id);
         eraseOwned(materials_,          id);

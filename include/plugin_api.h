@@ -377,6 +377,12 @@ struct RecipeDesc {
 // The engine constructs one PluginContext and passes it to each plugin's init
 // function. Plugins call the register_* function pointers to register callbacks.
 // engine_data is an opaque engine pointer; plugins must not read or write it.
+//
+// Lifetime: the engine keeps each plugin's PluginContext alive for as long as the
+// plugin is loaded, so a plugin MAY retain the ctx pointer and invoke its function
+// pointers from its own callbacks after init returns (e.g. calling play_sound /
+// play_material_sound / send_network_message from an on_voxel_modified or
+// on_network_message handler). The pointer is stable until the plugin is unloaded.
 // ---------------------------------------------------------------------------
 struct PluginContext {
     void* engine_data;  // opaque; used internally by the engine

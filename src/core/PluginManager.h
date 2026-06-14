@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 #include "plugin_api.h"
@@ -307,6 +308,15 @@ private:
         void*    handle;  // platform dynamic-library handle; nullptr for wired-in plugins
     };
     std::vector<LoadedPlugin> loaded_;
+
+    // Each plugin's PluginContext must outlive its init() call: plugins retain the
+    // ctx pointer to invoke the playback / send_network_message / play_* function
+    // pointers from their own callbacks long after init returns (e.g. material-audio
+    // and the M11 chat plugin store it as g_ctx). A std::deque never invalidates the
+    // addresses of existing elements on push_back, so a retained pointer stays valid
+    // for the PluginManager's lifetime. (A stack-local or std::vector context would
+    // dangle — passing &local to init and using it later is undefined behavior.)
+    std::deque<PluginContext> pluginContexts_;
 
     PluginId nextPluginId_ = 1;          // 0 is reserved for kInvalidPluginId
     PluginId currentOwner_ = kInvalidPluginId;  // set around a plugin's init() call

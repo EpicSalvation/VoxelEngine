@@ -115,4 +115,8 @@ void AudioManager::update() {
     backend_->update();
 }
 
+size_t AudioManager::activeVoiceCount() const {
+    return backend_ ? backend_->activeVoiceCount() : 0;
+}
+
 } // namespace audio

@@ -128,6 +128,22 @@ int initLoopSound(PluginContext* ctx) {
     return 0;
 }
 
+// Retained-context plugin: stashes the PluginContext pointer and calls one of its
+// function pointers from a callback that fires LONG AFTER init returns — exactly
+// how the material-audio and M11 chat plugins keep g_ctx to drive playback /
+// networking from their hooks. The engine must keep the context alive for this to
+// be valid (regression guard for the stack-local PluginContext bug).
+PluginContext* g_retainedCtx = nullptr;
+void retainedCtxHook(WorldCoord pos, const Voxel*, const Voxel*, PlayerId, void*) {
+    if (g_retainedCtx) g_retainedCtx->play_sound(g_retainedCtx, "snd", pos, nullptr);
+}
+int initRetainCtx(PluginContext* ctx) {
+    g_retainedCtx = ctx;                                  // retain, like a real plugin
+    ctx->register_sound(ctx, "snd", "", SoundParams{});
+    ctx->register_on_voxel_modified(ctx, retainedCtxHook, nullptr);
+    return 0;
+}
+
 } // namespace
 
 // ==========================================================================
@@ -261,6 +277,31 @@ TEST(AudioManagerFake, DistanceCullAllowsWithinMaxDist) {
     am.setListener(WorldCoord(0.0, 0.0, 0.0), {0,0,-1}, {0,1,0});
     am.playSound("snd_near", WorldCoord(0.0, 0.0, 5.0));  // 5 m < 10 m
     EXPECT_TRUE(fake.hadCall("playOneShot", "snd_near"));
+}
+
+// Regression test for the PluginContext lifetime bug: a plugin that retains the
+// ctx pointer (g_ctx) and calls a ctx function pointer from a callback fired after
+// init returned must not dereference freed memory. Before the fix the engine
+// passed &ctx where ctx was a stack local in loadPlugin/wireInPlugin, so the
+// retained pointer dangled the moment init returned — UB that crashed the M12
+// soundscape demo on break/place. Here a lot of work happens between init and the
+// hook firing (backend + manager construction), so a dangling ctx would crash or
+// route through garbage; with the fix the call lands cleanly on the backend.
+TEST(PluginContextLifetime, RetainedContextSurvivesAfterInit) {
+    PluginManager pm;
+    pm.wireInPlugin(initRetainCtx);
+
+    RecordingBackend fake;
+    audio::AudioManager am(&fake, pm);
+    pm.setAudioManager(&am);
+
+    // Fire the retained-ctx hook well after init returned.
+    for (const auto& h : pm.voxelModifiedHooks())
+        if (h.fn) h.fn(WorldCoord(0.0, 0.0, 0.0), nullptr, nullptr, kLocalPlayer, h.user_data);
+
+    EXPECT_TRUE(fake.hadCall("playOneShot", "snd"));
+    pm.setAudioManager(nullptr);
+    g_retainedCtx = nullptr;
 }
 
 TEST(AudioManagerFake, CreateAndStopEmitter) {

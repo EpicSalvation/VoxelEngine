@@ -343,6 +343,20 @@ cmake --build build
 # Multi-config:    ./build/Debug/11-shared-world.exe --host
 #                  ./build/Debug/11-shared-world.exe --join localhost
 
+# Run the soundscape (M12): walk (G) and build through the material strata while
+# footsteps, breaking, and placing voxels play material-appropriate POSITIONAL
+# sounds (chosen from the targeted voxel's palette_index), over a looping ambient
+# bed that pans as you move. The material-audio plugin supplies break/place audio
+# off on_voxel_modified; the demo fires footsteps from the ground material and
+# pushes the listener from the camera each frame. The HUD shows the active voice
+# count and the last sound's event/material. The material-audio plugin resolves
+# its sound files under assets/audio/ relative to the working directory; if that
+# folder isn't in the cwd the demo falls back to the source-tree root, so it plays
+# correctly whether launched from the repo root or the build directory. The
+# ambient bed is synthesised to ambient_bed.wav in that directory on first run.
+# Single-config:   ./build/12-soundscape
+# Multi-config:    ./build/Debug/12-soundscape.exe
+
 # Run the test suite
 ctest --test-dir build
 ```
@@ -400,6 +414,17 @@ in another; the HUD shows the connected player count, per-peer round-trip time,
 the inbound packet rate, the interest mode with its suppressed-edit count, the
 shared world seed, and the source of the last replicated edit. Remote players
 render as colored marker cubes at their last replicated position.
+
+Controls for `12-soundscape`: **WASD** move, **mouse** look, **G** toggles
+walk/fly, **Space/Shift** up/down (fly) or jump (walk), **left mouse** breaks the
+targeted voxel (the indestructible bedrock floor never clears), **right mouse**
+places the selected material, **1**–**6** select material, **F** toggles the mouse
+cursor, **ESC** quits. Switch to walk mode (**G**) and move to hear
+material-appropriate footsteps from the voxel under your feet; break and place
+blocks to hear their material's positional break/place sounds (supplied by the
+`material-audio` plugin off `on_voxel_modified`); move around to hear the ambient
+bed pan. The HUD's top line reads out the active voice count and the last sound's
+event/material.
 
 ---
 
@@ -838,7 +863,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 *Demo*
 - [x] **Demo — Shared world:** `11-shared-world` — a two-player session on localhost that exercises every M11 system. Launch the host with `./11-shared-world --host` and the client with `./11-shared-world --join localhost`; both load the `server-authority` plugin so the host runs the authority in-process (host-as-authority P2P mode). The world is a composite-over-terminal layer stack seeded identically on both sides from the shared seed received during the join handshake. *Edit replication:* walk and left/right-click to break/place voxels — edits appear on both screens within one round-trip; the HUD prints the `source` field of each incoming `on_voxel_modified` event (`local` or the remote peer's id) so the replication path is visible. *Decomposition:* fly toward a composite block — each client triggers decomposition independently on approach and receives the identical child grid from the shared seed; no decomposition data crosses the wire, confirmed by a HUD packet-rate counter that does not spike on decompose. *Chat:* press **T** to open the chat input line, type a message, **Enter** to send via the `engine.chat` channel (Reliable + Broadcast); the message appears in the other window's HUD overlay within one round-trip; **Escape** dismisses the input without sending. *Interest management:* press **I** to cycle through the three modes — broadcast-all (default, HUD shows all edits received), mirrored-streaming-radius (HUD shows suppressed-edit count for out-of-radius peers), and plugin-filter (a demo filter plugin suppresses edits from any peer more than a fixed distance away, HUD shows the filter name). *Player presence:* each peer is represented as a colored marker cube at their `WorldCoord` position, updated via the `engine.player_position` unreliable channel; the HUD shows connected player count and per-peer round-trip time. Controls: **WASD** move, **mouse** look, **Space/Shift** fly up/down, **G** toggle walk/fly, **left/right mouse** break/place, **1–9** select material, **T** open chat, **I** cycle interest mode, **F** toggle mouse cursor, **ESC** quit. Run lines and a note on firewall/port requirements added to the Setup section *(implementation notes: the world is the layered-world composite-over-terminal stack from `05-decompose-on-approach`; every break/place routes through `NetworkManager::applyEdit` — the demo never calls `World::setVoxel` directly, so the choke-point invariant holds; the host persists dirty terrain chunks to `shared-world-save/` and serves them in the join handshake; already-resident terrain chunks win over freshly decomposed ones when integration completes, so handshake-received and live-replicated edits survive local decomposition)*
 
-**M12 — Audio**
+**M12 — Audio** ✅
 - [x] Design task — decisions pinned (recorded in ARCHITECTURE §16; new `src/audio/` tier and `plugin_api.h` additions, no existing hook changed): (a) **backend** — miniaudio (public-domain/MIT-0, single-header `FetchContent`) behind an `IAudioBackend` adapter, exactly as ENet sits behind `ITransport`; only `MiniaudioBackend` includes miniaudio, no audio type crosses `include/`; audio runs on the backend's own thread and is explicitly **outside** the determinism contract (§4); (b) **material→sound home** — sound lives in a `palette_index`-keyed side table mirroring the color palette (§9), **never** on `MaterialProperties`/`Voxel` (the POD stays unchanged; the freeze is not the reason — sound is presentation like color, and the registry tears down cleanly on unload); registration names materials by id for ergonomics but resolves to `palette_index`; (c) **positional model** — sources in `WorldCoord`, listener pinned at the local origin with emitters fed `toLocalFloat(camera)` per the floating-origin rule (world-absolute floats are never submitted to the audio engine), listener pushed from the front-end via `AudioManager` (not a plugin hook), default inverse-distance attenuation with per-sound max-distance/rolloff and Doppler off — but the backend's other models/knobs stay available as optional per-sound/per-project overrides surfaced through our own `AttenuationModel`/`SoundParams` POD types; (d) **plugin-API surface** — engine ships **primitives only** (`register_sound`, `register_material_sound`, and `PluginContext` `play_sound`/`play_material_sound`/`create_emitter`/`set_emitter_position`/`stop_emitter` functions plus `AudioEvent`/`AttenuationModel`/`SoundParams` PODs); default behavior is a **removable `material-audio` plugin** that triggers off the existing `on_voxel_modified` hook (the M11 chat-plugin pattern), so **M12 adds no new event hook** — audio rides existing engine events
 *Audio backend and the output tier — `src/audio/`*
 - [x] Add `src/audio/` as a new source tier (`CMakeLists.txt` auto-discovers it like `src/net/`, `src/world/`, etc.); fetch **miniaudio** via `FetchContent` (pinned tag, single-header, public-domain/MIT-0) and add it as a `PRIVATE` dependency of `voxel-engine` — miniaudio types must not appear in any public header (`include/`), the same `PRIVATE` rule as bgfx/ENet (ARCHITECTURE §12/§16)
@@ -872,7 +897,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] Determinism boundary check: audio registration/playback introduces no `rand()`/`time()`/unordered-iteration into any deterministic path — `AudioManager::update` reads world-derived inputs but writes only to the backend, never back into `World`/decomposition/persistence (audio is outside the §4 determinism contract and must stay a pure sink)
 
 *Demo*
-- [ ] **Demo — Soundscape:** `12-soundscape` — walk and build through a small material-varied world where footsteps, breaking, and placing voxels play **material-appropriate positional sounds** selected from the targeted voxel's `palette_index`, over an **ambient bed** (one or more `create_emitter` looping sources) that **pans correctly as the listener moves**. The `material-audio` plugin supplies break/place audio off `on_voxel_modified`; the demo's kinematic path fires footsteps from the ground material; the listener is pushed each frame from the camera. A HUD line shows the active voice count and the last sound's material/event so the spatial+material path is visible. Controls (**WASD**/mouse/**G**/**Space**-**Shift**/**left-right mouse**/**1**–**9**/**F**/**ESC**) and run lines added to the Setup section when the demo lands
+- [x] **Demo — Soundscape:** `12-soundscape` — walk and build through a small material-varied world where footsteps, breaking, and placing voxels play **material-appropriate positional sounds** selected from the targeted voxel's `palette_index`, over an **ambient bed** (a `create_emitter` looping source) that **pans correctly as the listener moves**. The `material-audio` plugin supplies break/place audio off `on_voxel_modified`; the demo's kinematic path fires footsteps from the ground material; the listener is pushed each frame from the camera. A HUD line shows the active voice count and the last sound's material/event so the spatial+material path is visible. Run/controls in the demo header and the Setup section
 
 **M13 — Physics and Upward Damage Propagation**
 - [ ] Design task: propagation algorithm, performance budget, immutable boundary behavior

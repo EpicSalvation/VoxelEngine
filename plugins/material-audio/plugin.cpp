@@ -89,13 +89,13 @@ struct MaterialAudio {
 // Paths are relative to the working directory (assets/audio/).
 // iron reuses stone sounds; bedrock is indestructible so no block sound.
 static const MaterialAudio kMaterials[] = {
-    { "grass",   "assets/audio/grass_break_place.ogg",  "assets/audio/footstep_grass.ogg"  },
-    { "dirt",    "assets/audio/dirt_break_place.ogg",   "assets/audio/footstep_dirt.ogg"   },
-    { "stone",   "assets/audio/stone_break_place.ogg",  "assets/audio/footstep_stone.ogg"  },
-    { "iron",    "assets/audio/stone_break_place.ogg",  "assets/audio/footstep_stone.ogg"  },
-    { "diamond", "assets/audio/crystal_break_place.ogg", nullptr                            },
-    { "bedrock", nullptr,                                "assets/audio/footstep_stone.ogg"  },
-    { "water",   "assets/audio/water_break_place.wav",  "assets/audio/footstep_water.wav"  },
+    { "grass",   "assets/audio/grass_break_place.wav",   "assets/audio/footstep_grass.wav"  },
+    { "dirt",    "assets/audio/dirt_break_place.wav",    "assets/audio/footstep_dirt.wav"   },
+    { "stone",   "assets/audio/stone_break_place.wav",   "assets/audio/footstep_stone.wav"  },
+    { "iron",    "assets/audio/stone_break_place.wav",   "assets/audio/footstep_stone.wav"  },
+    { "diamond", "assets/audio/crystal_break_place.wav", nullptr                            },
+    { "bedrock", nullptr,                                 "assets/audio/footstep_stone.wav"  },
+    { "water",   "assets/audio/water_break_place.wav",   "assets/audio/footstep_water.wav"  },
 };
 
 void register_sounds(PluginContext* ctx) {

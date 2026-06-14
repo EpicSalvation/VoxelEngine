@@ -54,6 +54,10 @@ public:
     // let backend prune finished one-shots.
     void update();
 
+    // Voices currently playing in the backend (one-shots + emitters). Read-only;
+    // for front-end HUDs/profilers. 0 when no backend is attached.
+    size_t activeVoiceCount() const;
+
 private:
     glm::vec3 toLocal(const WorldCoord& pos) const;
 

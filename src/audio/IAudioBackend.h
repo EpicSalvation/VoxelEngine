@@ -6,6 +6,7 @@
 
 #include "plugin_api.h"
 #include <glm/glm.hpp>
+#include <cstddef>
 #include <string>
 
 namespace audio {
@@ -54,6 +55,12 @@ public:
 
     // True when the backend initialized successfully.
     virtual bool isReady() const = 0;
+
+    // Number of voices currently playing (live one-shots + active emitters).
+    // Optional read-only introspection for HUDs/profilers — not part of the
+    // playback contract, so it ships with a default for backends and test
+    // doubles that do not track it.
+    virtual size_t activeVoiceCount() const { return 0; }
 };
 
 } // namespace audio

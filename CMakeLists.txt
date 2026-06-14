@@ -388,6 +388,11 @@ foreach(_demo ${_voxel_demo_dirs})
       target_compile_definitions(${_demo} PRIVATE
         DEMO_ASSET_DIR="${_demo_assets}")
     endif()
+    # Inject the repo root (which holds the top-level assets/ directory) so a demo
+    # can fall back to it when launched from a directory that lacks assets/ — e.g.
+    # 12-soundscape, whose material-audio plugin resolves sounds relative to cwd.
+    target_compile_definitions(${_demo} PRIVATE
+      VOXEL_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
   endif()
 endforeach()
 
