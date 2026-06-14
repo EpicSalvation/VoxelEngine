@@ -75,48 +75,27 @@ void on_voxel_modified(WorldCoord         pos,
 // the play-time lookup is keyed by the index the voxel itself carries, not
 // a string (ARCHITECTURE §16 "Sound Data Lives Beside the Palette").
 //
-// To add audio for a new material: add a row below and drop the WAV into
-// assets/sounds/ — no engine change required.
+// To add audio for a new material: add a row below and drop the file into
+// assets/audio/ — no engine change required.
 // ---------------------------------------------------------------------------
 
 struct MaterialAudio {
     const char* material_id;
-    const char* break_wav;
-    const char* place_wav;
-    const char* footstep_wav;  // nullptr → no footstep binding for this material
+    const char* block_file;     // used for both Break and Place (one file per material)
+    const char* footstep_file;  // nullptr → no footstep binding for this material
 };
 
 // Material strata from material-showcase plus water (M11 hazards).
-// Paths are relative to the working directory.
+// Paths are relative to the working directory (assets/audio/).
+// iron reuses stone sounds; bedrock is indestructible so no block sound.
 static const MaterialAudio kMaterials[] = {
-    { "grass",
-        "assets/sounds/grass_break.wav",
-        "assets/sounds/grass_place.wav",
-        "assets/sounds/grass_footstep.wav"   },
-    { "dirt",
-        "assets/sounds/dirt_break.wav",
-        "assets/sounds/dirt_place.wav",
-        "assets/sounds/dirt_footstep.wav"    },
-    { "stone",
-        "assets/sounds/stone_break.wav",
-        "assets/sounds/stone_place.wav",
-        "assets/sounds/stone_footstep.wav"   },
-    { "iron",
-        "assets/sounds/stone_break.wav",    // reuses stone break — same WAV, unique id
-        "assets/sounds/stone_place.wav",
-        "assets/sounds/stone_footstep.wav"  },
-    { "diamond",
-        "assets/sounds/crystal_break.wav",
-        "assets/sounds/crystal_place.wav",
-        nullptr                              },  // no footstep (not walkable in strata demo)
-    { "bedrock",
-        nullptr,                             // indestructible — Break never fires in practice
-        nullptr,                             // never placed by the player either
-        "assets/sounds/stone_footstep.wav"  },
-    { "water",
-        "assets/sounds/water_break.wav",
-        "assets/sounds/water_place.wav",
-        "assets/sounds/water_footstep.wav"  },
+    { "grass",   "assets/audio/grass_break_place.ogg",  "assets/audio/footstep_grass.ogg"  },
+    { "dirt",    "assets/audio/dirt_break_place.ogg",   "assets/audio/footstep_dirt.ogg"   },
+    { "stone",   "assets/audio/stone_break_place.ogg",  "assets/audio/footstep_stone.ogg"  },
+    { "iron",    "assets/audio/stone_break_place.ogg",  "assets/audio/footstep_stone.ogg"  },
+    { "diamond", "assets/audio/crystal_break_place.ogg", nullptr                            },
+    { "bedrock", nullptr,                                "assets/audio/footstep_stone.ogg"  },
+    { "water",   "assets/audio/water_break_place.wav",  "assets/audio/footstep_water.wav"  },
 };
 
 void register_sounds(PluginContext* ctx) {
@@ -134,27 +113,19 @@ void register_sounds(PluginContext* ctx) {
     footParams.max_distance = 8.0f;
 
     for (const auto& m : kMaterials) {
-        // Sound ids: "<material>_break", "<material>_place", "<material>_footstep".
-        // Each material gets its own id even when two materials share a WAV path —
-        // so per-material volume/distance overrides remain independent.
-        std::string breakId    = std::string(m.material_id) + "_break";
-        std::string placeId    = std::string(m.material_id) + "_place";
+        // Sound ids: "<material>_block" (shared by Break and Place since we have
+        // one file per material), "<material>_footstep".
+        std::string blockId    = std::string(m.material_id) + "_block";
         std::string footstepId = std::string(m.material_id) + "_footstep";
 
-        if (m.break_wav) {
-            ctx->register_sound(ctx, breakId.c_str(), m.break_wav, blockParams);
-            ctx->register_material_sound(ctx, m.material_id, AudioEvent::Break,
-                                          breakId.c_str());
+        if (m.block_file) {
+            ctx->register_sound(ctx, blockId.c_str(), m.block_file, blockParams);
+            ctx->register_material_sound(ctx, m.material_id, AudioEvent::Break, blockId.c_str());
+            ctx->register_material_sound(ctx, m.material_id, AudioEvent::Place, blockId.c_str());
         }
 
-        if (m.place_wav) {
-            ctx->register_sound(ctx, placeId.c_str(), m.place_wav, blockParams);
-            ctx->register_material_sound(ctx, m.material_id, AudioEvent::Place,
-                                          placeId.c_str());
-        }
-
-        if (m.footstep_wav) {
-            ctx->register_sound(ctx, footstepId.c_str(), m.footstep_wav, footParams);
+        if (m.footstep_file) {
+            ctx->register_sound(ctx, footstepId.c_str(), m.footstep_file, footParams);
             ctx->register_material_sound(ctx, m.material_id, AudioEvent::Footstep,
                                           footstepId.c_str());
         }
