@@ -34,13 +34,12 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Cache build directory
-        uses: actions/cache@v4
-        with:
-          path: build
-          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-cmake-
+      # NOTE: we deliberately do NOT cache the configured `build/` tree. The MSVC
+      # multi-config generator bakes an absolute VS instance path
+      # (CMAKE_GENERATOR_INSTANCE) into build/CMakeCache.txt; when GitHub rolls the
+      # windows-latest image and the VS edition/path changes, a restored cache makes
+      # `project()` fail with "could not find specified instance of Visual Studio".
+      # Configuring fresh each run is a little slower but immune to that drift.
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
