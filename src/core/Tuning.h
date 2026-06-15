@@ -18,11 +18,33 @@
 //     invariant rather than a tuning choice (e.g. `sim::kIndestructible`, the
 //     256-entry palette size). Those stay with the model they belong to.
 //
-// Migration note: existing scattered knobs (the DecompositionManager::tick
-// default budgets, LODManager's streaming radii) should move here under
-// `tuning::decomposition` / `tuning::streaming` in a small dedicated pass,
-// kept separate from feature work.
 // ---------------------------------------------------------------------------
+
+namespace tuning::decomposition {
+
+// Default per-frame budgets for DecompositionManager::tick (M10). They cap how
+// much streaming/decomposition work a single tick may do, so a burst of newly
+// in-range macro voxels is spread across frames instead of hitching one. These
+// are the function's default arguments; a caller may still pass its own.
+//
+//   kDefaultLoadPerFrame   — max composite chunks loaded per tick
+//   kDefaultDecompPerFrame — max decomposition jobs enqueued per tick (nearest-first)
+//   kDefaultApplyPerFrame  — max completed jobs applied per tick (overflow stays queued)
+inline constexpr int kDefaultLoadPerFrame   = 4;
+inline constexpr int kDefaultDecompPerFrame = 64;
+inline constexpr int kDefaultApplyPerFrame  = 16;
+
+}  // namespace tuning::decomposition
+
+namespace tuning::streaming {
+
+// Hysteresis margin (chunks) added to a layer's load radius to get its eviction
+// radius. A chunk loads at the view distance but is not evicted until it passes
+// view distance + this margin, so a camera hovering on the boundary does not
+// thrash a chunk between resident and evicted (LODManager).
+inline constexpr int kHysteresisChunks = 2;
+
+}  // namespace tuning::streaming
 
 namespace tuning::physics {
 

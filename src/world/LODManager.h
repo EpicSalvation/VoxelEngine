@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "core/LayerConfig.h"
+#include "core/Tuning.h"
 #include "world/Chunk.h"
 
 // Per-layer chunk visibility and budget management.
@@ -53,7 +54,9 @@ public:
     bool shouldEvict(ChunkCoord center, ChunkCoord coord,
                      const std::string& layerName) const;
 
-    static constexpr int kHysteresisChunks = 2;
+    // The eviction hysteresis margin lives centrally in tuning::streaming; kept
+    // as a public alias so call sites and tests can reference LODManager::kHysteresisChunks.
+    static constexpr int kHysteresisChunks = tuning::streaming::kHysteresisChunks;
 
 private:
     const LayerDef* layer(const std::string& name) const;

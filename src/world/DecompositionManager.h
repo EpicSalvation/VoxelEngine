@@ -38,6 +38,7 @@
 #include "LODManager.h"
 #include "MacroVoxel.h"
 #include "Voxel.h"
+#include "core/Tuning.h"
 
 class Layer;
 class PluginManager;
@@ -106,9 +107,9 @@ public:
     //     and newlyAtomic (block voxel cleared / restored)
     std::vector<LayerTickDiff> tick(const WorldCoord& cameraPos,
                                     double approachRadiusM,
-                                    int loadPerFrame   = 4,
-                                    int decompPerFrame = 64,
-                                    int applyPerFrame  = 16);
+                                    int loadPerFrame   = tuning::decomposition::kDefaultLoadPerFrame,
+                                    int decompPerFrame = tuning::decomposition::kDefaultDecompPerFrame,
+                                    int applyPerFrame  = tuning::decomposition::kDefaultApplyPerFrame);
 
     // Restrict ROOT-layer streaming to a vertical band of root-layer chunk-Y
     // indices (forwarded to LODManager::setVerticalBand). Only the root composite
