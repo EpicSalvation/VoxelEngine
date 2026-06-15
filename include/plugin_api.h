@@ -207,6 +207,10 @@ struct StructuralEvent {
     double      voxel_size_m = 0.0;  // edge length of this macro in meters (its scale)
     float       aggregate_strength = 0.0f;  // post-edit volume-weighted structural_strength
     float       support_potential  = 0.0f;  // residual support potential; <= 0 ⇒ unstable
+    double      child_voxel_size_m = 0.0;  // edge length of the macro's terminal (editable)
+                                           // child voxels — lets a response plugin enumerate
+                                           // and clear/relocate the macro's child cells via
+                                           // apply_edit without reading back into the engine
 };
 
 // Called when PropagationSystem finds a composite macro voxel can no longer
@@ -625,6 +629,27 @@ struct PluginContext {
     void (*stop_emitter)(
         PluginContext*  ctx,
         AudioEmitterId  id
+    );
+
+    // -----------------------------------------------------------------------
+    // World edit (M13, docs/ARCHITECTURE.md §7/§8)
+    // -----------------------------------------------------------------------
+
+    // Apply a voxel edit through the engine's single edit choke point — the same
+    // path every player and replicated network edit takes (NetworkManager::
+    // applyEdit → World::setVoxel → on_voxel_modified). This is the *public edit
+    // path* a structural-response plugin uses to act on an on_structural_event:
+    // because the write returns through on_voxel_modified, the structural pass
+    // re-dirties the parent macro and the cascade feedback loop closes without any
+    // in-engine collapse routine (§7). pos is a WorldCoord at the terminal layer;
+    // voxel is copied (need not outlive the call) — pass an empty voxel to clear.
+    // Fail-soft: a no-op when no edit handler is installed (no NetworkManager
+    // attached), so a plugin that calls it in a non-networked host does nothing
+    // rather than crashing.
+    void (*apply_edit)(
+        PluginContext* ctx,
+        WorldCoord     pos,
+        const Voxel*   voxel
     );
 };
 

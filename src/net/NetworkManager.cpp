@@ -36,6 +36,16 @@ void NetworkManager::init(World& world, PluginManager& pm)
         },
         this);
 
+    // Wire plugin edits (ctx->apply_edit) through the single edit choke point so a
+    // structural-response plugin's writes take the same path as a player edit and
+    // return through on_voxel_modified — closing the M13 cascade feedback loop
+    // (ARCHITECTURE §7). Plugin edits are attributed to the local player.
+    pm.setEditHandler(
+        [](WorldCoord pos, const Voxel* v, void* user) {
+            if (v) static_cast<NetworkManager*>(user)->applyEdit(kLocalPlayer, pos, *v);
+        },
+        this);
+
     // Install the default ENet transport if no custom one was set.
     if (!transport_) {
         transport_ = std::make_unique<ENetTransport>();

@@ -199,6 +199,30 @@ public:
         netSendUser_ = user;
     }
 
+    // World-edit routing (M13). PluginManager stores the handler only; the actual
+    // write is performed by NetworkManager, which installs it during init so that
+    // a plugin's ctx.apply_edit reaches the single edit choke point
+    // (NetworkManager::applyEdit → World::setVoxel → on_voxel_modified). A null fn
+    // (the default) makes ctx.apply_edit a silent no-op — a host with no
+    // NetworkManager attached gets the engine-never-writes behaviour by default.
+    using EditApplyFn = void(*)(WorldCoord pos, const Voxel* voxel, void* user);
+    void setEditHandler(EditApplyFn fn, void* user) {
+        editApplyFn_   = fn;
+        editApplyUser_ = user;
+    }
+
+    // Register an engine-owned on_voxel_modified hook (owner kBuiltinOwnerId, so it
+    // is never torn down by a plugin unload). Used by the structural PhysicsSystem
+    // to observe edits at the choke point without coupling NetworkManager to the
+    // simulation tier — PropagationSystem rides the same on_voxel_modified path a
+    // plugin would (§7 detection contract, §13 dependency map).
+    void registerEngineVoxelModifiedHook(OnVoxelModifiedFn fn, void* user_data);
+
+    // Remove engine-owned on_voxel_modified hooks matching user_data (the inverse
+    // of registerEngineVoxelModifiedHook). Called by PhysicsSystem's destructor so
+    // a torn-down driver leaves no dangling callback behind it.
+    void unregisterEngineVoxelModifiedHook(void* user_data);
+
     // Audio playback routing (M12). AudioManager installs itself here after init
     // so PluginContext play_sound / create_emitter / etc. route to it. Null (the
     // default) makes plugin audio calls a silent no-op — existing demos without
@@ -323,5 +347,7 @@ private:
 
     NetworkSendFn        netSendFn_    = nullptr;  // installed by NetworkManager::init
     void*                netSendUser_  = nullptr;
+    EditApplyFn          editApplyFn_  = nullptr;  // installed by NetworkManager::init
+    void*                editApplyUser_= nullptr;
     audio::AudioManager* audioManager_ = nullptr;  // installed by AudioManager after init
 };

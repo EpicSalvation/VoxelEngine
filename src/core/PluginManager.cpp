@@ -503,5 +503,30 @@ PluginContext PluginManager::buildContext() {
         if (mgr->audioManager_) mgr->audioManager_->stopEmitter(id);
     };
 
+    ctx.apply_edit = [](PluginContext* c, WorldCoord pos, const Voxel* voxel) {
+        // Routed to the engine's single edit choke point by NetworkManager (M13);
+        // PluginManager stores the handler only. With no handler installed (no
+        // NetworkManager attached) the edit is a silent no-op — the structural
+        // response then writes nothing, which is the engine-never-writes default.
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (mgr->editApplyFn_ && voxel)
+            mgr->editApplyFn_(pos, voxel, mgr->editApplyUser_);
+    };
+
     return ctx;
+}
+
+void PluginManager::registerEngineVoxelModifiedHook(OnVoxelModifiedFn fn,
+                                                    void* user_data) {
+    if (fn) voxelModifiedHooks_.push_back({fn, user_data, kBuiltinOwnerId});
+}
+
+void PluginManager::unregisterEngineVoxelModifiedHook(void* user_data) {
+    voxelModifiedHooks_.erase(
+        std::remove_if(voxelModifiedHooks_.begin(), voxelModifiedHooks_.end(),
+                       [user_data](const RegisteredVoxelModifiedHook& h) {
+                           return h.owner == kBuiltinOwnerId &&
+                                  h.user_data == user_data;
+                       }),
+        voxelModifiedHooks_.end());
 }
