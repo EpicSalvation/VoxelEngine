@@ -382,6 +382,14 @@ foreach(_demo ${_voxel_demo_dirs})
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_MATERIAL_AUDIO_PLUGIN_PATH="$<TARGET_FILE:material-audio>")
     endif()
+    if(TARGET crumble)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_CRUMBLE_PLUGIN_PATH="$<TARGET_FILE:crumble>")
+    endif()
+    if(TARGET falling-debris)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_FALLING_DEBRIS_PLUGIN_PATH="$<TARGET_FILE:falling-debris>")
+    endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)
     if(EXISTS ${_demo_assets})
