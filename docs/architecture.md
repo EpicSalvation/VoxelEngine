@@ -274,25 +274,37 @@ This is what lets a 10km "mountain range" recipe constrain its constituent 1km "
 
 ## 7. Upward Damage Propagation
 
-**Files:** `src/simulation/PropagationSystem.cpp/.h`
+**Files:** `src/simulation/PropagationSystem.cpp/.h` (detection), `src/simulation/PhysicsSystem.cpp/.h` (per-frame driver + event firing), `src/core/Tuning.h` (`tuning::physics` knobs). Consumers arrive in M13; the design below is the M13 contract.
 
 ### Purpose
 
-When a player mines child voxels out of a composite voxel, the composite voxel's effective `density` and `structural_strength` decrease. If enough material is removed, the composite voxel itself can become structurally unsound at its own scale and collapse — potentially cascading to neighbors.
+When a player mines child voxels out of a composite voxel, the composite voxel's effective `density` and `structural_strength` decrease. If enough material is removed, the composite voxel can no longer hold itself up at its own scale and collapses — potentially cascading to neighbors and stopping where it meets immovable material.
 
-This emergent behavior requires no special-case logic beyond: after any child voxel modification, recompute the parent composite voxel's aggregate properties and check structural integrity.
+### Engine Detects, a Plugin Responds
 
-### Propagation Rules
+The split is deliberate and is the central design decision of M13: **the engine only detects instability and fires an event; it never moves or clears a voxel itself.** `PropagationSystem` decides *what is unstable*; the registered structural-response **plugin** decides *what to do about it* (crumble the voxels away, spawn falling debris, something game-specific). The response plugin is therefore **mandatory** for any collapse to be visible — and that is a feature, not a gap: a project that loads no structural plugin gets Minecraft-style behavior where mining never triggers a cave-in, which is a legitimate game design rather than a degenerate case.
 
-- Aggregate properties are computed as volume-weighted averages of child voxel material properties
-- If `structural_strength` falls below the threshold for the load the voxel is bearing, a collapse event fires
-- Collapse events are processed by the `PhysicsSystem`, which may trigger further modifications to neighboring voxels
-- Propagation walks upward through composite layers only
-- **Propagation stops at an immutable layer boundary** — immutable voxels have fixed properties and cannot be structurally compromised
+This makes the cascade a **feedback loop** rather than a recursive engine routine. The engine fires `on_structural_event` for each newly-unstable macro; the plugin responds by editing the world (`World::setVoxel`); those edits return through `on_voxel_modified`; the next end-of-frame pass re-evaluates and finds the next ring of newly-unstable macros; and so on until the structure is stable again. The engine stays entirely policy-free.
 
-### Performance Note
+### The Support Model
 
-Recomputing aggregate properties on every child modification is expensive at fine granularity. The system uses a dirty-aggregate pattern: child modification marks the parent aggregate as stale, and recomputation is deferred to end-of-frame. Do not trigger aggregate recomputation inline in the voxel modification path.
+Stability is evaluated at **macro-voxel (composite) granularity**, per the aggregation rule below — not per terminal voxel. The model is a **support-potential flood** (axis-free, so it does not bake in a "down" direction — generalized gravity is M15's concern, and M13 models *support reach*, not gravitational load):
+
+- An **anchor** emits support potential `kAnchorPotential` (normalized to 1.0). Anchors are (1) immutable-layer voxels, and (2) the boundary of the resident/decomposed region — **a non-resident neighbor is treated as solid support**. This "unknown ⇒ supported" rule is conservative on purpose: a macro whose support could come from outside the loaded region is never declared unstable, which stops the streaming edge from spuriously collapsing and means a world with no immutable layer simply never produces false cave-ins.
+- Potential floods outward through *solid* macro voxels (6-connected). Entering a macro of aggregate `structural_strength` `s` drains potential by `1 / maxSpan(s)`, where **`maxSpan(s) = clamp(s · kSupportSpanPerStrength, 0, kMaxSupportSpan)`** is the unsupported span, in macro-voxels, that material can bridge. Strength below `kMinSupportStrength` transmits no support at all (infinite cost).
+- A macro is **stable iff its residual potential stays > 0.** A macro that drops to `≤ 0` is unstable and fires a structural event.
+
+This yields the demo behaviors without special cases: strong material cantilevers farther than weak (the span formula); the weakest macro on a path drains potential fastest (weakest-link bridging falls out of the flood); removing a support lowers everything downstream of it (the cascade); and because immutable voxels are infinite-effective anchors, **propagation stops dead at an immutable layer boundary** — anything still touching bedrock is supported by definition.
+
+### Aggregation
+
+A decomposed macro's aggregate `structural_strength` is the **volume-weighted average of its resident child voxels' material properties**; an atomic (undecomposed) macro just uses its own block material. Aggregates are maintained **incrementally**: each `on_voxel_modified` updates the parent macro's running volume-weighted sum by the old→new delta, so a parent's aggregate is O(1) per child edit rather than an `R³` re-sum. A full recompute exists only as a bounded fallback (`kMaxAggregateRecomputesPerFrame`). Propagation walks **upward through composite layers only**.
+
+For M13 the cascade resolves at a **single composite level** (child edits → immediate parent → neighbor cascade at that level). Re-aggregating further ancestors up the chain (reusing the M10 cascade infrastructure) is deliberately deferred — **revisit in M16 (Polish and Release)**.
+
+### Performance
+
+Recomputing structure inline on the modification path is forbidden; the system uses a **dirty-aggregate pattern** and defers all evaluation to a single **end-of-frame** pass, bounded by the `tuning::physics` budgets: `kMaxAggregateRecomputesPerFrame`, `kMaxStructuralEventsPerFrame` (overflow carries to the next frame, spreading a chain reaction instead of stalling one), and `kMaxSupportFloodNodes` (caps the connectivity query; with `kMaxSupportSpan` the flooded region is naturally small). The flood visits macros in deterministic sorted-coord order — no unordered iteration — so the unstable set is byte-identical across runs.
 
 ---
 
@@ -334,6 +346,8 @@ void register_on_chunk_evicted(const char* layer_name, ChunkLifecycleFn fn);
 ```
 
 See `include/plugin_api.h` for full signatures and `src/plugins/ExamplePlugin` for a worked example.
+
+**Structural events (M13).** `register_on_structural_event` fires when `PropagationSystem` finds a composite macro voxel can no longer reach structural support (§7). M13 replaces the placeholder `OnStructuralEventFn(WorldCoord, float, void*)` with a flat-POD payload — `OnStructuralEventFn(const StructuralEvent*, void*)` — carrying the macro's world `position`, its `VoxelCoord` and layer name/scale, and its post-edit `aggregate_strength` and residual `support_potential`, following the §6 `RecipeDesc` flat-struct ABI rule (no `std::` type crosses the boundary). One event describes one macro; the engine only detects and reports, and the registered plugin owns the response (clearing voxels, spawning debris). With no structural-response plugin loaded, mining never triggers a collapse.
 
 ### Plugin Load Order
 
@@ -576,8 +590,10 @@ DecompositionWorker
     └── must NOT depend on: Renderer, PhysicsSystem, IO
 
 PropagationSystem
-    └── depends on: World (read voxel properties), PhysicsSystem (structural events)
-    └── stops at: immutable layer boundaries
+    └── depends on: World (read voxel properties + residency)
+    └── reports unstable macros to: PhysicsSystem
+    └── stops at: immutable layer boundaries and the unloaded-region boundary
+                  (conservative: an unknown/non-resident neighbor counts as support)
 
 Window (platform)
     └── depends on: GLFW
@@ -590,8 +606,10 @@ Renderer
     └── must NOT depend on: GLFW, PhysicsSystem, DecompositionWorker, IO
 
 PhysicsSystem
-    └── depends on: World (read/write voxel properties), PropagationSystem
-    └── must NOT depend on: Renderer, IO
+    └── depends on: World (read voxel properties), PropagationSystem,
+                    PluginManager (fire on_structural_event)
+    └── does NOT write voxels — the structural-response plugin does, via World::setVoxel
+    └── must NOT depend on: Renderer, IO, DecompositionWorker
 
 IO (VoxImporter/VoxExporter)
     └── depends on: World (write voxels), LayerConfig (layer assignment)
