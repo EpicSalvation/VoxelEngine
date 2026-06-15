@@ -186,11 +186,36 @@ using OnVoxelModifiedFn = void(*)(
     void*        user_data
 );
 
-// Called when structural integrity falls below the load threshold (collapse candidate).
+// Flat-POD payload for on_structural_event (M13, docs/ARCHITECTURE.md §7/§8).
+//
+// Describes a single composite macro voxel the engine has found can no longer
+// reach structural support. It carries everything a response plugin needs to
+// decide *what to do* — clear the voxels, spawn debris, relocate material —
+// without calling back into the engine for context.
+//
+// Same flat-struct ABI rule as RecipeDesc / MessageEnvelope: no std:: type
+// crosses the boundary. The macro's layer voxel index is carried as three plain
+// int64 fields rather than the engine-internal chunkmath::VoxelCoord type, which
+// is not part of the public ABI. Field order is APPEND-ONLY — new fields go at
+// the end so existing plugins keep their offsets.
+struct StructuralEvent {
+    WorldCoord  position;            // world-space center of the unstable macro
+    int64_t     voxel_x = 0;         // macro VoxelCoord (layer voxel index): x
+    int64_t     voxel_y = 0;         //                                       y
+    int64_t     voxel_z = 0;         //                                       z
+    const char* layer_name = nullptr;// composite layer the macro belongs to
+    double      voxel_size_m = 0.0;  // edge length of this macro in meters (its scale)
+    float       aggregate_strength = 0.0f;  // post-edit volume-weighted structural_strength
+    float       support_potential  = 0.0f;  // residual support potential; <= 0 ⇒ unstable
+};
+
+// Called when PropagationSystem finds a composite macro voxel can no longer
+// reach structural support (collapse candidate). The engine only detects and
+// reports; the registered plugin owns the response (§7). The pointer is valid
+// only for the duration of the call — the plugin must not retain it.
 using OnStructuralEventFn = void(*)(
-    WorldCoord  position,
-    float       structural_strength_remaining,
-    void*       user_data
+    const StructuralEvent* event,
+    void*                  user_data
 );
 
 // Called at the authority node before an edit is committed. The handler returns
