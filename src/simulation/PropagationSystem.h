@@ -4,7 +4,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "world/ChunkCoordMath.h"  // chunkmath::VoxelCoord, VoxelCoordHash
+#include "simulation/NeighborWalk.h"  // sim::VoxelCoordLess, the shared sorted-coord order
+#include "world/ChunkCoordMath.h"     // chunkmath::VoxelCoord, VoxelCoordHash
 #include "world/Voxel.h"
 
 class World;
@@ -52,17 +53,9 @@ class Layer;
 
 namespace sim {
 
-// Strict-weak ordering on VoxelCoord (lexicographic x,y,z). The dirty set, the
-// support flood, and the unstable result are all kept in this single order so
-// the detection output is byte-identical across runs (§4 determinism contract).
-struct VoxelCoordLess {
-    bool operator()(const chunkmath::VoxelCoord& a,
-                    const chunkmath::VoxelCoord& b) const {
-        if (a.x != b.x) return a.x < b.x;
-        if (a.y != b.y) return a.y < b.y;
-        return a.z < b.z;
-    }
-};
+// VoxelCoordLess (the dirty set / support flood / unstable result order) now
+// lives in NeighborWalk.h, shared with the M14 field passes (see the M14
+// cleanup task in docs/ARCHITECTURE.md §17).
 
 class PropagationSystem {
 public:

@@ -31,12 +31,10 @@ double enterCost(double strength) {
     return 1.0 / span;
 }
 
-// The 6 axis-neighbors of a macro voxel (axis-free: no privileged "down").
-std::array<VoxelCoord, 6> neighbors(VoxelCoord m) {
-    return {VoxelCoord{m.x - 1, m.y, m.z}, VoxelCoord{m.x + 1, m.y, m.z},
-            VoxelCoord{m.x, m.y - 1, m.z}, VoxelCoord{m.x, m.y + 1, m.z},
-            VoxelCoord{m.x, m.y, m.z - 1}, VoxelCoord{m.x, m.y, m.z + 1}};
-}
+// The 6 axis-neighbors of a macro voxel — the shared NeighborWalk.h walk,
+// reused at macro-voxel granularity here and at terminal-voxel granularity by
+// the M14 field passes.
+std::array<VoxelCoord, 6> neighbors(VoxelCoord m) { return neighbors6(m); }
 
 }  // namespace
 

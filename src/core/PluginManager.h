@@ -135,6 +135,42 @@ struct RegisteredStructuralEventHook {
     PluginId            owner;
 };
 
+// ---------------------------------------------------------------------------
+// Fluid / thermal registries (M14, ARCHITECTURE §17)
+// ---------------------------------------------------------------------------
+
+struct RegisteredFluidEventHook {
+    OnFluidEventFn fn;
+    void*          user_data;
+    PluginId       owner;
+};
+
+struct RegisteredThermalEventHook {
+    OnThermalEventFn fn;
+    void*            user_data;
+    PluginId         owner;
+};
+
+// A plugin-registered heat emitter. The engine (ThermalSystem) injects `rate`
+// into the thermal overlay at `pos` every tick. Torn down on owner unload.
+struct RegisteredHeatSource {
+    WorldCoord pos;
+    float      rate = 0.0f;
+    PluginId   owner;
+};
+
+// A plugin-registered fluid emitter. fluid_material is resolved to a
+// palette_index at registration time (the register_material_sound pattern),
+// so FluidSystem can tag the FluidEvent it fires for a saturated cell without
+// a string compare on the hot path. Torn down on owner unload.
+struct RegisteredFluidSource {
+    WorldCoord  pos;
+    float       rate = 0.0f;
+    std::string fluid_material;
+    uint8_t     palette_index = 0;
+    PluginId    owner;
+};
+
 struct RegisteredChunkLifecycleHook {
     std::string      layer_name;
     ChunkLifecycleFn fn;
@@ -247,6 +283,10 @@ public:
     const std::vector<RegisteredMaterial>&            materials()            const { return materials_; }
     const std::vector<RegisteredVoxelModifiedHook>&   voxelModifiedHooks()   const { return voxelModifiedHooks_; }
     const std::vector<RegisteredStructuralEventHook>& structuralEventHooks() const { return structuralEventHooks_; }
+    const std::vector<RegisteredFluidEventHook>&      fluidEventHooks()      const { return fluidEventHooks_; }
+    const std::vector<RegisteredThermalEventHook>&    thermalEventHooks()    const { return thermalEventHooks_; }
+    const std::vector<RegisteredHeatSource>&          heatSources()          const { return heatSources_; }
+    const std::vector<RegisteredFluidSource>&         fluidSources()         const { return fluidSources_; }
     const std::vector<RegisteredChunkLifecycleHook>&  chunkCreatedHooks()    const { return chunkCreatedHooks_; }
     const std::vector<RegisteredChunkLifecycleHook>&  chunkEvictedHooks()    const { return chunkEvictedHooks_; }
     const std::vector<RegisteredImporter>&            importers()            const { return importers_; }
@@ -311,6 +351,10 @@ private:
     std::vector<RegisteredMaterial>            materials_;
     std::vector<RegisteredVoxelModifiedHook>   voxelModifiedHooks_;
     std::vector<RegisteredStructuralEventHook> structuralEventHooks_;
+    std::vector<RegisteredFluidEventHook>      fluidEventHooks_;
+    std::vector<RegisteredThermalEventHook>    thermalEventHooks_;
+    std::vector<RegisteredHeatSource>          heatSources_;
+    std::vector<RegisteredFluidSource>         fluidSources_;
     std::vector<RegisteredChunkLifecycleHook>  chunkCreatedHooks_;
     std::vector<RegisteredChunkLifecycleHook>  chunkEvictedHooks_;
     std::vector<RegisteredImporter>            importers_;

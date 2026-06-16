@@ -222,6 +222,71 @@ using OnStructuralEventFn = void(*)(
     void*                  user_data
 );
 
+// Crossing direction for a sparse-overlay reporting threshold (M14, see
+// FluidEvent/ThermalFieldEvent below): Rising is the field entering the reported
+// state (e.g. fluid reaching saturation, a cell warming past ambient);
+// Falling is leaving it (fluid draining below the realized-voxel floor, a
+// cell cooling back toward ambient).
+enum class FieldCrossing : uint8_t { Rising, Falling };
+
+// Flat-POD payload for on_fluid_event (M14, docs/ARCHITECTURE.md §17/§8).
+//
+// Describes a single sparse fluid-overlay cell the engine's FluidSystem has
+// found crossing a reporting threshold. Rising means the cell reached
+// tuning::fluid::kSaturationThreshold — the response plugin should realize a
+// voxel of material_id/palette_index via apply_edit; Falling means a
+// previously-realized cell drained below tuning::fluid::kMinFluidAmount — the
+// plugin should clear it. The engine only detects and reports (§7's
+// detect/respond split, reused here); it never calls apply_edit itself.
+//
+// Same flat-struct ABI rule as StructuralEvent: no std:: type crosses the
+// boundary, voxel_x/y/z is the public-ABI form of the engine-internal
+// chunkmath::VoxelCoord, and field order is APPEND-ONLY.
+struct FluidEvent {
+    WorldCoord    position;             // world-space center of the cell
+    int64_t       voxel_x = 0;          // terminal-layer VoxelCoord: x
+    int64_t       voxel_y = 0;          //                            y
+    int64_t       voxel_z = 0;          //                            z
+    float         amount  = 0.0f;       // fluid amount at the crossing
+    FieldCrossing crossing = FieldCrossing::Rising;
+    const char*   material_id    = nullptr;  // fluid material to realize (from register_fluid_source)
+    uint8_t       palette_index  = 0;         // material_id resolved at source-registration time
+};
+
+// Flat-POD payload for on_thermal_event (M14, docs/ARCHITECTURE.md §17/§8).
+//
+// Describes a single sparse thermal-overlay cell crossing into (Rising) or
+// out of (Falling) the active set — i.e. away from or back to
+// tuning::thermal::kAmbientTemperature. What a plugin does with a temperature
+// crossing (ignite, melt, play audio) is game policy; the engine never writes
+// a voxel for this event. Same ABI rule as FluidEvent/StructuralEvent.
+// Named ThermalFieldEvent (not ThermalEvent) to avoid a collision with the
+// Windows SDK, which defines ThermalEvent in some audio/WMI header chains
+// pulled in by MiniaudioBackend.cpp's MINIAUDIO_IMPLEMENTATION include.
+struct ThermalFieldEvent {
+    WorldCoord    position;
+    int64_t       voxel_x = 0;
+    int64_t       voxel_y = 0;
+    int64_t       voxel_z = 0;
+    float         temperature = 0.0f;
+    FieldCrossing crossing    = FieldCrossing::Rising;
+};
+
+// Called when FluidSystem finds a fluid-overlay cell crossing a saturation or
+// drain threshold. The pointer is valid only for the duration of the call —
+// the plugin must not retain it.
+using OnFluidEventFn = void(*)(
+    const FluidEvent* event,
+    void*              user_data
+);
+
+// Called when ThermalSystem finds a thermal-overlay cell crossing into or out
+// of the active set. Same pointer-lifetime rule as OnFluidEventFn.
+using OnThermalEventFn = void(*)(
+    const ThermalFieldEvent* event,
+    void*                user_data
+);
+
 // Called at the authority node before an edit is committed. The handler returns
 // Apply, Discard, or Transform. On Transform it writes the substituted voxel to
 // *out_voxel; on Apply/Discard out_voxel is ignored. The default built-in returns
@@ -468,6 +533,44 @@ struct PluginContext {
         PluginContext*       ctx,
         OnStructuralEventFn  fn,
         void*                user_data
+    );
+
+    // -----------------------------------------------------------------------
+    // Fluid / thermal hooks and sources (M14, docs/ARCHITECTURE.md §17/§8)
+    // -----------------------------------------------------------------------
+
+    void (*register_on_fluid_event)(
+        PluginContext*   ctx,
+        OnFluidEventFn   fn,
+        void*            user_data
+    );
+
+    void (*register_on_thermal_event)(
+        PluginContext*     ctx,
+        OnThermalEventFn   fn,
+        void*              user_data
+    );
+
+    // Register a heat emitter: the engine injects `rate` into the thermal
+    // overlay at pos every tick for as long as the registering plugin stays
+    // loaded. Owner-tracked like the recipe/material/sound registries — torn
+    // down automatically on unload.
+    void (*register_heat_source)(
+        PluginContext* ctx,
+        WorldCoord     pos,
+        float          rate
+    );
+
+    // Register a fluid emitter: the engine injects `rate` into the fluid
+    // overlay at pos every tick. fluid_material names the material the
+    // mandatory flow plugin will realize when this emitter's fluid saturates
+    // a cell (resolved to a palette_index at registration time, the
+    // register_material_sound pattern). Owner-tracked; torn down on unload.
+    void (*register_fluid_source)(
+        PluginContext* ctx,
+        WorldCoord     pos,
+        float          rate,
+        const char*    fluid_material
     );
 
     void (*register_on_chunk_created)(

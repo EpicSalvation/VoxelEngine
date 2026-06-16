@@ -86,3 +86,59 @@ inline constexpr int kMaxStructuralEventsPerFrame     = 256;
 inline constexpr int kMaxSupportFloodNodes            = 4096;
 
 }  // namespace tuning::physics
+
+namespace tuning::thermal {
+
+// Heat diffusion model (M14, docs/architecture.md §17).
+//
+// ThermalSystem advances an engine-owned sparse temperature overlay with
+// explicit finite-difference diffusion: dT/dt = a*Laplacian(T), where the
+// per-cell coefficient a is read from that cell's thermal_conductivity. The
+// explicit scheme is only conditionally stable, so the pass sub-steps within
+// the frame to respect kStabilityFactor rather than taking one large step.
+
+// Default/absent-cell value of the temperature overlay. A cell not present in
+// the sparse store reads as this — the "room temperature" floor everything
+// decays toward once no nearby heat source keeps it elevated.
+inline constexpr float kAmbientTemperature = 20.0f;
+
+// The explicit-scheme stability bound, 3D case: a*dt/dx^2 <= kStabilityFactor.
+// Drives how many sub-steps a tick's diffusion pass needs for the most
+// conductive cell touched; exceeding this bound oscillates/blows up.
+inline constexpr float kStabilityFactor = 1.0f / 6.0f;
+
+// Per-frame budget on distinct cells the diffusion pass visits (active set +
+// frontier, sorted-coord order). Unlike the M13 dirty queue this needs no
+// explicit carry bookkeeping: a cell skipped this frame simply stays in the
+// overlay's own active set/frontier and is reconsidered next tick.
+inline constexpr int kMaxThermalCellsPerFrame = 4096;
+
+}  // namespace tuning::thermal
+
+namespace tuning::fluid {
+
+// Cellular-automaton fluid flow model (M14, docs/architecture.md §17).
+//
+// FluidSystem advances an engine-owned sparse fluid-amount overlay with
+// level/head cellular-automaton flow gated by each destination cell's
+// porosity (0 blocks entirely, 1 — and air/empty, treated as effective 1.0 —
+// is fully permeable).
+
+// Fluid amount at which a cell crosses into "realized geometry": the engine
+// fires on_fluid_event(rising) so the mandatory flow plugin can place a real
+// voxel through the public edit path.
+inline constexpr float kSaturationThreshold = 1.0f;
+
+// Fluid amount below which an already-realized cell fires
+// on_fluid_event(falling) so the flow plugin clears its voxel. Strictly below
+// kSaturationThreshold so a cell does not flicker rising/falling at the same
+// value.
+inline constexpr float kMinFluidAmount = 0.05f;
+
+// Per-frame budgets for the end-of-frame flow pass. Overflow beyond either cap
+// carries to the next frame (the tuning::physics carry pattern), so a large
+// release spreads across frames instead of stalling one.
+inline constexpr int kMaxFluidCellsPerFrame  = 4096;
+inline constexpr int kMaxFluidEventsPerFrame = 256;
+
+}  // namespace tuning::fluid
