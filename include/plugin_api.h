@@ -223,7 +223,7 @@ using OnStructuralEventFn = void(*)(
 );
 
 // Crossing direction for a sparse-overlay reporting threshold (M14, see
-// FluidEvent/ThermalEvent below): Rising is the field entering the reported
+// FluidEvent/ThermalFieldEvent below): Rising is the field entering the reported
 // state (e.g. fluid reaching saturation, a cell warming past ambient);
 // Falling is leaving it (fluid draining below the realized-voxel floor, a
 // cell cooling back toward ambient).
@@ -260,7 +260,10 @@ struct FluidEvent {
 // tuning::thermal::kAmbientTemperature. What a plugin does with a temperature
 // crossing (ignite, melt, play audio) is game policy; the engine never writes
 // a voxel for this event. Same ABI rule as FluidEvent/StructuralEvent.
-struct ThermalEvent {
+// Named ThermalFieldEvent (not ThermalEvent) to avoid a collision with the
+// Windows SDK, which defines ThermalEvent in some audio/WMI header chains
+// pulled in by MiniaudioBackend.cpp's MINIAUDIO_IMPLEMENTATION include.
+struct ThermalFieldEvent {
     WorldCoord    position;
     int64_t       voxel_x = 0;
     int64_t       voxel_y = 0;
@@ -280,7 +283,7 @@ using OnFluidEventFn = void(*)(
 // Called when ThermalSystem finds a thermal-overlay cell crossing into or out
 // of the active set. Same pointer-lifetime rule as OnFluidEventFn.
 using OnThermalEventFn = void(*)(
-    const ThermalEvent* event,
+    const ThermalFieldEvent* event,
     void*                user_data
 );
 

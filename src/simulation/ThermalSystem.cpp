@@ -70,7 +70,7 @@ void ThermalSystem::relax(const VoxelCoord& c, float newT) {
     const bool isActiveNow = overlay_.isActive(c);
     if (isActiveNow == wasActive) return;
 
-    ThermalEvent ev{};
+    ThermalFieldEvent ev{};
     ev.position    = chunkmath::voxelCenter(c, terminal_->voxelSizeM());
     ev.voxel_x     = c.x;
     ev.voxel_y     = c.y;
