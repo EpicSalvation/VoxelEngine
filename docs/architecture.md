@@ -24,6 +24,7 @@ If you are an AI agent: read this document before modifying any subsystem. The c
 14. [Guidance for AI Coding Agents](#14-guidance-for-ai-coding-agents)
 15. [Networking and Multiplayer](#15-networking-and-multiplayer)
 16. [Audio](#16-audio)
+17. [Fluid and Thermal Simulation](#17-fluid-and-thermal-simulation)
 
 ---
 
@@ -339,6 +340,12 @@ void register_exporter(const char* extension, ExporterFn fn);
 // Simulation
 void register_on_voxel_modified(OnVoxelModifiedFn fn);
 void register_on_structural_event(OnStructuralEventFn fn);
+void register_on_fluid_event(OnFluidEventFn fn);
+void register_on_thermal_event(OnThermalEventFn fn);
+
+// Fluid/thermal sources (plugin-registered emitters; owner-tracked)
+void register_heat_source(WorldCoord pos, float rate);
+void register_fluid_source(WorldCoord pos, float rate);
 
 // Layer lifecycle
 void register_on_chunk_created(const char* layer_name, ChunkLifecycleFn fn);
@@ -348,6 +355,8 @@ void register_on_chunk_evicted(const char* layer_name, ChunkLifecycleFn fn);
 See `include/plugin_api.h` for full signatures and `src/plugins/ExamplePlugin` for a worked example.
 
 **Structural events (M13).** `register_on_structural_event` fires when `PropagationSystem` finds a composite macro voxel can no longer reach structural support (§7). The hook takes a flat-POD payload — `OnStructuralEventFn(const StructuralEvent*, void*)` — carrying the macro's world `position`, its layer voxel index (`voxel_x/voxel_y/voxel_z`, the public-ABI form of the engine's `VoxelCoord`), `layer_name`, `voxel_size_m` (its scale), `child_voxel_size_m` (the terminal child scale, so a plugin can enumerate the macro's child cells without reading back into the engine), and its post-edit `aggregate_strength` and residual `support_potential`, following the §6 `RecipeDesc` flat-struct ABI rule (no `std::` type crosses the boundary; field order is append-only). One event describes one macro; the engine only detects and reports, and the registered plugin owns the response (clearing voxels, spawning debris). With no structural-response plugin loaded, mining never triggers a collapse.
+
+**Fluid and thermal events (M14).** `register_on_fluid_event` / `register_on_thermal_event` fire when an engine-owned field overlay crosses a reporting threshold (§17) — a fluid cell reaches saturation, a thermal cell crosses a configured temperature. Each takes a flat-POD payload (`OnFluidEventFn(const FluidEvent*, void*)` / `OnThermalEventFn(const ThermalEvent*, void*)`) carrying the cell coord and the field value at the crossing, following the same append-only, no-`std::` ABI rule as `StructuralEvent`. As with structural events the engine only *detects and reports*: it writes its own overlays but never a voxel. The **mandatory `flow` response plugin** turns a `FluidEvent` into real fluid geometry via the public edit path below — with no fluid plugin loaded, fluid simulates as a field but never becomes a voxel (the legitimate "no fluid geometry" config). `register_heat_source` / `register_fluid_source` are the inbound direction: plugin-registered emitters the engine injects into the overlays each tick, owner-tracked and torn down on unload like every other registry.
 
 **The public edit path (M13).** A structural-response plugin acts on an event through `ctx.apply_edit(ctx, WorldCoord, const Voxel*)` — the *public edit path*. It routes to the engine's single edit choke point (`NetworkManager::applyEdit` → `World::setVoxel` → `on_voxel_modified`), the same path every player and replicated network edit takes, so a plugin edit is indistinguishable from a player edit and re-enters detection through `on_voxel_modified`. This is what closes the cascade as a **feedback loop** rather than a recursive engine routine (§7): `PhysicsSystem` fires events → the plugin edits via `apply_edit` → the macro re-dirties → the next end-of-frame `PhysicsSystem::tick` re-evaluates the next ring, terminating at an anchor. `PluginManager` stores the handler only; `NetworkManager::init` installs it (mirroring `send_network_message`). With no edit handler installed (a host with no `NetworkManager`), `apply_edit` is a fail-soft no-op — reinforcing the engine-never-writes default. `PropagationSystem` itself observes edits at the choke point by riding an *engine-owned* `on_voxel_modified` hook (`PluginManager::registerEngineVoxelModifiedHook`, owner `kBuiltinOwnerId`, registered by `PhysicsSystem`), so detection sees every committed edit without `NetworkManager` ever depending on the simulation tier (§13).
 
@@ -613,6 +622,13 @@ PhysicsSystem
     └── does NOT write voxels — the structural-response plugin does, via World::setVoxel
     └── must NOT depend on: Renderer, IO, DecompositionWorker
 
+FluidSystem / ThermalSystem (src/simulation/, M14)
+    └── depends on: World (read voxel properties: porosity / thermal_conductivity),
+                    PluginManager (fire on_fluid_event / on_thermal_event, read registered emitters)
+    └── owns its sparse field overlay and writes ONLY to it — never a voxel;
+        the mandatory `flow` plugin realizes fluid geometry via the public edit path
+    └── must NOT depend on: Renderer, IO, DecompositionWorker
+
 IO (VoxImporter/VoxExporter)
     └── depends on: World (write voxels), LayerConfig (layer assignment)
     └── must NOT depend on: Renderer, PhysicsSystem
@@ -870,3 +886,46 @@ It is set via the project config (`audio.strict: auto | error | warn`, the one-l
 ### Dependency Boundaries
 
 `AudioManager` sits in a new `src/audio/` tier. It depends on `PluginManager` (to read the sound and material-sound registries), `WorldCoord`, and `IAudioBackend`. It must not depend on `Renderer`, `PhysicsSystem`, `DecompositionWorker`, `IO`, or `World` — callers hand it a `palette_index` and a `WorldCoord`, so it never reads world state directly. The backend (`MiniaudioBackend`) is a dependency of `AudioManager` only — nothing else in the engine knows miniaudio exists. The sound and material-sound registries live on `PluginManager` with the recipe/noise/material registries, owner-tracked and torn down on per-plugin unload by the same path.
+
+---
+
+## 17. Fluid and Thermal Simulation
+
+**Files:** `src/simulation/FluidSystem.cpp/.h`, `src/simulation/ThermalSystem.cpp/.h`, `src/core/Tuning.h` (`tuning::fluid` / `tuning::thermal` knobs), `plugins/flow/plugin.cpp` (the mandatory fluid-response plugin). Consumers arrive in M14; the design below is the M14 contract. These are the `porosity` and `thermal_conductivity` consumers promised by the §5 property contract.
+
+### Purpose
+
+Fluid spreads through a world gated by each material's `porosity`, and heat diffuses through it at a rate set by each material's `thermal_conductivity`. Like collapse (§7), both respond to the **value of a property on the target voxel**, never to a material identity — a flow or heat system written today works on any material defined later, including modded ones (§5).
+
+### Why This Is Not "M13 Again": Dynamic State
+
+M13's collapse is a pure *read* over binary voxels — instability is derived from material already on the voxel, and the engine writes nothing. Fluid and heat are different in kind: temperature and fluid-amount are **continuous, dynamic quantities that do not exist on the voxel.** `MaterialProperties` holds *constants* (`porosity`, `thermal_conductivity`); the live temperature of a cell and the amount of fluid sitting in it are state that must be advanced every tick. There is no detect-only version of a heat equation — *the diffusion is the simulation.* So M14's first design question is **where that state lives**, and the answer shapes everything else.
+
+### State Lives in Engine-Owned Sparse Overlays
+
+Dynamic field state lives in **engine-owned sparse overlays** keyed by coord — one for temperature, one for in-flight fluid amount — with the **ambient/zero value as the absent-cell default**, so only non-ambient cells are stored. This is chosen over (a) new `Voxel` members, which would force a §9 chunk-format change and cost memory on every voxel for state most voxels never carry, and (b) a dense per-chunk field, which fights the engine's planetary-scale ambitions. The overlays are scoped to the resident region and hold **working state only — never voxel data**, so the §13 "the engine never writes voxels" invariant holds by construction: a field solver writing to its own overlay is not editing the world.
+
+Two **separate** overlays, not one fused cell state: fluid and thermal are **decoupled** in M14 (no boiling, freezing, or lava interplay). Coupling is a deliberate future extension, not an M14 concern.
+
+### Engine Solves the Field; a Plugin Realizes Geometry
+
+The engine owns the **field solver** and writes only to its overlays. When a fluid cell crosses **saturation**, the engine fires `on_fluid_event` (§8) and the **mandatory `flow` response plugin** realizes it as a real fluid voxel through the public edit path (`apply_edit` → `World::setVoxel`), exactly the detect/respond feedback loop M13 established for collapse. This is the deliberate consequence: **fluid that has settled is an ordinary voxel** — it collides, it can be edited, and it persists through the normal §9 chunk path for free. With no `flow` plugin loaded, fluid still *simulates* as a field but never becomes geometry — the legitimate "no fluid voxels" configuration, the fluid analog of "no structural plugin ⇒ no cave-ins." Thermal events (`on_thermal_event`) are the same detect-and-report shape; what a plugin does with a temperature crossing (ignite, melt, play the reserved `AudioEvent::Flow`/audio) is game policy.
+
+### The Solver: Explicit Cellular-Automaton Relaxation
+
+Both systems are **explicit, deterministic, neighbor-relaxation passes** over the sparse active set plus its 6-connected frontier — the same neighbor-walk shape as the M13 support flood, at **terminal-voxel granularity bounded to the resident region**. There is **no LOD aggregation** up the composite chain (unlike M13's macro aggregate): a per-coord field has nothing to aggregate, and coarse-layer diffusion is neither meaningful nor affordable.
+
+- **Heat** — explicit finite-difference diffusion (`dT/dt = α∇²T`), the coefficient `α` derived from each cell's `thermal_conductivity` (conductivity-only; a flat heat capacity for M14, with density-derived capacity left as a later refinement). The explicit scheme is only conditionally stable, so the pass **sub-steps to respect the stability bound** (3D: `α·dt/dx² ≤ 1/6`) rather than taking one large step.
+- **Fluid** — cellular-automaton level/head flow **gated by `porosity`**: `0` blocks flow entirely (the demo's low-`porosity` wall), `1` is fully permeable, and **air/empty is treated as effective porosity 1.0** so fluid flows freely through open space and is stopped only by solid low-`porosity` material.
+
+An implicit/global solve (matrix or pressure projection) was rejected: it wants a dense field, fights the sparse overlay, and is far harder to make deterministic and to budget.
+
+### Sources: Plugin-Registered Emitters
+
+Heat and fluid originate from **plugin-registered emitters** — `register_heat_source` / `register_fluid_source` (§8) — that the engine injects into the overlays each tick. They are owner-tracked in `PluginManager` and torn down on unload like the recipe/material/sound registries. There is **no material-baked source**: a "lava radiates heat" effect is a plugin registering an emitter at the lava's location, not an automatic property of the material. This keeps source *placement* a game decision while the *diffusion* stays an engine primitive.
+
+### Determinism, Budget, and Persistence
+
+Both passes obey the §4 determinism contract: they run **end-of-frame**, visit cells in **deterministic sorted-coord order** (no unordered iteration, no `rand`/`time`), and are bounded by `tuning::fluid` / `tuning::thermal` budgets with **overflow carried to the next frame**, so a large flood or heat front spreads across frames instead of stalling one — the `tuning::physics` pattern from M13.
+
+The overlays are **transient**. Durable fluid is the realized *voxels* the `flow` plugin already placed (persisted by §9 with no format change); on load, both fields are re-derived from re-registered emitters and the existing fluid voxels. Heat resets to ambient on load and re-warms from its emitters — acceptable, and the same "state re-establishes from its source" stance the transient `RemovalAccumulator` took (§5). Network replication of the field itself is deferred: the realized fluid voxels already replicate through the M11 edit choke point, so remote clients see the same geometry without the field crossing the wire.
