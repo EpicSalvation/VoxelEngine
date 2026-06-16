@@ -86,6 +86,10 @@ PluginId PluginManager::loadPlugin(const std::string& path) {
         eraseOwned(materials_,          id);
         eraseOwned(voxelModifiedHooks_, id);
         eraseOwned(structuralEventHooks_, id);
+        eraseOwned(fluidEventHooks_,    id);
+        eraseOwned(thermalEventHooks_,  id);
+        eraseOwned(heatSources_,        id);
+        eraseOwned(fluidSources_,       id);
         eraseOwned(chunkCreatedHooks_,  id);
         eraseOwned(chunkEvictedHooks_,  id);
         eraseOwned(importers_,          id);
@@ -145,6 +149,10 @@ PluginId PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
         eraseOwned(materials_,          id);
         eraseOwned(voxelModifiedHooks_, id);
         eraseOwned(structuralEventHooks_, id);
+        eraseOwned(fluidEventHooks_,    id);
+        eraseOwned(thermalEventHooks_,  id);
+        eraseOwned(heatSources_,        id);
+        eraseOwned(fluidSources_,       id);
         eraseOwned(chunkCreatedHooks_,  id);
         eraseOwned(chunkEvictedHooks_,  id);
         eraseOwned(importers_,          id);
@@ -178,6 +186,10 @@ bool PluginManager::unloadPlugin(PluginId id) {
     eraseOwned(materials_,            id);
     eraseOwned(voxelModifiedHooks_,   id);
     eraseOwned(structuralEventHooks_, id);
+    eraseOwned(fluidEventHooks_,      id);
+    eraseOwned(thermalEventHooks_,    id);
+    eraseOwned(heatSources_,          id);
+    eraseOwned(fluidSources_,         id);
     eraseOwned(chunkCreatedHooks_,    id);
     eraseOwned(chunkEvictedHooks_,    id);
     eraseOwned(importers_,            id);
@@ -355,6 +367,51 @@ PluginContext PluginManager::buildContext() {
     ctx.register_on_structural_event = [](PluginContext* c, OnStructuralEventFn fn, void* ud) {
         auto* mgr = static_cast<PluginManager*>(c->engine_data);
         mgr->structuralEventHooks_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    // -----------------------------------------------------------------------
+    // Fluid / thermal hooks and sources (M14, ARCHITECTURE §17/§8)
+    // -----------------------------------------------------------------------
+
+    ctx.register_on_fluid_event = [](PluginContext* c, OnFluidEventFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->fluidEventHooks_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.register_on_thermal_event = [](PluginContext* c, OnThermalEventFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->thermalEventHooks_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.register_heat_source = [](PluginContext* c, WorldCoord pos, float rate) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->heatSources_.push_back({pos, rate, mgr->currentOwner_});
+    };
+
+    ctx.register_fluid_source = [](PluginContext* c, WorldCoord pos, float rate,
+                                    const char* fluid_material) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!fluid_material) {
+            std::cerr << "[PluginManager] register_fluid_source: null fluid_material; ignored.\n";
+            return;
+        }
+        // Resolve fluid_material -> palette_index at registration time so
+        // FluidSystem's hot-path event tagging is an integer copy, not a
+        // string lookup — the register_material_sound pattern.
+        uint8_t palette_index = 0;
+        bool found = false;
+        for (const auto& m : mgr->materials_) {
+            if (m.material_id == fluid_material) {
+                palette_index = m.props.palette_index;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            std::cerr << "[PluginManager] Warning: register_fluid_source: material '"
+                      << fluid_material << "' not yet registered; palette_index defaults to 0.\n";
+        }
+        mgr->fluidSources_.push_back({pos, rate, fluid_material, palette_index, mgr->currentOwner_});
     };
 
     ctx.register_on_chunk_created = [](PluginContext* c, const char* name,

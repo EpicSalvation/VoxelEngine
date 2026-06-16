@@ -7,6 +7,8 @@
 #include "world/Layer.h"
 #include "world/World.h"
 #include "net/NetworkManager.h"
+#include "simulation/FluidSystem.h"
+#include "simulation/ThermalSystem.h"
 
 #include <iostream>
 
@@ -136,6 +138,14 @@ void Engine::update(double dt)
     if (am_) {
         am_->update();
     }
+}
+
+float Engine::temperatureAt(const WorldCoord& pos) const {
+    return thermal_ ? thermal_->temperatureAt(pos) : 0.0f;
+}
+
+float Engine::fluidAmountAt(const WorldCoord& pos) const {
+    return fluid_ ? fluid_->amountAt(pos) : 0.0f;
 }
 
 void Engine::gameLoop() {

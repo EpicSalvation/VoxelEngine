@@ -11,6 +11,7 @@ class PluginManager;
 class World;
 namespace net   { class NetworkManager; }
 namespace audio { class AudioManager;   }
+namespace sim   { class FluidSystem; class ThermalSystem; }
 
 class Engine {
 public:
@@ -60,13 +61,32 @@ public:
     void                   setAudioManager(audio::AudioManager* am) { am_ = am; }
     audio::AudioManager*   audioManager() const { return am_; }
 
+    // Attach the M14 field systems for read-only query access. Like PhysicsSystem,
+    // FluidSystem/ThermalSystem are driven by the host's own frame loop (not by
+    // Engine::update) — these setters exist purely so temperatureAt/fluidAmountAt
+    // can forward to them, the read analog of how the renderer receives camera
+    // data directly rather than through the plugin ABI (§13).
+    void                  setFluidSystem(sim::FluidSystem* fs) { fluid_ = fs; }
+    sim::FluidSystem*     fluidSystem() const { return fluid_; }
+    void                  setThermalSystem(sim::ThermalSystem* ts) { thermal_ = ts; }
+    sim::ThermalSystem*   thermalSystem() const { return thermal_; }
+
+    // Read-only field query accessors (M14, docs/ARCHITECTURE.md §17). Return the
+    // sparse overlays' ambient/absent-cell default (0.0f) when no system is
+    // attached. No write path is exposed here — only the engine-owned solver
+    // writes its own overlay.
+    float temperatureAt(const WorldCoord& pos) const;
+    float fluidAmountAt(const WorldCoord& pos) const;
+
 private:
     void gameLoop();
 
-    PluginManager*        pm_    = nullptr;
-    World*                world_ = nullptr;
-    net::NetworkManager*  nm_    = nullptr;
-    audio::AudioManager*  am_    = nullptr;
+    PluginManager*        pm_      = nullptr;
+    World*                world_   = nullptr;
+    net::NetworkManager*  nm_      = nullptr;
+    audio::AudioManager*  am_      = nullptr;
+    sim::FluidSystem*     fluid_   = nullptr;
+    sim::ThermalSystem*   thermal_ = nullptr;
 
     std::atomic<bool>  isRunning      = false;
     std::thread        gameLoopThread;

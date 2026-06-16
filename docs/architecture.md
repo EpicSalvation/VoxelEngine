@@ -345,7 +345,7 @@ void register_on_thermal_event(OnThermalEventFn fn);
 
 // Fluid/thermal sources (plugin-registered emitters; owner-tracked)
 void register_heat_source(WorldCoord pos, float rate);
-void register_fluid_source(WorldCoord pos, float rate);
+void register_fluid_source(WorldCoord pos, float rate, const char* fluid_material);
 
 // Layer lifecycle
 void register_on_chunk_created(const char* layer_name, ChunkLifecycleFn fn);
