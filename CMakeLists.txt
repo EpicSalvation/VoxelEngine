@@ -390,6 +390,14 @@ foreach(_demo ${_voxel_demo_dirs})
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_FALLING_DEBRIS_PLUGIN_PATH="$<TARGET_FILE:falling-debris>")
     endif()
+    if(TARGET flow)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_FLOW_PLUGIN_PATH="$<TARGET_FILE:flow>")
+    endif()
+    if(TARGET field-sources)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_FIELD_SOURCES_PLUGIN_PATH="$<TARGET_FILE:field-sources>")
+    endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)
     if(EXISTS ${_demo_assets})
