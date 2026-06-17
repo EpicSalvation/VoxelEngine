@@ -109,6 +109,15 @@ workflow with **zero `Voxel` schema change**, and leaves (B) as a clearly-scoped
 future milestone if per-instance textures are ever required. Every limitation
 below is written against (A).
 
+Keying on the material rather than the voxel also makes appearance **scale-
+agnostic**, which matters on this multi-scale engine: the same authored texture
+applies to a 1 m terminal voxel and to a large composite block — both while the
+block is atomic (rendered as a single textured cube of its surface material) and
+after it decomposes (its boundary-recipe shells carry the texture). The only
+size-dependent piece is whether a tile **stretches or repeats** across a big
+face; a per-material **tiling factor** (T4) plus size-scaled UVs (T5) handle that,
+so nothing about the texture format is tied to a voxel size.
+
 ---
 
 ## 4. Limitations Catalog (rendering tier)
@@ -181,6 +190,12 @@ below is written against (A).
   tile_side…)`), echoing `set_palette_color`. **No field is added to `Voxel` or
   `MaterialProperties`** — the index already on every voxel is the key, so the
   POD, the determinism padding, RLE persistence, and the ABI are all preserved.
+  Include a per-material **tiling factor** (tiles per world unit, default 1) in
+  the same binding: because the binding keys on material and *not* voxel size, the
+  same authored texture serves a 1 m terminal voxel and a large composite block
+  (atomic or decomposed) — the tiling factor is what keeps a big face from
+  showing one stretched copy (see T5). This is the property that makes the whole
+  pipeline **scale-agnostic**, which matters on a multi-scale engine.
 - **Severity:** **High** — defines how content binds to geometry.
 
 ### T5 — The mesh builder applies flat per-face shade, not per-face tiles `[KNOWN]`
@@ -194,8 +209,18 @@ below is written against (A).
 - **Generalize:** in the emit loop, look up the material's tile for `kFaces[i]`
   (T4 table), compute the four corner UVs into the atlas, and write them into the
   extended `MeshVertex` (T1). Keep `shade` as a color modulate so lit relief
-  survives. The six-direction structure is already in `kFaces`.
-- **Severity:** **Medium** — mechanical once T1/T4 land, but it is where they meet.
+  survives. The six-direction structure is already in `kFaces`. Scale the corner
+  UVs by `face_world_size × tiling_factor` (T4) so a tile **repeats** across a
+  large face instead of stretching — a 1 m face shows one copy, an 8 m face shows
+  eight at the same authored density. **Atlas caveat:** hardware `REPEAT` wrap
+  cannot tile a sub-rectangle of an atlas, so repetition is done by wrapping in
+  the tile's local space — `frac(uv × N)` mapped into the tile's atlas
+  sub-rect in `fs_voxel.sc` (T2), with a small per-tile padding/bleed guard so
+  neighboring tiles don't smear at the seams. (A non-atlas array texture would
+  sidestep this; the atlas is chosen for batching, so the shader carries the
+  wrap.)
+- **Severity:** **Medium** — mechanical once T1/T4 land, but it is where they meet
+  (and where the atlas-repeat wrap lives).
 
 ---
 
@@ -260,8 +285,13 @@ below is written against (A).
 3. **T3 — the texture-atlas asset pipeline.** Image decode → atlas build → bgfx
    upload, owner-tracked per the §8 teardown contract.
 4. **T4 + T5 — material→tile binding and per-face emission.** Add the
-   `(palette_index, face) → tile` table and a `set_material_faces`-style entry
-   point; emit per-face UVs in the mesh builder. **No `Voxel` schema change.**
+   `(palette_index, face) → tile` table (with a per-material **tiling factor**)
+   and a `set_material_faces`-style entry point; emit per-face UVs scaled by
+   `face_world_size × tiling_factor` so tiles **repeat** rather than stretch on
+   large composite faces, with the atlas-local `frac` wrap living in `fs_voxel.sc`
+   (T5). **No `Voxel` schema change** — and because the binding keys on material,
+   not size, the same asset is scale-agnostic across terminal and composite
+   voxels.
 5. **T6 — the Blockbench importer.** A plugin on the existing `register_importer`
    seam that ingests the texture + per-face mapping and registers textured
    materials. Exporter/round-trip is a follow-on decision item.
