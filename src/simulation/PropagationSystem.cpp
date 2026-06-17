@@ -195,9 +195,9 @@ std::vector<PropagationSystem::Unstable> PropagationSystem::findUnstable(
     //    6-neighbors of every dirty macro (the single-level neighbor cascade —
     //    a removed support re-evaluates its neighbors at THIS level only).
     //
-    //    M16 TODO: this stops at one composite level. Re-aggregating the macro's
+    //    M17 TODO: this stops at one composite level. Re-aggregating the macro's
     //    grandparents/root up the chain (reusing the M10 cascade infrastructure)
-    //    is deferred to M16 (Polish and Release) — see ARCHITECTURE §7.
+    //    is deferred to M17 (Polish and Release) — see ARCHITECTURE §7.
     std::set<VoxelCoord, VoxelCoordLess> cand;
     for (const VoxelCoord& d : candidates) {
         if (macroSolid(d, memo)) cand.insert(d);

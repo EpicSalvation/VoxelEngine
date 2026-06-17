@@ -46,7 +46,7 @@ class Layer;
 // Single composite level (M13). Detection operates on exactly one level: child
 // edits → their immediate parent composite layer (the layer whose decompose_to
 // is the terminal layer) → neighbor cascade at that one level. Re-aggregating
-// grandparents/root up the chain is deliberately deferred — see the M16 TODO in
+// grandparents/root up the chain is deliberately deferred — see the M17 TODO in
 // findUnstable(). A non-block-game stack with no such composite layer leaves the
 // system inert (active() == false): onVoxelModified no-ops, findUnstable empty.
 // ---------------------------------------------------------------------------

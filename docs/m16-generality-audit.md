@@ -1,6 +1,6 @@
-# M15 Design Task — Engine Generality Audit & Limitations Catalog
+# M16 Design Task — Engine Generality Audit & Limitations Catalog
 
-**Status:** Design deliverable (scopes the rest of M15). No code is changed by this document.
+**Status:** Design deliverable (scopes the rest of M16). No code is changed by this document.
 
 **Scope note:** The README frames this as a *Phase 1* audit. Per the milestone
 owner's direction, this audit covers **the engine as it stands today**, regardless
@@ -19,7 +19,7 @@ quietly assume a **single-scale, gravity-down (Y-up), heightmap block game** and
 narrow the engine toward "Minecraft clone with extra layers."
 
 This catalog enumerates every such assumption found in the current tree, rates it,
-and proposes a generalization. It is the deliverable that scopes the remaining M15
+and proposes a generalization. It is the deliverable that scopes the remaining M16
 work items.
 
 Each entry uses a fixed shape:
@@ -42,7 +42,7 @@ are the templates the rest should follow.
 - **`PropagationSystem` (M13 collapse)** — models *support reach* via an
   axis-free potential flood (`architecture.md` §7), not gravitational load.
   Its own comment notes "axis-free, so it does not bake in a 'down' direction —
-  generalized gravity is M15's concern." This is the reference design for how a
+  generalized gravity is M16's concern." This is the reference design for how a
   simulation can be scale- and direction-agnostic.
 - **`WorldCoord` + floating origin** — already double-precision and
   camera-relative; the precision foundation for planetary/solar scale is in place
@@ -165,7 +165,7 @@ content (collision grounding, fluid flow, terrain generators), it is Y-biased.
   participate in the `DecompositionManager`/`LODManager` residency cycle.
 - **Assumes:** an immutable layer is small enough to hold entirely in memory
   (a bedrock floor, an arena wall).
-- **Breaks:** the README's "vast sparse immutable backdrop shell" and the M15
+- **Breaks:** the README's "vast sparse immutable backdrop shell" and the M16
   "thin backdrop shell streaming" item — a planet-scale or space backdrop cannot
   be fully resident. Heterogeneous budgets (L item below) require immutable layers
   to stream too.
@@ -202,7 +202,7 @@ content (collision grounding, fluid flow, terrain generators), it is Y-biased.
   per-frame.
 - **Assumes:** each game re-implements Y-down gravity; the engine takes no
   position.
-- **Breaks:** the M15 requirement that "down can vary per position and per frame"
+- **Breaks:** the M16 requirement that "down can vary per position and per frame"
   (radial wells, nearest-body-in-a-field). With no engine gravity seam, every
   game would have to re-derive radial gravity by hand, and L2/L3's "supply a
   gravity vector" generalizations would have nothing canonical to read from.
@@ -212,7 +212,7 @@ content (collision grounding, fluid flow, terrain generators), it is Y-biased.
   drain all read from it. Keep it a *provider/policy*, mirroring how authority and
   interest are policies (§15), not a baked engine force.
 - **Severity:** **High** — it is the enabling abstraction for L2, L3, and both
-  M15 demos; without it the "down is configurable" items have no home.
+  M16 demos; without it the "down is configurable" items have no home.
 
 ---
 
@@ -220,7 +220,7 @@ content (collision grounding, fluid flow, terrain generators), it is Y-biased.
 
 These are not engine limitations per se, but the **only shipped generators**
 encode the block-game world model, so out-of-the-box the engine *looks* like a
-heightmap engine. Worth cataloguing because the M15 demos need non-heightmap
+heightmap engine. Worth cataloguing because the M16 demos need non-heightmap
 generators and because the `resolve_noise` item unblocks them.
 
 ### C1 — All shipped world generators are Y-up heightmaps
@@ -233,15 +233,15 @@ generators and because the `resolve_noise` item unblocks them.
 - **Assumes:** a 2.5D heightmap surface with sky above and solid below.
 - **Breaks:** asteroids (closed 3D bodies), floating playspaces, shells. Nothing
   in the engine forbids volumetric generators; none ship.
-- **Generalize:** the M15 demos (asteroid belt, beyond-blocks) supply the first
+- **Generalize:** the M16 demos (asteroid belt, beyond-blocks) supply the first
   **volumetric** generators (radial density field), proving the engine hosts them.
   No engine change required — this is a demo/plugin deliverable.
 - **Severity:** **Low** (content gap, not an engine constraint).
 
-### C2 — Plugins cannot resolve built-in/registered noise by id `[M15 item]`
+### C2 — Plugins cannot resolve built-in/registered noise by id `[M16 item]`
 
 - **Where:** `architecture.md` §6 — `resolve_noise(ctx, noise_id) -> NoiseFn` on
-  `PluginContext` is explicitly *deferred to M15*. Today out-of-tree plugins can
+  `PluginContext` is explicitly *deferred to M16*. Today out-of-tree plugins can
   only **provide** noise (`register_noise`) or hand-roll inline value noise
   (which `base-terrain`/`layered-world` do); they cannot **consume** the built-in
   registry.
@@ -252,7 +252,7 @@ generators and because the `resolve_noise` item unblocks them.
 - **Generalize:** add the `resolve_noise` function pointer to `PluginContext`
   (the §12 "add a function pointer when a consumer needs it" move) and migrate
   `base-terrain`/`layered-world` off inline noise. **Decision needed:** whether
-  this belongs in M15 or is deferred again — recommend including it, since the new
+  this belongs in M16 or is deferred again — recommend including it, since the new
   demos are the first real consumers.
 - **Severity:** **Low–Medium** (enabler; cheap; decision item).
 
@@ -272,7 +272,7 @@ generators and because the `resolve_noise` item unblocks them.
 | C1 | Only heightmap generators ship | content | Low | demos supply volumetric |
 | C2 | No `resolve_noise` for plugins | content | Low–Med | volumetric generators |
 
-**Recommended build order for the rest of M15:**
+**Recommended build order for the rest of M16:**
 
 1. **L1 — pluggable per-layer streaming volume.** Foundational; unblocks L4/L5/L6
    and the streaming half of both demos. Express it so `DecompositionManager` and
@@ -284,7 +284,7 @@ generators and because the `resolve_noise` item unblocks them.
 4. **L4** — explicit interactive-layer selection in config.
 5. **L5** — stream immutable layers under the L1 volume/budget; then verify
    **heterogeneous per-layer budgets** (tiny playspace + vast sparse shell) — the
-   M15 acceptance item.
+   M16 acceptance item.
 6. **C2** — add `resolve_noise`; migrate in-tree generators (decision item).
 7. **Demos** — *Beyond blocks* (zero gravity axis, shell/box streaming) and
    *Asteroid belt miner* (many-bodied radial gravity, isotropic box streaming,
