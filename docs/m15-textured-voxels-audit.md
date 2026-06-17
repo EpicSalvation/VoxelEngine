@@ -118,6 +118,28 @@ size-dependent piece is whether a tile **stretches or repeats** across a big
 face; a per-material **tiling factor** (T4) plus size-scaled UVs (T5) handle that,
 so nothing about the texture format is tied to a voxel size.
 
+**Custom textures vs. tiling are the same binding, not a fork.** A composite block
+can carry a **bespoke texture authored for it** rather than a tiled small one —
+this needs no extra mechanism. The composite's atomic surface material is a normal
+material with its own `palette_index`, so binding a purpose-painted tile set to it
+(`set_material_faces`) with **tiling factor 1** shows one custom image spanning each
+face; binding a small tile with factor > 1 tiles it. "Custom" and "tiled" are just
+the two ends of the same tile + tiling-factor knob, per material, and a world mixes
+them freely (tiled stone here, a unique landmark block there). Atlas tiles may be
+any resolution, so a 128×128 hand-painted block sits beside 16×16 terrain tiles.
+
+This bespoke texture is the composite's **atomic / coarse** appearance, which gives
+a clean **LOD**: a purpose-authored cube texture while the block is a single distant
+voxel, swapping to detailed per-child textures once it decomposes on approach (the
+boundary-recipe shells). The two are different zoom levels of the same block, not
+competing options.
+
+The one variant **(A) does not cover** is a single image painted *across the
+decomposed child grid* — a mural spanning many child voxels as one continuous
+picture. A material has no notion of "where am I within the face," so per-position
+UVs across child voxels is per-voxel / decal territory — design decision (B), or a
+dedicated decal feature, and out of scope here (see §6).
+
 ---
 
 ## 4. Limitations Catalog (rendering tier)
@@ -308,6 +330,9 @@ so nothing about the texture format is tied to a voxel size.
   beyond a flat albedo atlas.
 - **Greedy-meshing UV correctness** — if/when faces are merged across voxels, atlas
   UVs must tile per voxel; called out so it is not assumed solved here.
+- **A single image spanning a decomposed composite's child grid** (a "mural"/decal
+  across many child voxels) — needs per-position UVs a material can't express;
+  design decision (B) or a dedicated decal feature (see §3).
 
 Consistent with the M16 audit's framing, this milestone **adds one new capability
 (textured rendering + its asset pipeline)** rather than widening an existing
