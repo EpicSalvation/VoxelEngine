@@ -357,6 +357,11 @@ cmake --build build
 # Single-config:   ./build/12-soundscape
 # Multi-config:    ./build/Debug/12-soundscape.exe
 
+# M14 — fluid/thermal field simulation: fluid seeps through a porous dam and
+# pools against impermeable walls; heat spreads by each material's conductivity.
+# Single-config:   ./build/14-flow-and-heat
+# Multi-config:    ./build/Debug/14-flow-and-heat.exe
+
 # Run the test suite
 ctest --test-dir build
 ```
@@ -425,6 +430,17 @@ blocks to hear their material's positional break/place sounds (supplied by the
 `material-audio` plugin off `on_voxel_modified`); move around to hear the ambient
 bed pan. The HUD's top line reads out the active voice count and the last sound's
 event/material.
+
+Controls for `14-flow-and-heat`: **WASD** move, **mouse** look, **Space/Shift**
+fly up/down, **F** toggles the mouse cursor, **1** loads the `flow` responder
+(saturated fluid cells realize as translucent water voxels), **0** unloads it
+(the fields keep simulating but realize no geometry — field-only), **ESC** quits.
+The camera starts in front of the glass tank; watch the blue fluid field fill the
+left chamber and seep through the porous sand dam into the right, while the orange
+heat field races across the conductive iron floor and barely reaches the rock half.
+Aim at a voxel to read its temperature/fluid amount in the HUD probe. (The tank
+fills over a few seconds — the fluid model has no sink, so the seep is the
+transient; unload/reload `flow` with **0**/**1** to reset and replay it.)
 
 ---
 
@@ -959,7 +975,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] **Confirm replication rides the realized voxels, not the field**: the `flow` plugin's `apply_edit` calls go through the M11 edit choke point, so remote clients see identical fluid geometry; the overlays themselves never cross the wire (field net-replication is deferred — design decision (g))
 
 *Mandatory response plugin (the engine ships no fluid geometry)*
-- [x] **`flow` example plugin** (`plugins/flow/plugin.cpp`): registers `on_fluid_event` and realizes/clears fluid voxels via the public edit path (`apply_edit`, keyed by the event's crossing direction and `material_id`) — the reference actuator and the fluid analog of M13's `crumble`. Registers the demo's fluid emitter via `register_fluid_source`. Dropping it means fluid still simulates as a field but never becomes geometry — the legitimate "no fluid voxels" configuration, not a degenerate case
+- [x] **`flow` example plugin** (`plugins/flow/plugin.cpp`): registers `on_fluid_event` and realizes/clears fluid voxels via the public edit path (`apply_edit`, keyed by the event's crossing direction and `material_id`) — the reference actuator and the fluid analog of M13's `crumble`. It owns the **response only**; the emitters live in the separate **`field-sources`** plugin (`plugins/field-sources/plugin.cpp`, which registers the `water` material plus the demo's `register_fluid_source`/`register_heat_source` emitters). Keeping the sources in a different, still-loaded plugin is what makes dropping `flow` meaningful: fluid keeps simulating as a field but never becomes geometry — the legitimate "no fluid voxels" configuration, not a degenerate case
 
 *Tests*
 - [x] `tests/FieldOverlayTest.cpp`: the sparse store round-trips set/get against the ambient default, tracks the active set and its frontier correctly across add/clear, drops cells that return to ambient (stays sparse), and iterates in deterministic sorted-coord order
@@ -970,7 +986,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] Overlay-is-transient + teardown invariant: save/load re-derives the fields from re-registered emitters + existing fluid voxels with **no §9 chunk-format change**; registered sources and event hooks are gone after the owning plugin unloads (the M4 teardown contract)
 
 *Demo*
-- [ ] **Demo — Flow and heat:** `14-flow-and-heat` — a small world with **porosity-varied materials** (a permeable layer the fluid seeps through, an impermeable wall it pools against) plus the `flow` plugin and its registered emitters. A fluid emitter releases fluid that **flows through porous materials and is blocked by low-`porosity` ones** (the `flow` plugin realizing it as translucent voxels through the existing fluid-surface render path), and a heat emitter whose warmth **spreads at rates set by each material's `thermal_conductivity`**, visualized via the field-query accessor as a debug heat-map tint plus a cursor temperature/fluid HUD probe. A HUD line shows active fluid/thermal cell counts and the per-frame event/overflow backlog so the budgeted passes are visible; **unloading `flow` leaves the fluid a field-only simulation with no geometry**. Run/controls in the demo header and the Setup section
+- [x] **Demo — Flow and heat:** `14-flow-and-heat` — a **glass-fronted tank** (a translucent front wall the camera looks through) presenting the two fields as a matched pair, each a diffusion gated by a material property and drawn as a field tint sampled through the engine's read-only accessors. **Fluid is gated by `porosity`:** an impermeable rock shell (porosity 0) the fluid **pools against** is split by a **2-thick porous sand dam** (porosity 0.08) the fluid **seeps through** — with 3-deep chambers the right side visibly lags the left, and the blue `fluidAmountAt` tint advances through the dam ahead of the realized water, so the seep is visible *before* any voxel appears; where it saturates the `flow` plugin realizes a **translucent water voxel**. **Heat is gated by `thermal_conductivity`:** the floor is a high-conductivity **iron** half and a low-conductivity **rock** half, so the heat emitter's warmth **races across the iron and barely creeps into the rock** (the orange `temperatureAt` tint) — the exact analog of porosity gating fluid. The `field-sources` plugin registers both emitters; a cursor probe + HUD line read the temperature/fluid at the aimed voxel and the live active-cell/event/backlog counts so the budgeted passes are visible. (The fluid model has no sink, so the closed tank fills over a few seconds — the seep is the transient.) Press **0 to unload `flow`**: the fields keep simulating (fed by the still-loaded emitters) but realize **no geometry** — the field-only configuration; **1** reloads it. Heat is always field-only (it never becomes voxels). Run/controls in the demo header and the Setup section
 
 **M15 — Engine Generality (Beyond the Block Game)**
 
