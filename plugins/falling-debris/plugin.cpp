@@ -11,7 +11,7 @@
 // the structural-collapse demo and the cave-in becomes a rockslide.
 //
 // "Down" is a plugin-side policy choice (-Y), not an engine assumption: the
-// support model is axis-free (§7) and generalized gravity is M15's concern. A
+// support model is axis-free (§7) and generalized gravity is M16's concern. A
 // debris-response plugin for a radial-gravity world would simply relocate toward
 // the body's center instead.
 //

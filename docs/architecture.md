@@ -235,7 +235,7 @@ Noise is selected **by id**, with a built-in floor and full plugin override, mir
 - A plugin registers its own via `register_noise(noise_id, fn)`, owner-tracked and torn down on unload like every other registry (§8). A plugin registration that collides with a built-in id **overrides** it (the same dispatch rule as importers), so a game can replace `value` wholesale or add a wholly novel `my_warped_simplex`. The built-ins are a floor, not a ceiling — a non-block game can ignore them entirely.
 - A recipe references noise by id; a recipe naming an unregistered noise id (built-in or plugin) is a **startup error, not a silent skip** — the same validation rule as feature generators.
 
-**Reuse across the plugin ABI boundary.** Engine subsystems and in-tree demos call the functions in `src/world/Noise.h` directly (in-tree consumers may reach into `src/`, §12). Out-of-tree plugins, which link zero engine symbols (§12), participate two ways: they **provide** noise through `register_noise`, and they will be able to **consume** built-in/registered noise through a `resolve_noise(ctx, noise_id) -> NoiseFn` accessor on `PluginContext` — the §12 "add a function pointer when a consumer needs it" move, deferred until the first non-recipe consumer (tracked under M15). The deterministic seed helper itself is inline in `plugin_api.h`, so it is usable everywhere with no resolver.
+**Reuse across the plugin ABI boundary.** Engine subsystems and in-tree demos call the functions in `src/world/Noise.h` directly (in-tree consumers may reach into `src/`, §12). Out-of-tree plugins, which link zero engine symbols (§12), participate two ways: they **provide** noise through `register_noise`, and they will be able to **consume** built-in/registered noise through a `resolve_noise(ctx, noise_id) -> NoiseFn` accessor on `PluginContext` — the §12 "add a function pointer when a consumer needs it" move, deferred until the first non-recipe consumer (tracked under M16). The deterministic seed helper itself is inline in `plugin_api.h`, so it is usable everywhere with no resolver.
 
 Noise-id → `NoiseFn` resolution happens at decomposition **job-build time on the main thread**; the resolved pointer is baked into the `DecompositionJob` so `DecompositionWorker` never consults `PluginManager` (§13 boundary).
 
@@ -289,7 +289,7 @@ This makes the cascade a **feedback loop** rather than a recursive engine routin
 
 ### The Support Model
 
-Stability is evaluated at **macro-voxel (composite) granularity**, per the aggregation rule below — not per terminal voxel. The model is a **support-potential flood** (axis-free, so it does not bake in a "down" direction — generalized gravity is M15's concern, and M13 models *support reach*, not gravitational load):
+Stability is evaluated at **macro-voxel (composite) granularity**, per the aggregation rule below — not per terminal voxel. The model is a **support-potential flood** (axis-free, so it does not bake in a "down" direction — generalized gravity is M16's concern, and M13 models *support reach*, not gravitational load):
 
 - An **anchor** emits support potential `kAnchorPotential` (normalized to 1.0). Anchors are (1) immutable-layer voxels, and (2) the boundary of the resident/decomposed region — **a non-resident neighbor is treated as solid support**. This "unknown ⇒ supported" rule is conservative on purpose: a macro whose support could come from outside the loaded region is never declared unstable, which stops the streaming edge from spuriously collapsing and means a world with no immutable layer simply never produces false cave-ins.
 - Potential floods outward through *solid* macro voxels (6-connected). Entering a macro of aggregate `structural_strength` `s` drains potential by `1 / maxSpan(s)`, where **`maxSpan(s) = clamp(s · kSupportSpanPerStrength, 0, kMaxSupportSpan)`** is the unsupported span, in macro-voxels, that material can bridge. Strength below `kMinSupportStrength` transmits no support at all (infinite cost).
@@ -301,7 +301,7 @@ This yields the demo behaviors without special cases: strong material cantilever
 
 A decomposed macro's aggregate `structural_strength` is the **volume-weighted average of its resident child voxels' material properties**; an atomic (undecomposed) macro just uses its own block material. Aggregates are maintained **incrementally**: each `on_voxel_modified` updates the parent macro's running volume-weighted sum by the old→new delta, so a parent's aggregate is O(1) per child edit rather than an `R³` re-sum. A full recompute exists only as a bounded fallback (`kMaxAggregateRecomputesPerFrame`). Propagation walks **upward through composite layers only**.
 
-For M13 the cascade resolves at a **single composite level** (child edits → immediate parent → neighbor cascade at that level). Re-aggregating further ancestors up the chain (reusing the M10 cascade infrastructure) is deliberately deferred — **revisit in M16 (Polish and Release)**.
+For M13 the cascade resolves at a **single composite level** (child edits → immediate parent → neighbor cascade at that level). Re-aggregating further ancestors up the chain (reusing the M10 cascade infrastructure) is deliberately deferred — **revisit in M17 (Polish and Release)**.
 
 ### Performance
 
