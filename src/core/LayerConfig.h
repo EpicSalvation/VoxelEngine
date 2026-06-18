@@ -10,6 +10,23 @@ enum class VoxelMode {
     terminal,   // leaf layer; directly player-modifiable; always persisted when dirty
 };
 
+// Shape of a layer's camera-centered streaming residency volume (M16, L1).
+// The volume replaces LODManager's old XZ-Chebyshev-disc × absolute-Y-band
+// footprint with an axis-agnostic predicate so non-block-game worlds (deep
+// descents, flying games, space) stream correctly:
+//   box    — isotropic 3D Chebyshev cube, no vertical bias (the default; a box
+//            volume reproduces the pre-M16 footprint byte-for-byte). Radius is
+//            view_distance_chunks.
+//   sphere — isotropic Euclidean ball of radius view_distance_chunks (excludes
+//            the box corners).
+//   shell  — a thin Euclidean band [view_distance - shell_thickness,
+//            view_distance] for a backdrop that need only be resident at range.
+enum class StreamingShape {
+    box,
+    sphere,
+    shell,
+};
+
 struct LayerDef {
     std::string              name;
     double                   voxel_size_m  = 0.0;
@@ -25,6 +42,14 @@ struct LayerDef {
     // farthest-first clean non-pending chunks are evicted to fit. Near chunks
     // and dirty (player-edited) chunks are always pinned regardless of the cap.
     int resident_chunk_budget = 0;
+
+    // Camera-centered streaming volume shape and radii (M16, L1). Optional in the
+    // config; the default box reproduces the pre-M16 footprint, so existing
+    // configs are byte-for-byte unchanged. The volume radius is view_distance_chunks;
+    // shell_thickness_chunks names the band width for the shell shape only (inner
+    // radius = view_distance_chunks − shell_thickness_chunks, clamped at 0).
+    StreamingShape streaming_shape         = StreamingShape::box;
+    int            shell_thickness_chunks  = 1;
 };
 
 // Parses and validates a layer stack from a YAML project config file.

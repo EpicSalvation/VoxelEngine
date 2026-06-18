@@ -400,6 +400,14 @@ Each layer has its own view distance and chunk budget, configured per-layer. A 1
 
 `LODManager` maintains per-layer chunk visibility sets and evicts chunks that fall outside the view distance budget.
 
+**Streaming volume (M16, L1).** Residency is decided by a per-layer, camera-centered `StreamingVolume` (`src/world/StreamingVolume.h`) with **no privileged axis**, replacing the old hard-coded "XZ-Chebyshev disc × absolute-Y band" footprint that silently bottomed a deep-dig world out on empty space once it left the configured band. The volume has a selectable shape set on the `LayerDef` (`streaming_volume.shape`):
+
+- `box` — an isotropic 3D Chebyshev cube of radius `view_distance_chunks`, camera-relative in **every** axis. This is the default and reproduces the pre-M16 footprint byte-for-byte, so existing configs are unchanged. A deep descent now streams downward with the camera. The legacy vertical band survives as a box-only convenience (`LODManager::setVerticalBand`) for heightmap worlds that only populate a few chunk-Y indices.
+- `sphere` — an isotropic Euclidean ball of radius `view_distance_chunks` (excludes the box corners), for a space world surrounded in every direction.
+- `shell` — a thin Euclidean band `[view_distance − shell_thickness_chunks, view_distance]`, for a backdrop that need only be resident at range (a flying game, a far skybox-like immutable layer).
+
+`LODManager::desiredChunks` / `withinViewDistance` / `shouldEvict` are all queries against this volume centered on the live camera chunk; eviction tests the volume grown by the hysteresis margin (`StreamingVolume::expandedBy`) so a chunk crossing the load boundary is not immediately thrashed. Because `DecompositionManager` already drives residency through `LODManager`, the working-set shape follows automatically for composite, terminal, and (M16) immutable layers, each still bounded by its own `resident_chunk_budget`.
+
 ### Decomposed-Mesh Budget
 
 Each resident chunk mesh costs GPU buffer handles — in the bgfx path, one static vertex buffer and one static index buffer — and **bgfx caps static vertex and index buffers at 4096 each** (`BGFX_CONFIG_MAX_{VERTEX,INDEX}_BUFFERS`). Decomposition multiplies chunk count: one coarse voxel becomes up to `(parent_size / child_size)³` worth of fine chunks. So **decomposed child meshes must be bounded on a tight radius around the camera, not merely retained out to the composite layer's (much larger) view distance** — otherwise flying across terrain accumulates child meshes without limit.
@@ -431,7 +439,7 @@ The `(palette_index, face) → tile` binding the mesh builder consults lives in 
 
 ### Immutable Layer Rendering
 
-Immutable layer voxels are rendered as static geometry with no chunk management overhead. They do not participate in the dirty/evict cycle. Their mesh is generated once at world load and retained.
+Immutable layer voxels are rendered as static geometry with no editing overhead — they never participate in the dirty/persist cycle. Since M16 (L5) their **meshes are streamed under the layer volume** rather than generated once and fully retained: `DecompositionManager` brings immutable layers into the same residency cycle as composite/terminal layers, loading/evicting their chunks by the per-layer `StreamingVolume` + `resident_chunk_budget` and reporting each as an `isImmutable` `LayerTickDiff`. Because an immutable chunk has no save path, eviction simply drops it; it regenerates byte-identically from seed on re-entry (it is a pure function of `(world_seed, ChunkCoord)`). This lets a vast sparse backdrop be configured as a thin `shell` volume that is only ever resident at range, instead of forcing the whole backdrop into memory at world load.
 
 ### Renderer Backend Targets
 
@@ -751,7 +759,7 @@ Decomposition events do not need to be synchronized. A remote player triggering 
 
 **Default: broadcast all edits to all clients.** A single voxel edit is approximately 64 bytes on the wire (3× int64 coord + material properties + layer id + sequence number). At 10 players all actively editing simultaneously, broadcast traffic per client is under 1 KB/sec — negligible. For the vast majority of indie and hobbyist games, broadcasting eliminates the complexity of interest management entirely.
 
-**Pre-wired option: mirror the local streaming radius.** Each layer's `view_distance_chunks` (already computed by `LODManager`) can be used as the network interest boundary: the server only sends a client edits that fall within chunks it has streamed. No new concept or configuration is required. This is the appropriate choice when player count or world size grows to where broadcast bandwidth is a concern.
+**Pre-wired option: mirror the local streaming volume.** Each layer's `StreamingVolume` (already computed by `LODManager`) is the network interest boundary: the server only sends a client edits that fall within the chunks that client streams. The filter calls `LODManager::withinViewDistance`, so interest is in lockstep with the **same axis-agnostic box/sphere/shell** the peer streams locally (M16, L6) — it does not re-derive a box and is not left Y-biased after the L1 generalization. No new concept or configuration is required. This is the appropriate choice when player count or world size grows to where broadcast bandwidth is a concern.
 
 **Plugin escape hatch:** an interest-filter plugin can implement arbitrary interest management — per-layer radii tighter than the render distance, faction visibility, line-of-sight, custom spatial queries — by registering a handler the server calls to decide whether a given client should receive a given edit. The engine provides no default geometry for this; the plugin owns the entire decision.
 

@@ -14,6 +14,15 @@ static VoxelMode parseModeString(const std::string& s, const std::string& layerN
         "'. Expected 'composite', 'immutable', or 'terminal'.");
 }
 
+static StreamingShape parseShapeString(const std::string& s, const std::string& layerName) {
+    if (s == "box")    return StreamingShape::box;
+    if (s == "sphere") return StreamingShape::sphere;
+    if (s == "shell")  return StreamingShape::shell;
+    throw std::runtime_error(
+        "Layer '" + layerName + "': unknown streaming_volume shape '" + s +
+        "'. Expected 'box', 'sphere', or 'shell'.");
+}
+
 LayerConfig LayerConfig::loadFromFile(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open())
@@ -81,6 +90,27 @@ LayerConfig LayerConfig::parseAndValidate(const std::string& yamlContent) {
                 throw std::runtime_error(
                     "Layer '" + def.name + "': resident_chunk_budget must be >= 0 (got " +
                     std::to_string(def.resident_chunk_budget) + "). Use 0 for unlimited.");
+        }
+
+        // Streaming volume (M16, L1). Optional nested map; the default box keeps
+        // existing configs byte-for-byte unchanged. The volume radius is taken
+        // from view_distance_chunks (above); only the shape and the shell band
+        // thickness live here.
+        if (node["streaming_volume"]) {
+            const YAML::Node& vol = node["streaming_volume"];
+            if (!vol.IsMap())
+                throw std::runtime_error(
+                    "Layer '" + def.name + "': streaming_volume must be a map with a "
+                    "'shape' field (box | sphere | shell).");
+            if (vol["shape"])
+                def.streaming_shape = parseShapeString(vol["shape"].as<std::string>(), def.name);
+            if (vol["shell_thickness_chunks"]) {
+                def.shell_thickness_chunks = vol["shell_thickness_chunks"].as<int>();
+                if (def.shell_thickness_chunks < 1)
+                    throw std::runtime_error(
+                        "Layer '" + def.name + "': shell_thickness_chunks must be >= 1 (got " +
+                        std::to_string(def.shell_thickness_chunks) + ").");
+            }
         }
 
         config.layers_.push_back(def);
