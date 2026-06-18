@@ -264,11 +264,14 @@ void NetworkManager::broadcastCommittedEdit(uint32_t seq, PlayerId source,
             // Plugin filter overrides built-in mode entirely.
             send = (*filters_ptr)[0].fn(player_id, pos, (*filters_ptr)[0].user_data);
         } else if (interestMode_ == InterestMode::StreamingRadius && layerConfig_) {
-            // Mirrored-streaming-radius: only send if the edit is within the
-            // peer's streaming radius based on last known peer position.
+            // Mirrored-streaming-radius: only send if the edit is within the peer's
+            // streaming volume (M16, L6). withinViewDistance routes through the
+            // layer's StreamingVolume, so interest follows the same axis-agnostic
+            // box/sphere/shell the peer streams locally — not a re-derived box, and
+            // not left Y-biased after the L1 fix (ARCHITECTURE §15).
             auto pit = peerPositions_.find(player_id);
             if (pit != peerPositions_.end()) {
-                // Use the first terminal layer for radius check.
+                // Use the first terminal layer for the volume check.
                 const LayerDef* primary = nullptr;
                 for (const auto& ld : layerConfig_->layers()) {
                     if (ld.mode == VoxelMode::terminal) { primary = &ld; break; }

@@ -68,6 +68,22 @@ DecompositionManager::DecompositionManager(World& world, PluginManager& pm,
         composites_.push_back(std::move(info));
     }
 
+    // Immutable layers (M16, L5): streamed under their own StreamingVolume +
+    // budget like composite/terminal layers, instead of generated-once-and-fully-
+    // resident. Resolve each layer's generator once (plugins register before the
+    // manager exists). Layers without a generator are skipped — nothing to stream.
+    for (const LayerDef& def : config.layers()) {
+        if (def.mode != VoxelMode::immutable) continue;
+        Layer* layer = world_.layer(def.name);
+        if (!layer) continue;
+        ImmutableLayerInfo info;
+        info.layer = layer;
+        for (const auto& g : pm_.layerGenerators())
+            if (g.layer_name == def.name) { info.genFn = g.fn; info.genUD = g.user_data; break; }
+        if (!info.genFn) continue;
+        immutables_.push_back(info);
+    }
+
     // Resolve parent indices: the coarser composite that contains each layer.
     for (size_t i = 1; i < composites_.size(); ++i) {
         const std::string& childName = composites_[i].layer->name();
@@ -444,6 +460,78 @@ void DecompositionManager::enforceLayerBudget(size_t ci, ChunkCoord camChunkComp
     }
 }
 
+// ── Immutable-layer streaming (M16, L5) ────────────────────────────────────────
+
+void DecompositionManager::streamImmutableLayers(const WorldCoord& cameraPos,
+                                                 int loadPerFrame,
+                                                 std::vector<LayerTickDiff>& diffs) {
+    for (ImmutableLayerInfo& info : immutables_) {
+        Layer& layer = *info.layer;
+        const ChunkCoord camChunk = chunkmath::worldToChunk(
+            cameraPos, layer.voxelSizeM(), layer.chunkSizeVoxels());
+
+        diffs.emplace_back();
+        LayerTickDiff& diff = diffs.back();
+        diff.compositeLayerName = layer.name();
+        diff.isImmutable        = true;
+
+        // Load: every chunk the layer's StreamingVolume wants that is not resident,
+        // up to the per-frame cap. Immutable chunks regenerate deterministically
+        // from seed, so a chunk that was evicted and re-entered rebuilds identically.
+        int loaded = 0;
+        for (const ChunkCoord& cc : lod_.desiredChunks(camChunk, layer.name())) {
+            if (loaded >= loadPerFrame) break;
+            if (layer.getChunk(cc)) continue;
+            if (Chunk* chunk = layer.loadChunk(cc, info.genFn, info.genUD)) {
+                fireChunkCreated(layer, *chunk);
+                diff.newCompChunks.push_back(cc);
+                ++loaded;
+            }
+        }
+
+        // Evict: chunks now outside the volume (load radius + hysteresis). No
+        // dirty/persist path — immutable chunks are never player-edited and
+        // regenerate from seed, so they are simply dropped (ARCHITECTURE §9).
+        std::vector<ChunkCoord> toEvict;
+        for (const auto& kv : layer.chunks())
+            if (lod_.shouldEvict(camChunk, kv.first, layer.name()))
+                toEvict.push_back(kv.first);
+        for (const ChunkCoord& cc : toEvict) {
+            fireChunkEvicted(layer, cc);
+            diff.evictedCompChunks.push_back(cc);
+            layer.unloadChunk(cc);
+        }
+
+        // Budget: if the resident set still exceeds the per-layer cap, drop the
+        // farthest chunks first (same policy as composite/terminal layers). No
+        // re-atomization — immutable chunks have no parent macro to restore.
+        const LayerDef* def = config_.findLayer(layer.name());
+        if (!def || def->resident_chunk_budget <= 0) continue;
+        const int budget = def->resident_chunk_budget;
+        if (static_cast<int>(layer.chunks().size()) <= budget) continue;
+
+        struct Candidate { ChunkCoord coord; int dist; };
+        std::vector<Candidate> candidates;
+        candidates.reserve(layer.chunks().size());
+        for (const auto& kv : layer.chunks()) {
+            const ChunkCoord& cc = kv.first;
+            int dist = std::max({std::abs(cc.x - camChunk.x),
+                                 std::abs(cc.y - camChunk.y),
+                                 std::abs(cc.z - camChunk.z)});
+            candidates.push_back({cc, dist});
+        }
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const Candidate& a, const Candidate& b) { return a.dist > b.dist; });
+        for (const Candidate& cand : candidates) {
+            if (static_cast<int>(layer.chunks().size()) <= budget) break;
+            if (!layer.getChunk(cand.coord)) continue;
+            fireChunkEvicted(layer, cand.coord);
+            diff.evictedCompChunks.push_back(cand.coord);
+            layer.unloadChunk(cand.coord);
+        }
+    }
+}
+
 // ── Main tick ─────────────────────────────────────────────────────────────────
 
 std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPos,
@@ -688,6 +776,13 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
             }
         }
     }
+
+    // ── 4. Stream immutable layers (M16, L5) ─────────────────────────────────
+    //    Each immutable layer's meshes stream in/out under its own StreamingVolume
+    //    + resident_chunk_budget, exactly like composite/terminal layers, instead
+    //    of being generated-once-and-fully-resident. Appends one isImmutable diff
+    //    per layer; immutable chunks skip dirty/persist.
+    streamImmutableLayers(cameraPos, loadPerFrame, diffs);
 
     return diffs;
 }

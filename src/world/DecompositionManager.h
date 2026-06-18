@@ -65,6 +65,13 @@ struct LayerTickDiff {
     std::vector<ChunkCoord> newChildChunks;
     std::vector<ChunkCoord> evictedChildChunks;
 
+    // True for an immutable-layer diff (M16, L5): this entry reports an immutable
+    // layer streamed under its own StreamingVolume + resident_chunk_budget rather
+    // than a composite layer's decomposition. Its loaded/evicted chunks are carried
+    // in newCompChunks / evictedCompChunks (the child/decompose fields stay empty);
+    // immutable chunks skip dirty/persist and regenerate from seed on re-entry.
+    bool isImmutable = false;
+
     // Macro voxel state changes in the composite layer, used to remesh the composite
     // chunk:
     //   newlyDecomposed — the macro's block voxel was cleared (children render
@@ -164,6 +171,22 @@ private:
         std::unordered_map<ChunkCoord, int, ChunkCoordHash> pendingChunks;
     };
 
+    // An immutable layer streamed by the manager (M16, L5). Immutable layers have
+    // no decomposition: their meshes simply stream in/out under the layer's
+    // StreamingVolume + resident_chunk_budget, regenerating from seed on re-entry
+    // (no dirty/persist path). Generator is resolved once at construction.
+    struct ImmutableLayerInfo {
+        Layer*           layer  = nullptr;
+        LayerGeneratorFn genFn  = nullptr;
+        void*            genUD  = nullptr;
+    };
+
+    // Stream every immutable layer for one tick: load chunks the layer's volume
+    // wants, evict chunks it no longer wants, then enforce its resident-chunk
+    // budget (farthest-first). Appends one isImmutable LayerTickDiff per layer.
+    void streamImmutableLayers(const WorldCoord& cameraPos, int loadPerFrame,
+                               std::vector<LayerTickDiff>& diffs);
+
     // Build a decomposition job for the given macro voxel in its composite layer.
     // Resolves the recipe (or falls back to the generator) on the main thread so
     // DecompositionWorker never touches PluginManager (ARCHITECTURE §13).
@@ -240,5 +263,6 @@ private:
     std::deque<DecompositionResult>      backlog_;      // completed, not yet applied
     std::vector<CompositeLayerInfo>      composites_;   // coarsest-first order
     std::unordered_map<std::string, size_t> compositeIdx_; // layerName → composites_ index
+    std::vector<ImmutableLayerInfo>      immutables_;   // immutable layers streamed under their volume (L5)
     DirtyEvictFn    onDirtyEvict_;  // called before evicting a dirty chunk; may be null
 };
