@@ -45,15 +45,18 @@ static const bgfx::EmbeddedShader s_embeddedShaders[] = {
 // Cube geometry — 8 vertices in unit cube centred at origin.
 // Colors are patched per-voxel into a transient vertex buffer each frame so that
 // different voxels can use different palette entries without changing this template.
+// (u,v) is 0 and the atlas sub-rect is the full atlas (0,0,1,1): the single-voxel
+// and highlight draw paths sample the 1×1 white atlas, so their color passes
+// through unmodulated (M15 T1/T2/T5).
 static const VoxelVertex kCubeTemplate[8] = {
-    {-0.5f, -0.5f,  0.5f, 0},
-    { 0.5f, -0.5f,  0.5f, 0},
-    { 0.5f,  0.5f,  0.5f, 0},
-    {-0.5f,  0.5f,  0.5f, 0},
-    {-0.5f, -0.5f, -0.5f, 0},
-    { 0.5f, -0.5f, -0.5f, 0},
-    { 0.5f,  0.5f, -0.5f, 0},
-    {-0.5f,  0.5f, -0.5f, 0},
+    {-0.5f, -0.5f,  0.5f, 0, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+    { 0.5f, -0.5f,  0.5f, 0, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+    { 0.5f,  0.5f,  0.5f, 0, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+    {-0.5f,  0.5f,  0.5f, 0, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+    {-0.5f, -0.5f, -0.5f, 0, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+    { 0.5f, -0.5f, -0.5f, 0, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+    { 0.5f,  0.5f, -0.5f, 0, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+    {-0.5f,  0.5f, -0.5f, 0, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
 };
 
 static const uint16_t kCubeIndices[36] = {
@@ -77,8 +80,10 @@ bgfx::VertexLayout VoxelVertex::layout;
 
 void VoxelVertex::initLayout() {
     layout.begin()
-        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-        .add(bgfx::Attrib::Color0,   4, bgfx::AttribType::Uint8, true)
+        .add(bgfx::Attrib::Position,  3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0,    4, bgfx::AttribType::Uint8, true)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord1, 4, bgfx::AttribType::Float)  // tile atlas sub-rect (T5)
         .end();
 }
 
@@ -86,6 +91,9 @@ BgfxRenderer::BgfxRenderer()
     : program(BGFX_INVALID_HANDLE),
       ibo(BGFX_INVALID_HANDLE),
       lineIbo(BGFX_INVALID_HANDLE),
+      atlasSampler(BGFX_INVALID_HANDLE),
+      whiteTex(BGFX_INVALID_HANDLE),
+      atlasTex(BGFX_INVALID_HANDLE),
       cameraRot{0.0f, 0.0f, 0.0f},
       viewWidth(800),
       viewHeight(600),
@@ -131,6 +139,18 @@ void BgfxRenderer::initialize(const platform::NativeWindowHandles& handles,
     VoxelVertex::initLayout();
     ibo     = bgfx::createIndexBuffer(bgfx::makeRef(kCubeIndices, sizeof(kCubeIndices)));
     lineIbo = bgfx::createIndexBuffer(bgfx::makeRef(kCubeLineIndices, sizeof(kCubeLineIndices)));
+
+    // Texture atlas sampler (s_atlas, stage 0) plus a built-in 1×1 opaque-white
+    // tile used as the default atlas. Sampling white and modulating by the vertex
+    // color leaves colored worlds byte-identical until content binds real tiles
+    // (M15 T2/T3/T4). The texture pipeline installs a content atlas via setAtlas();
+    // a reverted/absent atlas falls back here.
+    atlasSampler = bgfx::createUniform("s_atlas", bgfx::UniformType::Sampler);
+    const uint32_t kWhitePixel = 0xffffffff;
+    whiteTex = bgfx::createTexture2D(
+        1, 1, false, 1, bgfx::TextureFormat::RGBA8, 0,
+        bgfx::copy(&kWhitePixel, sizeof(kWhitePixel)));
+    atlasTex = whiteTex;
 
     const bgfx::RendererType::Enum rendererType = bgfx::getRendererType();
     bgfx::ShaderHandle vsh = bgfx::createEmbeddedShader(s_embeddedShaders, rendererType, "vs_voxel");
@@ -186,6 +206,12 @@ void BgfxRenderer::render() {
     constexpr uint64_t kTranslucentState =
         BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_BLEND_ALPHA;
 
+    // The atlas sampled by every voxel draw this frame. setTexture state is reset
+    // by bgfx after each submit, so it is (re)bound before every submit below.
+    // Falls back to the 1×1 white tile when no content atlas is installed.
+    const bgfx::TextureHandle atlas =
+        bgfx::isValid(atlasTex) ? atlasTex : whiteTex;
+
     bgfx::touch(0);
 
     for (const auto& pv : pendingVoxels) {
@@ -207,6 +233,8 @@ void BgfxRenderer::render() {
         bgfx::setTransform(mtx);
         bgfx::setVertexBuffer(0, &tvb);
         bgfx::setIndexBuffer(ibo);
+        if (bgfx::isValid(atlasSampler))
+            bgfx::setTexture(0, atlasSampler, atlas);
         if (bgfx::isValid(program))
             bgfx::submit(0, program);
     }
@@ -228,6 +256,8 @@ void BgfxRenderer::render() {
             bgfx::setTransform(mtx);
             bgfx::setVertexBuffer(0, pc.vbh);
             bgfx::setIndexBuffer(pc.opaqueIbh);
+            if (bgfx::isValid(atlasSampler))
+                bgfx::setTexture(0, atlasSampler, atlas);
             bgfx::submit(0, program);
         }
 
@@ -236,6 +266,8 @@ void BgfxRenderer::render() {
             bgfx::setTransform(mtx);
             bgfx::setVertexBuffer(0, pc.vbh);
             bgfx::setIndexBuffer(pc.translucentIbh);
+            if (bgfx::isValid(atlasSampler))
+                bgfx::setTexture(0, atlasSampler, atlas);
             bgfx::submit(1, program);
         }
     }
@@ -281,6 +313,8 @@ void BgfxRenderer::render() {
             bgfx::setTransform(mtx);
             bgfx::setVertexBuffer(0, &tvb);
             bgfx::setIndexBuffer(lineIbo);
+            if (bgfx::isValid(atlasSampler))
+                bgfx::setTexture(0, atlasSampler, atlas);
             bgfx::submit(0, program);
         }
     }
@@ -354,6 +388,11 @@ void BgfxRenderer::cleanup() {
     if (bgfx::isValid(ibo))     { bgfx::destroy(ibo);     ibo     = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(lineIbo)) { bgfx::destroy(lineIbo); lineIbo = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(program)) { bgfx::destroy(program); program = BGFX_INVALID_HANDLE; }
+    // The engine owns only the sampler uniform and the 1×1 white tile; a content
+    // atlas installed via setAtlas() is owned and freed by the texture pipeline.
+    if (bgfx::isValid(atlasSampler)) { bgfx::destroy(atlasSampler); atlasSampler = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(whiteTex))     { bgfx::destroy(whiteTex);     whiteTex     = BGFX_INVALID_HANDLE; }
+    atlasTex = BGFX_INVALID_HANDLE;
 }
 
 void BgfxRenderer::shutdown() {

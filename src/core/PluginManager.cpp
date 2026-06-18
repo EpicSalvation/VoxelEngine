@@ -1,6 +1,8 @@
 #include "PluginManager.h"
 #include "audio/AudioManager.h"
 #include "renderer/Palette.h"
+#include "renderer/MaterialFaces.h"
+#include "renderer/TextureManager.h"
 #include "world/Noise.h"
 #include <algorithm>
 #include <filesystem>
@@ -104,6 +106,7 @@ PluginId PluginManager::loadPlugin(const std::string& path) {
         eraseOwned(interestFilters_,    id);
         eraseOwned(sounds_,             id);
         eraseOwned(materialSounds_,     id);
+        eraseOwned(textures_,           id);
         platformDlClose(handle);
         return kInvalidPluginId;
     }
@@ -167,6 +170,7 @@ PluginId PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
         eraseOwned(interestFilters_,    id);
         eraseOwned(sounds_,             id);
         eraseOwned(materialSounds_,     id);
+        eraseOwned(textures_,           id);
         return kInvalidPluginId;
     }
     loaded_.push_back({id, nullptr});
@@ -204,10 +208,17 @@ bool PluginManager::unloadPlugin(PluginId id) {
     eraseOwned(interestFilters_,      id);
     eraseOwned(sounds_,               id);
     eraseOwned(materialSounds_,       id);
+    eraseOwned(textures_,             id);
 
     // Stop any live emitters the plugin created before its code is unloaded
     // (ARCHITECTURE §16 — no emitter must dangle past its owning library handle).
     if (audioManager_) audioManager_->stopEmittersOwnedBy(id);
+
+    // Rebuild the atlas from the now-pruned texture registry so the unloaded
+    // plugin's tiles are gone from the GPU texture (the §8 teardown contract).
+    // textures_ has already had this plugin's entries erased above, so the
+    // rebuild simply reflects the survivors.
+    if (textureManager_) textureManager_->rebuild();
 
     void* handle = it->handle;
     loaded_.erase(it);
@@ -558,6 +569,55 @@ PluginContext PluginManager::buildContext() {
     ctx.stop_emitter = [](PluginContext* c, AudioEmitterId id) {
         auto* mgr = static_cast<PluginManager*>(c->engine_data);
         if (mgr->audioManager_) mgr->audioManager_->stopEmitter(id);
+    };
+
+    // -----------------------------------------------------------------------
+    // Textured rendering (M15 T3)
+    // -----------------------------------------------------------------------
+
+    ctx.register_texture = [](PluginContext* c, const char* texture_id, const char* path) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!texture_id || !path) {
+            std::cerr << "[PluginManager] register_texture: null texture_id or path; ignored.\n";
+            return;
+        }
+        mgr->textures_.push_back({texture_id, path, mgr->currentOwner_});
+        // If the atlas is live (a renderer is attached), rebuild it so the new
+        // tile is available immediately. Registrations during init are batched —
+        // the TextureManager's post-load rebuild() picks them all up at once — so
+        // this only does real work for a runtime (post-init) registration.
+        if (mgr->textureManager_) mgr->textureManager_->rebuild();
+    };
+
+    ctx.register_texture_data = [](PluginContext* c, const char* texture_id,
+                                   const uint8_t* data, size_t size) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        if (!texture_id || !data || size == 0) {
+            std::cerr << "[PluginManager] register_texture_data: null/empty argument; ignored.\n";
+            return;
+        }
+        // Overwrite-by-id (the importer may re-register a texture across reloads).
+        std::vector<uint8_t> bytes(data, data + size);
+        auto it = std::find_if(mgr->textures_.begin(), mgr->textures_.end(),
+            [&](const RegisteredTexture& t) { return t.texture_id == texture_id; });
+        if (it != mgr->textures_.end()) {
+            it->path.clear();
+            it->data  = std::move(bytes);
+            it->owner = mgr->currentOwner_;
+        } else {
+            mgr->textures_.push_back({texture_id, std::string(), mgr->currentOwner_,
+                                      std::move(bytes)});
+        }
+        if (mgr->textureManager_) mgr->textureManager_->rebuild();
+    };
+
+    ctx.set_material_faces = [](PluginContext*, uint8_t palette_index,
+                                const char* top, const char* bottom,
+                                const char* side, float tiling_factor) {
+        // Global runtime binding, the set_palette_color pattern (not owner-tracked
+        // — see MaterialFaces.h). The mesh builder joins it with the atlas tile
+        // rects the TextureManager installs.
+        materialfaces::setMaterialFaces(palette_index, top, bottom, side, tiling_factor);
     };
 
     ctx.apply_edit = [](PluginContext* c, WorldCoord pos, const Voxel* voxel) {

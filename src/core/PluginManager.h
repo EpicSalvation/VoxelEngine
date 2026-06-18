@@ -10,7 +10,8 @@
 // Forward declarations: PluginManager.h must not include audio/ headers because
 // AudioManager.h includes PluginManager.h — circular at the .h level.
 // PluginManager.cpp includes audio/AudioManager.h for the lambda bodies.
-namespace audio { class AudioManager; }
+namespace audio   { class AudioManager;   }
+namespace texture { class TextureManager; }
 
 // Identifies a loaded plugin instance. Returned by loadPlugin/wireInPlugin and
 // passed to unloadPlugin. kInvalidPluginId (0) denotes a failed load.
@@ -194,6 +195,25 @@ struct RegisteredExporter {
     bool        isBuiltin = false;  // built-in handlers have lower dispatch priority
 };
 
+// ---------------------------------------------------------------------------
+// Texture registry (M15, docs/m15-textured-voxels-audit.md T3)
+// ---------------------------------------------------------------------------
+
+// A plugin-registered image asset for the material texture atlas. Keyed by
+// texture_id; the TextureManager decodes `path` and packs it into the shared
+// atlas. Torn down on plugin unload via the standard eraseOwned path, after
+// which the TextureManager rebuilds the atlas from the surviving registry
+// entries — so a plugin's tiles disappear with it (the §8 teardown contract).
+struct RegisteredTexture {
+    std::string          texture_id;
+    std::string          path;   // file source; empty when bytes are inline (below)
+    PluginId             owner;
+    std::vector<uint8_t> data;   // inline encoded image (register_texture_data);
+                                 // when non-empty the TextureManager decodes this
+                                 // instead of reading `path` — the M15 T6 path for
+                                 // a Blockbench .bbmodel's embedded base64 texture
+};
+
 // Loads plugins from disk and maintains the callback registries that engine
 // subsystems query to invoke registered behavior.
 //
@@ -266,6 +286,14 @@ public:
     void setAudioManager(audio::AudioManager* am) { audioManager_ = am; }
     audio::AudioManager* audioManager() const     { return audioManager_; }
 
+    // Texture-atlas routing (M15 T3). The TextureManager installs itself here
+    // after init so register_texture records feed the atlas, and so unloadPlugin
+    // can ask it to rebuild the atlas once a plugin's tiles are pruned from the
+    // registry. Null (the default) makes register_texture a registry-only no-op —
+    // a headless or audio-only host is unaffected (mirrors setAudioManager).
+    void setTextureManager(texture::TextureManager* tm) { textureManager_ = tm; }
+    texture::TextureManager* textureManager() const     { return textureManager_; }
+
     // Wire in a plugin that is compiled directly into the executable rather than loaded
     // as a .so. Useful for the example plugin and for testing without a .so build step.
     // Returns the new plugin's id (no library handle is associated), or kInvalidPluginId
@@ -301,6 +329,7 @@ public:
     const std::vector<RegisteredInterestFilter>&      interestFilters()      const { return interestFilters_; }
     const std::vector<RegisteredSound>&               sounds()               const { return sounds_; }
     const std::vector<RegisteredMaterialSound>&       materialSounds()       const { return materialSounds_; }
+    const std::vector<RegisteredTexture>&             textures()             const { return textures_; }
 
     // Keyed material-property lookup. These centralize the registry search that
     // importers, the build menu, and other tooling previously hand-rolled. They
@@ -369,6 +398,7 @@ private:
     std::vector<RegisteredInterestFilter>      interestFilters_;
     std::vector<RegisteredSound>               sounds_;
     std::vector<RegisteredMaterialSound>       materialSounds_;
+    std::vector<RegisteredTexture>             textures_;
 
     // A plugin that has been loaded and whose registrations are live.
     struct LoadedPlugin {
@@ -393,5 +423,6 @@ private:
     void*                netSendUser_  = nullptr;
     EditApplyFn          editApplyFn_  = nullptr;  // installed by NetworkManager::init
     void*                editApplyUser_= nullptr;
-    audio::AudioManager* audioManager_ = nullptr;  // installed by AudioManager after init
+    audio::AudioManager*     audioManager_   = nullptr;  // installed by AudioManager after init
+    texture::TextureManager* textureManager_ = nullptr;  // installed by TextureManager after init
 };

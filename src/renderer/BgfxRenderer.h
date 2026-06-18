@@ -9,9 +9,17 @@
 
 class ChunkMesh;
 
+// GPU vertex for the voxel program. Memory layout MUST match ChunkMeshData's
+// MeshVertex (position + packed ABGR color + tile-local atlas UV + the bound
+// tile's atlas sub-rect): ChunkMesh uploads MeshVertex memory through this layout,
+// and the per-voxel/highlight transient buffers below memcpy kCubeTemplate
+// (VoxelVertex) into the same layout. r0..r3 (TexCoord1) carry the tile sub-rect
+// (u0,v0,u1,v1) the fragment shader wraps the in-tile UV into (M15 T5).
 struct VoxelVertex {
     float    x, y, z;
     uint32_t abgr;
+    float    u, v;
+    float    r0, r1, r2, r3;
     static bgfx::VertexLayout layout;
     static void initLayout();
 };
@@ -57,6 +65,14 @@ public:
     // multi-layer worlds where the coarsest layer extends many kilometres).
     void setFarClip(float metres) { farClip = metres; }
 
+    // Install the texture atlas sampled by the voxel fragment shader (M15 T2/T3).
+    // Pass a valid handle to bind a content atlas built by the texture pipeline;
+    // pass BGFX_INVALID_HANDLE to revert to the built-in 1×1 white tile, which
+    // makes sampling a no-op so colored (untextured) worlds render unchanged. The
+    // renderer does NOT take ownership — the texture pipeline owns the atlas
+    // lifetime (the §8 owner-tracked teardown); the renderer only references it.
+    void setAtlas(bgfx::TextureHandle atlas) { atlasTex = atlas; }
+
     // Enable/disable a centered crosshair drawn via bgfx debug text.
     void setCrosshair(bool enabled) { crosshair = enabled; }
 
@@ -91,6 +107,9 @@ private:
     bgfx::ProgramHandle       program;
     bgfx::IndexBufferHandle   ibo;       // shared cube indices; vertices are per-voxel transient
     bgfx::IndexBufferHandle   lineIbo;   // shared cube edge indices (12 edges) for highlights
+    bgfx::UniformHandle       atlasSampler;  // s_atlas: the fragment shader's texture sampler
+    bgfx::TextureHandle       whiteTex;      // built-in 1×1 white tile (default atlas; engine-owned)
+    bgfx::TextureHandle       atlasTex;      // currently bound atlas; defaults to whiteTex (not owned)
     std::vector<std::string>  hudLines;  // top-left debug-text overlay
     WorldCoord                cameraPos;
     bx::Vec3                  cameraRot; // {pitch, yaw, roll} in radians

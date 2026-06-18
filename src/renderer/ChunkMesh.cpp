@@ -4,11 +4,11 @@
 
 #include <vector>
 
-ChunkMesh ChunkMesh::build(const Chunk& chunk) {
+ChunkMesh ChunkMesh::build(const Chunk& chunk, double voxelSizeM) {
     std::vector<MeshVertex> verts;
     std::vector<uint32_t>   opaqueIdx;
     std::vector<uint32_t>   translucentIdx;
-    buildChunkMeshData(chunk, verts, opaqueIdx, translucentIdx);
+    buildChunkMeshData(chunk, verts, opaqueIdx, translucentIdx, voxelSizeM);
 
     ChunkMesh mesh;
     if (verts.empty())

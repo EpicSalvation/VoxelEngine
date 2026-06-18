@@ -19,7 +19,13 @@ public:
     // and a translucent batch (e.g. water) sharing one vertex buffer; either may
     // be empty. Requires VoxelVertex::layout to be initialized (done by
     // BgfxRenderer::initialize).
-    static ChunkMesh build(const Chunk& chunk);
+    //
+    // voxelSizeM is the layer's voxel edge length in meters; it scales textured
+    // tile-repeat UVs so a material tiles at a fixed world density regardless of
+    // voxel size (M15 T5). The default 1.0 matches the single-scale callers; a
+    // composite/immutable layer passes its own voxelSizeM (the same value it hands
+    // BgfxRenderer::renderChunk).
+    static ChunkMesh build(const Chunk& chunk, double voxelSizeM = 1.0);
 
     void destroy();
     bool empty() const { return opaqueCount_ == 0 && translucentCount_ == 0; }

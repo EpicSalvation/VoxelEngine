@@ -754,6 +754,64 @@ struct PluginContext {
         WorldCoord     pos,
         const Voxel*   voxel
     );
+
+    // -----------------------------------------------------------------------
+    // Textured rendering (M15, docs/m15-textured-voxels-audit.md T3)
+    // -----------------------------------------------------------------------
+
+    // Register an image asset for the shared material texture atlas. The engine
+    // decodes the image at `path` (PNG/JPEG/… via bimg) and packs it into the
+    // atlas the voxel shader samples. `texture_id` names the resulting tile so a
+    // later (palette_index, face) → tile binding (T4) and the importer (T6) can
+    // refer to it. Owner-tracked, mirroring register_sound: the tile is removed
+    // and the atlas rebuilt when the registering plugin unloads (the §8 teardown
+    // contract). Fail-soft: a no-op when no texture pipeline is attached (a
+    // headless or audio-only host), so registration never crashes.
+    void (*register_texture)(
+        PluginContext* ctx,
+        const char*    texture_id,
+        const char*    path
+    );
+
+    // Register an in-memory image for the atlas (M15 T3/T6). Identical to
+    // register_texture but the encoded image bytes (PNG/JPEG/… as bimg decodes)
+    // are supplied directly rather than read from a path — the form a Blockbench
+    // importer needs, since a .bbmodel embeds its textures as base64 data URIs
+    // with no file on disk. The engine COPIES the bytes, so the caller's buffer
+    // need not outlive the call. Owner-tracked and fail-soft exactly like
+    // register_texture; a texture_id already registered is overwritten.
+    void (*register_texture_data)(
+        PluginContext* ctx,
+        const char*    texture_id,
+        const uint8_t* data,
+        size_t         size
+    );
+
+    // Bind a material's faces to texture-atlas tiles by texture_id (M15 T4).
+    // Echoes set_palette_color: it keys on the palette_index every voxel already
+    // carries, so NO field is added to Voxel / MaterialProperties — the POD, the
+    // memcmp determinism padding, RLE persistence (§9), and the plugin ABI are all
+    // preserved. `top` is the +Y face, `bottom` the -Y face, and `side` is shared
+    // by all four lateral faces (the BoundaryDesc top/bottom/side convention); a
+    // null face leaves it unbound and renders the white tile. `texture_id`s are the
+    // names passed to register_texture; they resolve to atlas tiles once the atlas
+    // is built, and a binding falls back to white when its texture's owner unloads
+    // (the atlas rebuilds without it) — so this needs no separate teardown.
+    //
+    // tiling_factor is tiles per world meter (pass 1 for one authored image per
+    // face): because the binding keys on material and NOT voxel size, one texture
+    // is scale-agnostic — the mesh builder emits face_world_size × tiling_factor
+    // tile copies across a face (T5), so the same tile serves a 1 m terminal voxel
+    // and a large composite block. Fail-soft: a global runtime table write, a no-op
+    // for an out-of-range index, never crashes a headless host.
+    void (*set_material_faces)(
+        PluginContext* ctx,
+        uint8_t        palette_index,
+        const char*    top,
+        const char*    bottom,
+        const char*    side,
+        float          tiling_factor
+    );
 };
 
 // ---------------------------------------------------------------------------

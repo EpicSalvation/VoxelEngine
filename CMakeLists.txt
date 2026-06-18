@@ -186,6 +186,7 @@ target_link_libraries(voxel-engine
     bgfx                  # renderer internals only; not exposed in the public API
     bx
     bimg
+    bimg_decode           # image decode (PNG/JPEG/…) for the M15 texture atlas
     glfw                  # windowing/input; native handles wrapped by src/platform
     yaml-cpp::yaml-cpp
     enet                  # M11 networking transport (ENet types must not appear in include/)
@@ -398,6 +399,10 @@ foreach(_demo ${_voxel_demo_dirs})
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_FIELD_SOURCES_PLUGIN_PATH="$<TARGET_FILE:field-sources>")
     endif()
+    if(TARGET blockbench)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_BLOCKBENCH_PLUGIN_PATH="$<TARGET_FILE:blockbench>")
+    endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)
     if(EXISTS ${_demo_assets})
@@ -454,6 +459,13 @@ if(TEST_SOURCES)
     add_dependencies(voxel-engine-tests recipe-world)
     target_compile_definitions(voxel-engine-tests PRIVATE
       VOXEL_RECIPE_PLUGIN_PATH="$<TARGET_FILE:recipe-world>")
+  endif()
+  # The M15 Blockbench import test loads the blockbench plugin to exercise its
+  # real .bbmodel importer through the registered ImporterFn.
+  if(TARGET blockbench)
+    add_dependencies(voxel-engine-tests blockbench)
+    target_compile_definitions(voxel-engine-tests PRIVATE
+      VOXEL_BLOCKBENCH_PLUGIN_PATH="$<TARGET_FILE:blockbench>")
   endif()
   add_test(NAME AllTests COMMAND voxel-engine-tests)
 endif()
