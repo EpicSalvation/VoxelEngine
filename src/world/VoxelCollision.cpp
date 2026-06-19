@@ -37,7 +37,8 @@ bool anySolidInAABB(const World& world, const glm::dvec3& mn, const glm::dvec3& 
 
 }  // namespace
 
-MoveResult moveAABB(const World& world, const AABB& box, const glm::dvec3& delta) {
+MoveResult moveAABB(const World& world, const AABB& box, const glm::dvec3& delta,
+                    const glm::dvec3& gravity_dir) {
     MoveResult result;
     result.position = box.center;
 
@@ -75,8 +76,15 @@ MoveResult moveAABB(const World& world, const AABB& box, const glm::dvec3& delta
             } else {
                 const int64_t cell = static_cast<int64_t>(std::floor((mn[axis] + eps) / vs));
                 c[axis] = static_cast<double>(cell + 1) * vs + half[axis];  // box min -> cell max face
-                if (axis == 1) result.grounded = true;
             }
+
+            // Grounded when blocked *along* gravity: we hit a surface in the
+            // direction we were moving (sign of d[axis]); it is a floor when that
+            // direction has a positive component along the gravity vector. For the
+            // default -Y this is exactly "moving down (axis==1, d<0) and blocked".
+            // Zero gravity makes the product zero ⇒ never grounded.
+            const double s = (d[axis] > 0.0) ? 1.0 : -1.0;
+            if (s * gravity_dir[axis] > 0.0) result.grounded = true;
 
             if (axis == 0) result.hitX = true;
             else if (axis == 1) result.hitY = true;

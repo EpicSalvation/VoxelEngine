@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include <glm/glm.hpp>
+
 #include "TextureAtlasData.h"  // texture::AtlasTile (UV sub-rect)
 
 // (palette_index, face) → atlas tile binding (M15 T4).
@@ -43,16 +45,38 @@ struct FaceTile {
     bool               bound         = false;
 };
 
-// Bind a material's faces to registered texture ids. The four lateral faces share
-// `side`; `top` is +Y and `bottom` is -Y. A null or empty id leaves that face
-// unbound (white). tiling_factor (tiles per world meter) is carried per material,
-// so the same texture is scale-agnostic across a 1 m terminal voxel and a large
-// composite block (T5 scales the emitted UV span by face_world_size × factor).
+// Bind a material's faces by ROLE — `top` is the up-facing skin, `bottom` the
+// down-facing one, and `side` is shared by all lateral faces. The four lateral
+// slots take `side`; the up slot takes `top` and the down slot `bottom`. The
+// authoring frame is constant -Y gravity (up = +Y), so a binding made here is
+// resolved against the live gravity vector at query time (faceTile): under the
+// default -Y this is the historical +Y-top / -Y-bottom mapping byte-for-byte,
+// but under a radial well the same `top` tile renders on whichever geometric
+// face is "up" — grass-side-out on an asteroid (M16 G1, axisrole::roleOf).
+// A null or empty id leaves that role unbound (white). tiling_factor (tiles per
+// world meter) is carried per material, so the same texture is scale-agnostic
+// across a 1 m terminal voxel and a large composite block (T5 scales the emitted
+// UV span by face_world_size × factor).
 void setMaterialFaces(uint8_t     palette_index,
                       const char* top,
                       const char* bottom,
                       const char* side,
                       float       tiling_factor);
+
+// Bind all six geometric faces explicitly, in Face-enum order
+// (+Z,-Z,-Y,+Y,-X,+X) — the six-independent-faces form (M16 G1). Like
+// setMaterialFaces the bindings are authored in the constant -Y frame and
+// resolved against the live gravity vector at query time, but every face gets
+// its own tile rather than the four laterals sharing one. A null/empty id leaves
+// that face unbound (white).
+void setMaterialFacesAll(uint8_t     palette_index,
+                         const char* posZ,
+                         const char* negZ,
+                         const char* negY,
+                         const char* posY,
+                         const char* negX,
+                         const char* posX,
+                         float       tiling_factor);
 
 // Install/replace a texture id's resolved atlas sub-rect. Called by
 // TextureManager after each atlas pack so bindings resolve to live UVs; tests
@@ -67,9 +91,16 @@ void clearTiles();
 // Drop all material-face bindings (test/reset helper).
 void clearBindings();
 
-// Resolve a material face to its tile. `bound` is false when the material has no
-// binding for this face OR the bound texture id has no atlas rect yet — both mean
-// "render the white tile" to the builder.
+// Resolve a material face to its tile against a gravity ("down") vector. The
+// face's gravity-relative role (axisrole::roleOf) selects which authored slot —
+// up / down / lateral — supplies the tile, so the up-facing geometric face
+// always shows the `top` binding regardless of which way is "down". `bound` is
+// false when the resolved role has no binding OR the bound texture id has no
+// atlas rect yet — both mean "render the white tile" to the builder.
+FaceTile faceTile(uint8_t palette_index, int faceIndex, const glm::dvec3& gravityDir);
+
+// Convenience overload resolving against the engine-default constant -Y gravity
+// (up = +Y) — the historical Y-up mapping, byte-identical to pre-M16 callers.
 FaceTile faceTile(uint8_t palette_index, int faceIndex);
 
 }  // namespace materialfaces

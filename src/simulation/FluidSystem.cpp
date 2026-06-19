@@ -197,27 +197,48 @@ void FluidSystem::tick(double dt) {
     };
     auto addDelta = [&](const VoxelCoord& c, float d) { delta[c] += d; };
 
-    // Phase A: gravity drain. "Down" is -Y (the engine's Y-up convention —
-    // see the kGravity demos' `vy -= kGravity*dt`); capacity at the
-    // destination is its remaining headroom scaled by its porosity, so 0
-    // blocks entirely and 1 lets the full headroom through.
+    // The 6 neighbor directions in a fixed order — -Y first so the constant -Y
+    // default below reproduces M14's "drain into -Y, then equalize across the 4
+    // XZ neighbors" byte-for-byte (the only downhill direction is -Y and the only
+    // perpendicular ones are ±X/±Z, in this -X,+X,-Z,+Z order).
+    static constexpr std::array<std::array<int64_t, 3>, 6> kDirs6{{
+        {{0, -1, 0}}, {{0, 1, 0}}, {{-1, 0, 0}}, {{1, 0, 0}}, {{0, 0, -1}}, {{0, 0, 1}}}};
+    const double vs = terminal_->voxelSizeM();
+    auto gravityDot = [&](const VoxelCoord& c, const std::array<int64_t, 3>& d) {
+        const glm::dvec3 g = gravity_.gravityAt(chunkmath::voxelCenter(c, vs));
+        return static_cast<double>(d[0]) * g.x + static_cast<double>(d[1]) * g.y +
+               static_cast<double>(d[2]) * g.z;
+    };
+
+    // Phase A: gravity drain. A neighbor is "downhill" when its direction has a
+    // positive component along the gravity vector (dot > 0); capacity at the
+    // destination is its remaining headroom scaled by its porosity, so 0 blocks
+    // entirely and 1 lets the full headroom through. Under constant -Y exactly one
+    // neighbor (-Y) qualifies — identical to the M14 single-drain step. Under a
+    // radial well several neighbors drain so fluid pools toward the center from
+    // any side; under zero-g none do, and Phase B alone equalizes pressure.
     for (const VoxelCoord& c : work) {
-        const float avail = cur(c);
-        if (avail <= 0.0f) continue;
-        const VoxelCoord down{c.x, c.y - 1, c.z};
-        const float capacity = std::max(0.0f, 1.0f - cur(down)) * porosityAt(down);
-        const float move = std::min(avail, capacity);
-        if (move > 0.0f) { addDelta(c, -move); addDelta(down, move); }
+        for (const auto& d : kDirs6) {
+            if (gravityDot(c, d) <= 0.0) continue;
+            const float avail = cur(c);
+            if (avail <= 0.0f) break;
+            const VoxelCoord down{c.x + d[0], c.y + d[1], c.z + d[2]};
+            const float capacity = std::max(0.0f, 1.0f - cur(down)) * porosityAt(down);
+            const float move = std::min(avail, capacity);
+            if (move > 0.0f) { addDelta(c, -move); addDelta(down, move); }
+        }
     }
 
-    // Phase B: lateral equalization (head-driven, the 4 horizontal
-    // neighbors). Moves half the difference so two cells converge rather
-    // than swap outright in one step — an oscillation guard, not a tunable.
-    static constexpr std::array<std::pair<int64_t, int64_t>, 4> kLateral{
-        {{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
+    // Phase B: lateral equalization (head-driven) across neighbors PERPENDICULAR
+    // to gravity (dot == 0). Under constant -Y this is the 4 horizontal neighbors;
+    // under zero-g all 6 directions qualify, so fluid equalizes pressure in every
+    // direction with no preferred axis. Moves half the difference so two cells
+    // converge rather than swap outright in one step — an oscillation guard, not a
+    // tunable.
     for (const VoxelCoord& c : work) {
-        for (const auto& [dx, dz] : kLateral) {
-            const VoxelCoord n{c.x + dx, c.y, c.z + dz};
+        for (const auto& d : kDirs6) {
+            if (gravityDot(c, d) != 0.0) continue;
+            const VoxelCoord n{c.x + d[0], c.y + d[1], c.z + d[2]};
             const float curC = cur(c);
             const float curN = cur(n);
             if (curC <= curN) continue;
@@ -228,10 +249,20 @@ void FluidSystem::tick(double dt) {
         }
     }
 
-    // Commit + fire events, in sorted order, within the per-frame event
-    // budget; overflow carries to next tick via settle()'s carryCells_ insert.
+    // Commit + fire events, in sorted order, within the per-frame event budget;
+    // overflow carries to next tick via settle()'s carryCells_ insert. The commit
+    // set is every cell that received a delta UNION the work set — a downhill
+    // cascade can move fluid to a cell beyond the initial frontier (e.g. draining
+    // along +Y processes cells in ascending order and hands fluid forward several
+    // hops in one pass), and that destination must be committed or the fluid is
+    // lost. Under constant -Y every drain/lateral destination is already in the
+    // frontier (⊆ work), so this set equals `work` and the pass is byte-identical
+    // to M14.
+    std::set<VoxelCoord, VoxelCoordLess> touched(work.begin(), work.end());
+    for (const auto& kv : delta) touched.insert(kv.first);
+
     int eventBudget = tf::kMaxFluidEventsPerFrame;
-    for (const VoxelCoord& c : work) {
+    for (const VoxelCoord& c : touched) {
         auto it = delta.find(c);
         const float newAmount = overlay_.get(c) + (it != delta.end() ? it->second : 0.0f);
         settle(c, newAmount, eventBudget);

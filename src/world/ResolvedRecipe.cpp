@@ -1,5 +1,6 @@
 #include "ResolvedRecipe.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "Chunk.h"
@@ -67,8 +68,23 @@ Voxel sampleDistribution(const ResolvedDistribution& d,
 
 void fillChildChunk(Chunk& chunk, double voxelSizeM, const ResolvedRecipe& recipe,
                     chunkmath::VoxelCoord macroChildMin, int64_t ratio,
-                    uint64_t decompSeed) {
+                    uint64_t decompSeed, const glm::dvec3& gravityDir) {
     const int n = chunk.size();
+
+    // Resolve which macro-grid axis is "vertical" and which end is "down" under
+    // gravity, so the authored bottom/top/side roles land on the gravity-relative
+    // faces (M16 G2, the shared role seam from axisrole::roleOf). Default -Y ⇒
+    // gravity axis Y, down at low-Y, up at high-Y, side on the X/Z faces — exactly
+    // the historical mapping. A degenerate (zero) gravity vector keeps axis Y so
+    // recipes without a gravity policy decompose as before.
+    const double gx = std::abs(gravityDir.x);
+    const double gy = std::abs(gravityDir.y);
+    const double gz = std::abs(gravityDir.z);
+    const double gmax = std::max({gx, gy, gz});
+    const int    gAxis = (gmax <= 1e-12) ? 1 : ((gx == gmax) ? 0 : (gy == gmax ? 1 : 2));
+    const bool   downAtLow = (gravityDir[gAxis] <= 0.0);  // -Y default ⇒ down at index 0
+    const int    latA = (gAxis == 0) ? 1 : 0;             // the two non-vertical axes
+    const int    latB = (gAxis == 2) ? 1 : 2;
     const ChunkCoord cc = chunk.coord();
     const WorldCoord origin = chunk.origin();
     const uint64_t distSeed = voxel_seed_mix(decompSeed, kDistributionSalt);
@@ -107,18 +123,29 @@ void fillChildChunk(Chunk& chunk, double voxelSizeM, const ResolvedRecipe& recip
                     continue;
                 }
 
+                // Distance (in child voxels) inward from the gravity-relative
+                // down face and up face, and nearness to either lateral face —
+                // computed off the resolved gravity axis so the roles follow
+                // "down" (M16 G2). Default -Y ⇒ distDown == my, distUp ==
+                // ratio-1-my, lateral on X/Z: identical to the historical mapping.
+                const int64_t mc[3] = {mx, my, mz};
+                const int64_t distDown = downAtLow ? mc[gAxis] : (ratio - 1 - mc[gAxis]);
+                const int64_t distUp   = downAtLow ? (ratio - 1 - mc[gAxis]) : mc[gAxis];
+                const auto    nearFace = [&](int axis, int depth) {
+                    return mc[axis] < depth || mc[axis] >= ratio - depth;
+                };
+
                 // Overlap order bottom -> side -> top (top wins), per §6.
                 const ResolvedDistribution* dist = &recipe.interior;
                 const std::vector<RecipeParam>* flat = &flatInterior;
-                if (recipe.bottom.present && my < recipe.bottom.depth) {
+                if (recipe.bottom.present && distDown < recipe.bottom.depth) {
                     dist = &recipe.bottom.distribution; flat = &flatBottom;
                 }
                 if (recipe.side.present &&
-                    (mx < recipe.side.depth || mx >= ratio - recipe.side.depth ||
-                     mz < recipe.side.depth || mz >= ratio - recipe.side.depth)) {
+                    (nearFace(latA, recipe.side.depth) || nearFace(latB, recipe.side.depth))) {
                     dist = &recipe.side.distribution; flat = &flatSide;
                 }
-                if (recipe.top.present && my >= ratio - recipe.top.depth) {
+                if (recipe.top.present && distUp < recipe.top.depth) {
                     dist = &recipe.top.distribution; flat = &flatTop;
                 }
 

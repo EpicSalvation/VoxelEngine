@@ -65,7 +65,8 @@ void buildChunkMeshData(const Chunk& chunk,
                         std::vector<MeshVertex>& out_vertices,
                         std::vector<uint32_t>&   out_opaque_indices,
                         std::vector<uint32_t>&   out_translucent_indices,
-                        double                   voxel_size_m) {
+                        double                   voxel_size_m,
+                        const glm::dvec3&        gravity_dir) {
     out_vertices.clear();
     out_opaque_indices.clear();
     out_translucent_indices.clear();
@@ -126,7 +127,7 @@ void buildChunkMeshData(const Chunk& chunk,
                     // sample is white and the color passes through unmodulated —
                     // byte-identical to the pre-texture color-only mesh.
                     const materialfaces::FaceTile ft =
-                        materialfaces::faceTile(palIdx, fi);
+                        materialfaces::faceTile(palIdx, fi, gravity_dir);
                     float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f, span = 0.0f;
                     if (ft.bound) {
                         u0 = ft.tile.u0; v0 = ft.tile.v0;

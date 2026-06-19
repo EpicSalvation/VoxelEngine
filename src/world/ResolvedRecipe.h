@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <glm/glm.hpp>
+
 #include "plugin_api.h"   // MaterialProperties, NoiseFn, FeatureGeneratorFn, RecipeParam
 #include "Recipe.h"       // RecipeParamValue (owning param storage)
 #include "ChunkCoordMath.h"
@@ -79,6 +81,14 @@ struct ResolvedRecipe {
 // along each axis (chunkmath::layerRatio), so the worker can tell which voxels
 // lie on which face without sampling any neighbor (§6/§13). `decompSeed` is the
 // deterministic per-decomposition seed derived from (world_seed, macro coord).
+//
+// `gravityDir` is the "down" vector the top/bottom/side boundary roles are
+// resolved against (M16, G2): the `top` distribution lands on the macro face most
+// opposing gravity, `bottom` on the most-aligned face, and `side` on the lateral
+// faces — so a decomposed crust is radial under a well instead of a flat +Y slab.
+// The default constant -Y reproduces the historical +Y-top / -Y-bottom mapping
+// byte-for-byte.
 void fillChildChunk(Chunk& chunk, double voxelSizeM, const ResolvedRecipe& recipe,
                     chunkmath::VoxelCoord macroChildMin, int64_t ratio,
-                    uint64_t decompSeed);
+                    uint64_t decompSeed,
+                    const glm::dvec3& gravityDir = glm::dvec3(0.0, -1.0, 0.0));

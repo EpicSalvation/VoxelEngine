@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <glm/glm.hpp>
+
 #include "world/Chunk.h"
 
 // Plain interleaved vertex for chunk meshes: position + packed ABGR color +
@@ -53,8 +55,14 @@ struct MeshVertex {
 // world density regardless of voxel size (T5): a face's UV span is
 // voxel_size_m × tiling_factor. The default 1.0 reproduces the per-voxel-equals-
 // one-tile behavior used by the existing single-scale callers and tests.
+//
+// gravity_dir is the "down" vector the per-face tile binding is resolved against
+// (M16 G1): the geometric face most opposing gravity shows the material's `top`
+// tile, so a textured surface follows "up" instead of being painted on +Y. The
+// default constant -Y reproduces the historical Y-up mapping byte-for-byte.
 void buildChunkMeshData(const Chunk& chunk,
                         std::vector<MeshVertex>& out_vertices,
                         std::vector<uint32_t>&   out_opaque_indices,
                         std::vector<uint32_t>&   out_translucent_indices,
-                        double                   voxel_size_m = 1.0);
+                        double                   voxel_size_m = 1.0,
+                        const glm::dvec3&        gravity_dir  = glm::dvec3(0.0, -1.0, 0.0));
