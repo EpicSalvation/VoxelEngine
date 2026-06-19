@@ -17,14 +17,24 @@ World::World(const LayerDef& layer)
 World::World(const LayerConfig& config)
     : width_(0), height_(0), depth_(0)
 {
-    for (const LayerDef& def : config.layers())
+    const std::vector<LayerDef>& defs = config.layers();
+    for (const LayerDef& def : defs)
         layers_.push_back(std::make_unique<Layer>(def));
+
     // The single-layer forwarding API (edit, pick, collision substep scale,
-    // persistence) targets the terminal layer — the one the player modifies.
-    // Configs are ordered coarse→fine, so the terminal layer is not first; fall
-    // back to the first layer for a stack without a terminal layer.
-    for (auto& l : layers_)
-        if (l->mode() == VoxelMode::terminal) { primary_ = l.get(); break; }
+    // persistence) targets the *interactive* layer (M16, L4): the explicitly
+    // declared layer the player modifies, making a mid-stack playspace (the
+    // flying-game config) a first-class choice. LayerConfig has already validated
+    // that at most one layer is flagged.
+    for (size_t i = 0; i < layers_.size(); ++i)
+        if (defs[i].interactive) { primary_ = layers_[i].get(); break; }
+
+    // Fall back to the pre-M16 default when no layer is flagged: the first
+    // terminal layer (configs are ordered coarse→fine, so it is not first), then
+    // the first layer for a stack without a terminal layer.
+    if (!primary_)
+        for (auto& l : layers_)
+            if (l->mode() == VoxelMode::terminal) { primary_ = l.get(); break; }
     if (!primary_ && !layers_.empty())
         primary_ = layers_.front().get();
 }

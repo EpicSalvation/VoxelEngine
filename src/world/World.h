@@ -36,8 +36,9 @@ public:
     explicit World(const LayerDef& layer);
 
     // Multi-layer chunked world (M6): builds one Layer per def in the config,
-    // in config order. The terminal layer is the primary (single-layer-API
-    // target); if there is none, the first layer is.
+    // in config order. The interactive layer (M16, L4 — the def flagged
+    // interactive: true) is the primary (single-layer-API target); when no layer
+    // is flagged it falls back to the first terminal layer, then the first layer.
     explicit World(const LayerConfig& config);
 
     // ── Finite flat-grid API (M1/M2) ──────────────────────────────────────

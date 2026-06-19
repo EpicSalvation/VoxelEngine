@@ -460,6 +460,18 @@ if(TEST_SOURCES)
     target_compile_definitions(voxel-engine-tests PRIVATE
       VOXEL_RECIPE_PLUGIN_PATH="$<TARGET_FILE:recipe-world>")
   endif()
+  # The M16 resolve_noise test loads base-terrain / layered-world to confirm
+  # their generators consume the built-in noise registry through resolve_noise.
+  if(TARGET base-terrain)
+    add_dependencies(voxel-engine-tests base-terrain)
+    target_compile_definitions(voxel-engine-tests PRIVATE
+      VOXEL_BASE_PLUGIN_PATH="$<TARGET_FILE:base-terrain>")
+  endif()
+  if(TARGET layered-world)
+    add_dependencies(voxel-engine-tests layered-world)
+    target_compile_definitions(voxel-engine-tests PRIVATE
+      VOXEL_LAYERED_PLUGIN_PATH="$<TARGET_FILE:layered-world>")
+  endif()
   # The M15 Blockbench import test loads the blockbench plugin to exercise its
   # real .bbmodel importer through the registered ImporterFn.
   if(TARGET blockbench)

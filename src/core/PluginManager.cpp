@@ -46,7 +46,14 @@ void eraseOwned(Vec& vec, PluginId id) {
 }
 }  // namespace
 
-PluginManager::PluginManager() {}
+PluginManager::PluginManager() {
+    // Establish the built-in noise floor at construction (M16, C2): a plugin's
+    // init may call ctx->resolve_noise, and some hosts (the early demos) load
+    // plugins without ever calling Engine::init. Registering here guarantees the
+    // floor exists before any plugin loads; the call is idempotent, so the later
+    // Engine::init / test registerBuiltinNoise() calls are harmless no-ops.
+    registerBuiltinNoise();
+}
 
 PluginManager::~PluginManager() {
     for (const LoadedPlugin& p : loaded_)
@@ -274,8 +281,10 @@ const RegisteredNoise* PluginManager::resolveNoise(const std::string& noise_id) 
 }
 
 void PluginManager::registerBuiltinNoise() {
+    if (builtinNoiseRegistered_) return;  // idempotent — see the constructor
     for (const auto& b : noise::builtins())
         noises_.push_back({b.id, b.fn, nullptr, kBuiltinOwnerId, true});
+    builtinNoiseRegistered_ = true;
 }
 
 void PluginManager::registerBuiltinHandlers() {
@@ -628,6 +637,17 @@ PluginContext PluginManager::buildContext() {
         auto* mgr = static_cast<PluginManager*>(c->engine_data);
         if (mgr->editApplyFn_ && voxel)
             mgr->editApplyFn_(pos, voxel, mgr->editApplyUser_);
+    };
+
+    ctx.resolve_noise = [](PluginContext* c, const char* id) -> NoiseFn {
+        // Consume the noise registry (M16, C2): hand the plugin the winning
+        // NoiseFn for id (plugin override > built-in floor), or nullptr for an
+        // unknown id so it can fail loudly (the §6 contract). Built-ins ignore
+        // user_data, so only the fn pointer crosses back.
+        if (!id) return nullptr;
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        const RegisteredNoise* n = mgr->resolveNoise(id);
+        return n ? n->fn : nullptr;
     };
 
     return ctx;

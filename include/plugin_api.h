@@ -812,6 +812,30 @@ struct PluginContext {
         const char*    side,
         float          tiling_factor
     );
+
+    // -----------------------------------------------------------------------
+    // Noise registry access (M16, C2; docs/ARCHITECTURE.md §6)
+    // -----------------------------------------------------------------------
+
+    // Resolve a noise function by id from the engine's noise registry. This is
+    // the *consume* counterpart to register_noise: an out-of-tree generator pulls
+    // the built-in fbm/worley (or a register_noise-overridden id) for surface
+    // relief instead of hand-rolling its own value noise. Returns the winning
+    // NoiseFn for noise_id — a plugin register_noise of that id overrides the
+    // built-in floor (value/fbm/ridged/worley) — or nullptr when no noise with
+    // that id is registered (the §6 contract: an unknown id resolves to null so
+    // the caller can fail loudly rather than silently mis-generate).
+    //
+    // The built-in noise floor exists from PluginManager construction, so this is
+    // safe to call from a plugin's init even in a host that never calls
+    // Engine::init. Built-in noise ignores its user_data argument, so the returned
+    // fn is meant to be invoked with a null user_data; a noise that needs
+    // per-registration user_data is not resolvable through this bare-NoiseFn
+    // accessor (none of the built-ins do).
+    NoiseFn (*resolve_noise)(
+        PluginContext* ctx,
+        const char*    noise_id
+    );
 };
 
 // ---------------------------------------------------------------------------

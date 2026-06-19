@@ -69,6 +69,11 @@ LayerConfig LayerConfig::parseAndValidate(const std::string& yamlContent) {
         if (node["decompose_to"])
             def.decompose_to = node["decompose_to"].as<std::string>();
 
+        // Explicit interactive-layer selector (M16, L4). Optional; defaults false.
+        // The cross-layer uniqueness rule is enforced after all layers are parsed.
+        if (node["interactive"])
+            def.interactive = node["interactive"].as<bool>();
+
         // Chunk streaming parameters are optional; defaults (set in LayerDef) apply when absent.
         if (node["chunk_size_voxels"]) {
             def.chunk_size_voxels = node["chunk_size_voxels"].as<int>();
@@ -118,6 +123,27 @@ LayerConfig LayerConfig::parseAndValidate(const std::string& yamlContent) {
 
     if (config.layers_.empty())
         throw std::runtime_error("At least one layer must be defined.");
+
+    // Explicit interactive-layer selection (M16, L4): at most one layer may be
+    // flagged interactive: true. Zero is allowed — World then falls back to the
+    // documented default (first terminal layer, then first layer) — but two or
+    // more is ambiguous about which layer the single-layer API targets, so it is
+    // a startup hard error (the §2 rule).
+    {
+        std::vector<std::string> interactive;
+        for (const auto& layer : config.layers_)
+            if (layer.interactive)
+                interactive.push_back(layer.name);
+        if (interactive.size() > 1) {
+            std::string names;
+            for (size_t i = 0; i < interactive.size(); ++i)
+                names += (i ? ", '" : "'") + interactive[i] + "'";
+            throw std::runtime_error(
+                "At most one layer may be marked 'interactive: true'; found " +
+                std::to_string(interactive.size()) + " (" + names +
+                "). The single-layer World API forwards to exactly one layer.");
+        }
+    }
 
     // Sizes must be in strictly descending order; ratios must be whole integers >= 2.
     for (size_t i = 1; i < config.layers_.size(); ++i) {
