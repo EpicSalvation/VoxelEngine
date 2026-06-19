@@ -25,6 +25,7 @@ If you are an AI agent: read this document before modifying any subsystem. The c
 15. [Networking and Multiplayer](#15-networking-and-multiplayer)
 16. [Audio](#16-audio)
 17. [Fluid and Thermal Simulation](#17-fluid-and-thermal-simulation)
+18. [Gravity Provider and Axis-Agnostic Kinematics](#18-gravity-provider-and-axis-agnostic-kinematics)
 
 ---
 
@@ -945,3 +946,33 @@ Heat and fluid originate from **plugin-registered emitters** — `register_heat_
 Both passes obey the §4 determinism contract: they run **end-of-frame**, visit cells in **deterministic sorted-coord order** (no unordered iteration, no `rand`/`time`), and are bounded by `tuning::fluid` / `tuning::thermal` budgets with **overflow carried to the next frame**, so a large flood or heat front spreads across frames instead of stalling one — the `tuning::physics` pattern from M13.
 
 The overlays are **transient**. Durable fluid is the realized *voxels* the `flow` plugin already placed (persisted by §9 with no format change); on load, both fields are re-derived from re-registered emitters and the existing fluid voxels. Heat resets to ambient on load and re-warms from its emitters — acceptable, and the same "state re-establishes from its source" stance the transient `RemovalAccumulator` took (§5). Network replication of the field itself is deferred: the realized fluid voxels already replicate through the M11 edit choke point, so remote clients see the same geometry without the field crossing the wire.
+
+---
+
+## 18. Gravity Provider and Axis-Agnostic Kinematics
+
+**Files:** `src/world/GravityProvider.h`, `src/world/AxisRole.h`, `src/world/VoxelCollision.{h,cpp}`, `src/simulation/FluidSystem.{h,cpp}`, `src/renderer/MaterialFaces.{h,cpp}`, `src/renderer/ChunkMeshData.{h,cpp}`, `src/world/ResolvedRecipe.{h,cpp}`
+
+### Gravity Is a Policy, Not a Baked Force (M16, L7)
+
+Several Phase-1 implementation choices quietly assumed a single privileged "down" axis (−Y): collision grounding hard-coded `axis == 1`, the fluid solver drained into `{x, y−1, z}`, and the M15 textured-face / recipe-boundary code painted the "top" skin on +Y. That narrows the engine toward a Y-up block game even though the README promises flying, planetary, and space configurations. M16 turns the implicit assumption into an explicit, configurable **policy**.
+
+The seam is `GravityProvider::gravityAt(WorldCoord) → dvec3` — a per-position "down" vector, exactly the way authority and interest are policies (§15) rather than engine assumptions. It is a small, copyable value type with three built-in shapes plus a `custom` function-pointer escape hatch:
+
+- **`constant(dir)`** — a fixed axis. The engine default is `constant(-Y)`, so **every existing demo and test is byte-for-byte unchanged**.
+- **`radial(center, strength)`** — "down" is the unit vector toward a body's center; the basis for a per-asteroid gravity well (a player walks around and mines a body from any side).
+- **`zeroG()`** — the zero vector; no privileged direction anywhere.
+
+Gravity may vary **per position** (radial) and **per frame** (a moving body), so consumers query it each step rather than caching a global axis. Nothing on `MaterialProperties` / `Voxel` changes — gravity is never stored on world data.
+
+### The Three Consumers — Reading the Same "Down"
+
+**Collision grounding (L2, `VoxelCollision`).** The swept-AABB resolution is already per-axis symmetric; only the *interpretation* of `grounded` read the axis. It is now derived from "blocked **along** the gravity vector": when a sub-step is blocked on an axis, `grounded` is set iff the movement direction has a positive component along the supplied `gravity_dir` (`sign(d[axis]) * gravity_dir[axis] > 0`). Under the default −Y this is exactly "blocked while moving down"; an alternate fixed axis lets a player stand on a wall; a per-position radial vector lets one walk the +X face of an asteroid; zero gravity makes the product zero, so there is **no grounded concept**. The per-axis `hitX/hitY/hitZ` blocking is untouched — only `grounded` reads gravity.
+
+**Fluid flow (L3, `FluidSystem`).** The Phase-A drain / Phase-B lateral-equalize split is parameterized by the per-cell gravity vector instead of a fixed −Y. A neighbor is a **drain** target when its direction has a positive component along gravity (`dot > 0`); the **lateral** equalization runs across neighbors perpendicular to gravity (`dot == 0`). Under constant −Y exactly one drain neighbor (−Y) and four lateral ones (±X/±Z) qualify — identical to M14. A radial well drains toward the center from several sides at once; under zero-g no neighbor is downhill, so the pass degenerates to pure 6-neighbor pressure equalization. (A downhill cascade can hand fluid forward several hops in one pass, so the commit set is every cell that received a delta, not just the frontier work set — under −Y that set equals the work set, preserving the byte-identical M14 result.)
+
+**Face roles (G1/G2, `axisrole::roleOf`).** The appearance and decomposition tiers author faces by **role** — `up` (top skin), `down` (bottom), `lateral` (side) — and resolve the role of each geometric face against gravity at query time. The mesh builder (`materialfaces::faceTile`) shows a material's `top` tile on whichever geometric face most opposes gravity, so grass renders side-out on an asteroid's +X face; the recipe boundary distribution (`RecipeDesc::BoundaryDesc` via `fillChildChunk`) lands the `top`/`bottom`/`side` distributions on the gravity-relative macro faces, so a decomposed crust is radial rather than a flat +Y slab. Both default to constant −Y (up = +Y), reproducing the M15 Y-up mapping byte-for-byte.
+
+### Dependency Boundaries
+
+`GravityProvider` and `axisrole` are header-only world-tier facilities with no dependencies beyond `glm` / `WorldCoord`, so both the world tier (collision) and the simulation tier (fluid) and the renderer (face roles) read them without a new edge. The gravity vector is **supplied to** the kinematic step / passed to the mesh builder by the host or demo, which owns the `GravityProvider` and queries it — the engine never installs a global gravity singleton, matching the policy stance of §15.

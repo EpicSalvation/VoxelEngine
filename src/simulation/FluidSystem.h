@@ -7,6 +7,7 @@
 #include "simulation/FieldOverlay.h"
 #include "simulation/NeighborWalk.h"
 #include "world/ChunkCoordMath.h"
+#include "world/GravityProvider.h"
 #include "world/Voxel.h"  // Voxel, PlayerId (via plugin_api.h)
 
 class PluginManager;
@@ -66,6 +67,14 @@ public:
 
     bool active() const { return terminal_ != nullptr; }
 
+    // Set the gravity ("down") policy the flow solver drains along (M16, L3).
+    // The default is constant -Y, under which the pass is byte-identical to M14
+    // (drain into -Y, equalize across the 4 XZ neighbors). A radial provider
+    // pools fluid toward a body's center from any side; zero-g degenerates the
+    // drain phase to pure 6-neighbor pressure equalization.
+    void setGravityProvider(const GravityProvider& gravity) { gravity_ = gravity; }
+    const GravityProvider& gravityProvider() const { return gravity_; }
+
     // Chunk-residency transient-state hooks (no §9 format change — durable
     // fluid is the realized voxels; the overlay is re-derived). A host that
     // streams chunks calls these when a chunk becomes resident / evicts.
@@ -123,6 +132,7 @@ private:
     const World&    world_;
     PluginManager&  pm_;
     const Layer*    terminal_ = nullptr;
+    GravityProvider gravity_;  // "down" policy (default constant -Y); M16 L3
 
     FieldOverlay overlay_;
 
