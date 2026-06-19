@@ -50,6 +50,15 @@ struct LayerDef {
     // radius = view_distance_chunks − shell_thickness_chunks, clamped at 0).
     StreamingShape streaming_shape         = StreamingShape::box;
     int            shell_thickness_chunks  = 1;
+
+    // Explicit interactive-layer selector (M16, L4). The single-layer World API
+    // (getVoxel/setVoxel, dirty tracking, persistence, the collision substep
+    // scale, picking) forwards to the layer flagged interactive: true. Optional;
+    // when no layer is flagged, World falls back to the pre-M16 default (the first
+    // terminal layer, then the first layer). At most one layer may be flagged —
+    // LayerConfig hard-errors on two, so a mid-stack playspace is a first-class
+    // declared choice rather than a silent first-in-order pick.
+    bool           interactive            = false;
 };
 
 // Parses and validates a layer stack from a YAML project config file.

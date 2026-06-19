@@ -241,8 +241,10 @@ public:
     // Register the engine's built-in noise set (value/fbm/ridged/worley) as the
     // floor of the noise registry. Built-in entries are owned by the engine
     // (kBuiltinOwnerId) and never torn down by a plugin unload; a plugin
-    // register_noise of the same id overrides a built-in on lookup. Called by
-    // Engine::init() before any plugins are loaded.
+    // register_noise of the same id overrides a built-in on lookup. Called from
+    // the constructor so the floor exists before any plugin's init can call
+    // ctx->resolve_noise (M16, C2); idempotent, so the Engine::init() call and
+    // test call sites that invoke it again are harmless no-ops.
     void registerBuiltinNoise();
 
     // Outbound network-message routing. PluginManager stores the registries only;
@@ -418,6 +420,7 @@ private:
 
     PluginId nextPluginId_ = 1;          // 0 is reserved for kInvalidPluginId
     PluginId currentOwner_ = kInvalidPluginId;  // set around a plugin's init() call
+    bool     builtinNoiseRegistered_ = false;   // guards registerBuiltinNoise (idempotent)
 
     NetworkSendFn        netSendFn_    = nullptr;  // installed by NetworkManager::init
     void*                netSendUser_  = nullptr;

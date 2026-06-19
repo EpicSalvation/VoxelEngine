@@ -19,6 +19,11 @@
 // The LayerGeneratorFn signature carries no voxel size, so each non-1 m
 // generator receives its layer's voxel size through user_data (a pointer to a
 // static double). The terrain generator runs at the implicit 1 m scale.
+//
+// M16 (C2): the shared height field is sampled from the engine's built-in
+// "value" noise, resolved through ctx->resolve_noise at init, rather than a
+// hand-rolled inline copy. All three generators read the same resolved fn, so
+// the coarse/fine agreement decomposition relies on is preserved.
 
 #include "plugin_api.h"
 #include "world/Voxel.h"
@@ -54,42 +59,24 @@ const double kBackdropVoxelSizeM = 2.0;
 constexpr double kBedrockBottom = -8.0;
 constexpr double kBedrockTop    =  0.0;
 
-double latticeValue(int64_t ix, int64_t iz) {
-    uint64_t h = static_cast<uint64_t>(ix) * 0x9E3779B97F4A7C15ull;
-    h ^= static_cast<uint64_t>(iz) * 0xC2B2AE3D27D4EB4Full;
-    h += kSeed;
-    h ^= h >> 30; h *= 0xBF58476D1CE4E5B9ull;
-    h ^= h >> 27; h *= 0x94D049BB133111EBull;
-    h ^= h >> 31;
-    return static_cast<double>(h >> 40) / static_cast<double>(1ull << 24);  // [0,1)
-}
+// The built-in "value" noise, resolved at init (M16, C2). Shared by all three
+// generators so the coarse/fine layers read the same height field. Set before any
+// generator runs; the engine's value noise is pure (no per-call user_data), so a
+// plain function pointer suffices.
+NoiseFn g_valueNoise = nullptr;
 
-double smootherstep(double t) {
-    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
-}
-
-double valueNoise(double x, double z) {
-    double fx = x / kLattice;
-    double fz = z / kLattice;
-    int64_t ix = static_cast<int64_t>(std::floor(fx));
-    int64_t iz = static_cast<int64_t>(std::floor(fz));
-    double tx = smootherstep(fx - static_cast<double>(ix));
-    double tz = smootherstep(fz - static_cast<double>(iz));
-
-    double v00 = latticeValue(ix,     iz);
-    double v10 = latticeValue(ix + 1, iz);
-    double v01 = latticeValue(ix,     iz + 1);
-    double v11 = latticeValue(ix + 1, iz + 1);
-
-    double a = v00 + (v10 - v00) * tx;
-    double b = v01 + (v11 - v01) * tx;
-    return a + (b - a) * tz;  // [0,1)
-}
+// Feature size threaded to the value noise as its "scale" param (world meters).
+const RecipeParam kNoiseParams[1] = {
+    { "scale", RecipeParamKind::Number, kLattice, nullptr },
+};
 
 // Surface height in meters at a world (x, z) column. Pure function of position,
-// shared by the coarse and fine generators so they stay consistent.
+// shared by the coarse and fine generators so they stay consistent. Samples the
+// value field on the y = 0 plane: the heightmap is 2D, the noise facility 3D.
 double terrainHeightM(double worldX, double worldZ) {
-    return static_cast<double>(kBaseHeight) + valueNoise(worldX, worldZ) * kAmplitude;
+    const float n = g_valueNoise(
+        WorldCoord(worldX, 0.0, worldZ), kSeed, kNoiseParams, 1, nullptr);
+    return static_cast<double>(kBaseHeight) + n * kAmplitude;
 }
 
 MaterialProperties solid(uint8_t paletteIndex, float density) {
@@ -188,6 +175,11 @@ void backdrop_generator(WorldCoord chunk_origin, int grid_size, Voxel* out, void
 }  // namespace
 
 VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
+    // Consume the built-in "value" noise (M16, C2); fail loudly on an unknown id.
+    g_valueNoise = ctx->resolve_noise(ctx, "value");
+    if (!g_valueNoise)
+        return 1;
+
     ctx->register_material(ctx, "stone",   solid(kStoneIdx,   2700.0f));
     ctx->register_material(ctx, "grass",   solid(kGrassIdx,   1200.0f));
     ctx->register_material(ctx, "block",   solid(kBlockIdx,   2200.0f));

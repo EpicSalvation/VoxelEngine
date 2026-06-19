@@ -74,6 +74,7 @@ If raw floats are used early in development, precision errors compound silently 
 | Ratio >= 2:1 between adjacent layers | Hard error |
 | Every `composite` layer has a `decompose_to` target that exists | Hard error |
 | Every `composite` layer has a recipe plugin registered | Hard error |
+| At most one layer flagged `interactive: true` (M16, L4) | Hard error, layer names printed |
 | Single-decomposition child grid count exceeds `max_decomposition_voxels` config | Warning, child count printed |
 
 ### Why Hard Errors, Not Warnings
@@ -83,6 +84,10 @@ A composite layer with no recipe, or a non-integer ratio, has no valid runtime f
 ### Child Grid Size Warning
 
 When a 1000:1 ratio is configured, one composite voxel decomposing generates 10⁹ child voxels. This will exhaust memory on any current hardware. The warning prints the actual number so the game designer understands the consequence before hitting it in a playtest.
+
+### Interactive-Layer Selection (M16, L4)
+
+`World`'s single-layer forwarding API — `getVoxel`/`setVoxel`, dirty tracking, persistence, the collision substep scale (`voxelSizeM`), and picking — targets one **primary** layer. Which layer that is is an **explicit config choice**: the layer flagged `interactive: true` in its `LayerDef`. This makes a mid-stack playspace (the README's flying-game config — a small editable box adrift inside a huge immutable backdrop) a first-class declared target rather than a silent first-in-order pick. `LayerConfig` enforces that at most one layer is flagged (a hard error on two; see the table above). When **no** layer is flagged, `World` falls back to the pre-M16 default — the first `terminal` layer in config order, then the first layer for a stack with none — so existing single-interactive-layer configs are unchanged.
 
 ---
 
@@ -236,7 +241,7 @@ Noise is selected **by id**, with a built-in floor and full plugin override, mir
 - A plugin registers its own via `register_noise(noise_id, fn)`, owner-tracked and torn down on unload like every other registry (§8). A plugin registration that collides with a built-in id **overrides** it (the same dispatch rule as importers), so a game can replace `value` wholesale or add a wholly novel `my_warped_simplex`. The built-ins are a floor, not a ceiling — a non-block game can ignore them entirely.
 - A recipe references noise by id; a recipe naming an unregistered noise id (built-in or plugin) is a **startup error, not a silent skip** — the same validation rule as feature generators.
 
-**Reuse across the plugin ABI boundary.** Engine subsystems and in-tree demos call the functions in `src/world/Noise.h` directly (in-tree consumers may reach into `src/`, §12). Out-of-tree plugins, which link zero engine symbols (§12), participate two ways: they **provide** noise through `register_noise`, and they will be able to **consume** built-in/registered noise through a `resolve_noise(ctx, noise_id) -> NoiseFn` accessor on `PluginContext` — the §12 "add a function pointer when a consumer needs it" move, deferred until the first non-recipe consumer (tracked under M16). The deterministic seed helper itself is inline in `plugin_api.h`, so it is usable everywhere with no resolver.
+**Reuse across the plugin ABI boundary.** Engine subsystems and in-tree demos call the functions in `src/world/Noise.h` directly (in-tree consumers may reach into `src/`, §12). Out-of-tree plugins, which link zero engine symbols (§12), participate two ways: they **provide** noise through `register_noise`, and they **consume** built-in/registered noise through `resolve_noise(ctx, noise_id) -> NoiseFn` on `PluginContext` — the §12 "add a function pointer when a consumer needs it" move, landed in M16 (C2) when volumetric generators became the first non-recipe consumer. `resolve_noise` returns the registry's winning fn (a plugin `register_noise` of an id overrides the built-in floor) or `nullptr` for an unknown id, so a consumer fails loudly rather than silently mis-generating. The built-in floor (value/fbm/ridged/worley) is registered at `PluginManager` construction, so the resolver is usable from a plugin's `init` even in a host that never calls `Engine::init`. Built-in noise ignores its `user_data` argument, so the bare-`NoiseFn` accessor cannot carry a per-registration `user_data` (none of the built-ins need one). The in-tree `base-terrain` / `layered-world` generators consume the built-in `value` noise this way rather than a hand-rolled inline copy. The deterministic seed helper itself is inline in `plugin_api.h`, so it is usable everywhere with no resolver.
 
 Noise-id → `NoiseFn` resolution happens at decomposition **job-build time on the main thread**; the resolved pointer is baked into the `DecompositionJob` so `DecompositionWorker` never consults `PluginManager` (§13 boundary).
 
