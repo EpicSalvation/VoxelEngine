@@ -9,23 +9,35 @@
 // noise-perturbed radius of a nearby asteroid — solid above, below, and to every
 // side of empty space, the shape a heightmap cannot express.
 //
-// It is the content half of the "Asteroid belt miner" demo: a dense field of
-// minable bodies in zero ambient gravity, each a roughly-spherical crust of rock
-// with worley-distributed ore veins (richer ore is hardness-costlier, per M8's
-// property-driven removal). Surrounding bodies in every direction is exactly what
-// the camera-centered isotropic `box` StreamingVolume (M16 L1) is for.
+// It is the content half of the "Asteroid belt miner" demo (demos/17): a dense
+// field of minable bodies in zero ambient gravity, each a roughly-spherical crust
+// of rock with worley-distributed ore veins (richer ore is hardness-costlier, per
+// M8's property-driven removal). Surrounding bodies in every direction is exactly
+// what the camera-centered isotropic `box` StreamingVolume (M16 L1) is for.
+//
+// A cascade, not one flat layer (M6). The bodies are presented as a composite
+// chain — coarse `macro` (16 m) and `micro` (4 m) blocks that DECOMPOSE on
+// approach into a 1 m terminal `grid` the player mines. Two solidity tests share
+// one body lattice (asteroid_field.h):
+//   * the COARSE generators (macro/micro) use the noise-free cube-vs-sphere
+//     overlap test `asteroidfield::coarseSolid`, deliberately a conservative
+//     SUPERSET of the fine field so a decomposed body never sprouts holes at a
+//     coarse-cell boundary (the coarse-supersets-fine invariant, ARCHITECTURE §4;
+//     the same trap drill-world's `cellSolid` avoids for a heightmap), and
+//   * the FINE generator (grid) carves the detailed noisy crust + ore veins.
+// Both read the SAME body centers/radii from the shared lattice, so the coarse
+// blocks tightly envelope the fine asteroid they refine into.
 //
 // Determinism (ARCHITECTURE §4): the field is a pure function of world position
 // and a fixed seed — asteroid placement is hashed from the cell index, surface
 // relief and ore veins are sampled from the engine's noise registry at the world
-// point. So a streamed-out chunk regenerates byte-identically, and a coarse macro
-// voxel and its fine decomposition agree because both read the same field.
+// point. So a streamed-out chunk regenerates byte-identically.
 //
 // M16 (C2): surface relief and ore veins are sampled from the built-in `fbm` and
 // `worley` noise resolved through ctx->resolve_noise at init — the new volumetric
 // generators are the first real consumers of the resolve_noise accessor.
 
-#include "plugin_api.h"
+#include "asteroid_field.h"  // shared body lattice (also pulls in plugin_api.h)
 #include "world/Voxel.h"
 
 #include <cmath>
@@ -39,27 +51,13 @@
 
 namespace {
 
-constexpr uint64_t kSeed = 0xA57E401DF1E1Dull;  // "ASTEROID FIELD"
-
-// Space is partitioned into cubic cells; each cell deterministically hosts at most
-// one asteroid. kCellM is the mean body spacing. Body radii are capped well below
-// half a cell (kRadiusMax < kCellM/2) so any asteroid covering a query point has
-// its center within the point's 1-ring of cells — the 3×3×3 neighborhood scanned
-// below is then exact, never missing a body that reaches in from a neighbor cell.
-constexpr double kCellM      = 80.0;
-constexpr double kFillChance = 0.55;  // fraction of cells that host an asteroid
-constexpr double kRadiusMin  = 12.0;
-constexpr double kRadiusMax  = 30.0;
-
-// Surface relief: the body radius is modulated by ±kReliefFrac of fbm, giving a
-// lumpy, non-spherical crust. kReliefFeatM is the relief feature size in meters.
-constexpr double kReliefFrac  = 0.35;
-constexpr double kReliefFeatM = 14.0;
+using asteroidfield::Body;
 
 // Material banding (depth below the noisy surface, in meters).
-constexpr double kCrustM      = 2.5;   // outer rock shell
-constexpr double kOreFeatM    = 9.0;   // worley vein cell size
-constexpr double kOreThresh   = 0.17;  // worley distance below this ⇒ ore vein
+constexpr double kCrustM    = 2.5;   // outer rock shell
+constexpr double kReliefFeatM = 14.0;  // fbm relief feature size
+constexpr double kOreFeatM  = 9.0;   // worley vein cell size
+constexpr double kOreThresh = 0.17;  // worley distance below this ⇒ ore vein
 
 // Palette slots — opaque colours installed in init so bodies don't borrow the
 // default cycling palette's translucent water slot.
@@ -92,77 +90,44 @@ RecipeParam scaleParam(double feature) {
     return { "scale", RecipeParamKind::Number, feature, nullptr };
 }
 
-// Deterministic per-cell seed; chains the header's splitmix mixer over the cell
-// index so neighbouring cells decorrelate.
-uint64_t cellSeed(int64_t cx, int64_t cy, int64_t cz) {
-    uint64_t s = kSeed;
-    s = voxel_seed_mix(s, static_cast<uint64_t>(cx));
-    s = voxel_seed_mix(s, static_cast<uint64_t>(cy));
-    s = voxel_seed_mix(s, static_cast<uint64_t>(cz));
-    return s;
-}
-
 double voxelSizeFrom(void* user_data) {
     return user_data ? *static_cast<const double*>(user_data) : 1.0;
 }
 
-// Signed depth of world point p below the noisy surface of the nearest covering
-// asteroid: > 0 inside the body, ≤ 0 in empty space. Also returns whether the
-// covering body is icy (a deterministic per-body trait) so the surface can be ice.
-// Pure function of p — this is what makes the field deterministic and seamless.
+// Signed depth of world point p below the NOISY surface of the nearest covering
+// asteroid: > 0 inside the body, ≤ 0 in empty space. Also returns whether that
+// body is icy so the surface crust can be ice. This is the detailed (terminal)
+// field — the real, minable silhouette.
 double surfaceDepth(const glm::dvec3& p, bool& outIcy) {
-    const int64_t cx = static_cast<int64_t>(std::floor(p.x / kCellM));
-    const int64_t cy = static_cast<int64_t>(std::floor(p.y / kCellM));
-    const int64_t cz = static_cast<int64_t>(std::floor(p.z / kCellM));
-
     double bestDepth = -1.0;
     outIcy = false;
 
-    for (int64_t dz = -1; dz <= 1; ++dz)
-    for (int64_t dy = -1; dy <= 1; ++dy)
-    for (int64_t dx = -1; dx <= 1; ++dx) {
-        const int64_t gx = cx + dx, gy = cy + dy, gz = cz + dz;
-        uint64_t st = cellSeed(gx, gy, gz);
-        if (voxel_rng_norm(&st) >= static_cast<float>(kFillChance))
-            continue;  // this cell holds no asteroid
-
-        const double jx = voxel_rng_norm(&st);
-        const double jy = voxel_rng_norm(&st);
-        const double jz = voxel_rng_norm(&st);
-        const double rr = voxel_rng_norm(&st);
-        const bool   icy = voxel_rng_norm(&st) < 0.18f;
-
-        const glm::dvec3 center(
-            (static_cast<double>(gx) + jx) * kCellM,
-            (static_cast<double>(gy) + jy) * kCellM,
-            (static_cast<double>(gz) + jz) * kCellM);
-        const double radius = kRadiusMin + rr * (kRadiusMax - kRadiusMin);
-
-        const glm::dvec3 d = p - center;
+    asteroidfield::forEachBody(p, [&](const Body& b) {
+        const glm::dvec3 d = p - b.center;
         const double dist = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
-        if (dist >= radius * (1.0 + kReliefFrac))
-            continue;  // outside even the maximal relief bound — cheap reject
+        if (dist >= b.radius * (1.0 + asteroidfield::kReliefFrac))
+            return;  // outside even the maximal relief bound — cheap reject
 
         // Lumpy crust: perturb the radius by fbm at the world point, seeded per
         // body so adjacent asteroids look different.
         const RecipeParam rp = scaleParam(kReliefFeatM);
-        const float relief = g_fbm(WorldCoord(p), st, &rp, 1, nullptr);
-        const double effR = radius * (1.0 + kReliefFrac * (relief - 0.5) * 2.0);
+        const float relief = g_fbm(WorldCoord(p), b.seed, &rp, 1, nullptr);
+        const double effR =
+            b.radius * (1.0 + asteroidfield::kReliefFrac * (relief - 0.5) * 2.0);
 
         const double depth = effR - dist;
         if (depth > bestDepth) {
             bestDepth = depth;
-            outIcy    = icy;
+            outIcy    = b.icy;
         }
-    }
+    });
     return bestDepth;
 }
 
-// Layer generator: fills a chunk's grid from the radial density field. Voxel size
-// arrives through user_data (a pointer to a static double), the layered-world
-// convention; absent ⇒ the implicit 1 m terminal scale.
-void asteroid_generator(WorldCoord chunk_origin, int grid_size, Voxel* out,
-                        void* user_data) {
+// FINE terminal generator (1 m `grid`): the detailed crust + worley ore veins —
+// the surface the player actually mines. Richer ore is hardness-costlier (M8).
+void fine_generator(WorldCoord chunk_origin, int grid_size, Voxel* out,
+                    void* user_data) {
     const double vs = voxelSizeFrom(user_data);
     const RecipeParam oreParam = scaleParam(kOreFeatM);
 
@@ -183,11 +148,45 @@ void asteroid_generator(WorldCoord chunk_origin, int grid_size, Voxel* out,
         } else if (depth < kCrustM) {
             v.material = icy ? kIce : kRock;        // surface crust
         } else {
-            const float w = g_worley(WorldCoord(p), kSeed, &oreParam, 1, nullptr);
+            const float w = g_worley(WorldCoord(p), asteroidfield::kSeed,
+                                     &oreParam, 1, nullptr);
             v.material = (w < static_cast<float>(kOreThresh)) ? kOre : kRock;
         }
     }
 }
+
+// COARSE composite generator (macro 16 m / micro 4 m): the conservative,
+// noise-free body envelope. A cell is solid when it overlaps any nearby body's
+// maximal-radius sphere — a SUPERSET of the fine field, so each macro voxel fully
+// contains the fine asteroid it decomposes into. Voxel size arrives through
+// user_data (a pointer to a static double), as the DecompositionManager passes a
+// child generator's registered user_data verbatim.
+void coarse_generator(WorldCoord chunk_origin, int grid_size, Voxel* out,
+                      void* user_data) {
+    const double vs = voxelSizeFrom(user_data);
+
+    for (int z = 0; z < grid_size; ++z)
+    for (int y = 0; y < grid_size; ++y)
+    for (int x = 0; x < grid_size; ++x) {
+        const glm::dvec3 c(
+            chunk_origin.value.x + (x + 0.5) * vs,
+            chunk_origin.value.y + (y + 0.5) * vs,
+            chunk_origin.value.z + (z + 0.5) * vs);
+
+        bool icy = false;
+        Voxel& v = out[x + grid_size * (y + grid_size * z)];
+        v = asteroidfield::coarseSolid(c, vs, icy)
+                ? Voxel{ icy ? kIce : kRock }
+                : Voxel::empty();
+    }
+}
+
+// Per-layer voxel sizes handed to the generators as user_data — the
+// DecompositionManager forwards a generator's registered user_data unchanged, and
+// LayerGeneratorFn carries no size of its own (the layered-world convention).
+double g_macroVs = 16.0;
+double g_microVs = 4.0;
+double g_gridVs  = 1.0;
 
 }  // namespace
 
@@ -207,6 +206,12 @@ VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
     ctx->set_palette_color(ctx, kOreIdx,  0xff2fb5e6u);  // amber/gold ore vein
     ctx->set_palette_color(ctx, kIceIdx,  0xffe8d8a8u);  // pale blue-white ice
 
-    ctx->register_layer_generator(ctx, "asteroids", asteroid_generator, nullptr);
+    // The decomposition cascade: macro (16 m composite) → micro (4 m composite)
+    // → grid (1 m terminal). Coarse layers share the conservative envelope; the
+    // terminal layer carves the detailed minable surface. Each generator receives
+    // its layer's voxel size via user_data.
+    ctx->register_layer_generator(ctx, "macro", coarse_generator, &g_macroVs);
+    ctx->register_layer_generator(ctx, "micro", coarse_generator, &g_microVs);
+    ctx->register_layer_generator(ctx, "grid",  fine_generator,   &g_gridVs);
     return 0;
 }

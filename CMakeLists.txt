@@ -407,6 +407,15 @@ foreach(_demo ${_voxel_demo_dirs})
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_FLOATING_PLAYSPACE_PLUGIN_PATH="$<TARGET_FILE:floating-playspace>")
     endif()
+    if(TARGET asteroid-field)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_ASTEROID_FIELD_PLUGIN_PATH="$<TARGET_FILE:asteroid-field>")
+      # The asteroid-belt-miner demo shares the body lattice with the plugin
+      # (asteroid_field.h), so it needs the plugin's dir plus include/ (for the
+      # header-only RNG that header pulls in). Harmless for other demos.
+      target_include_directories(${_demo} PRIVATE
+        include ${CMAKE_CURRENT_SOURCE_DIR}/plugins/asteroid-field)
+    endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)
     if(EXISTS ${_demo_assets})
@@ -449,6 +458,10 @@ if(TEST_SOURCES)
   add_executable(voxel-engine-tests ${TEST_SOURCES})
   target_link_libraries(voxel-engine-tests PRIVATE voxel-engine gtest gtest_main)
   target_include_directories(voxel-engine-tests PRIVATE src)
+  # AsteroidFieldTest.cpp checks the body lattice the asteroid-field plugin and
+  # the demo share (plugins/asteroid-field/asteroid_field.h, header-only).
+  target_include_directories(voxel-engine-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/asteroid-field)
   voxel_set_warnings(voxel-engine-tests)
   if(VOXEL_TEST_PLUGINS)
     add_dependencies(voxel-engine-tests ${VOXEL_TEST_PLUGINS})
