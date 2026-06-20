@@ -369,6 +369,15 @@ cmake --build build
 # Single-config:   ./build/14-flow-and-heat
 # Multi-config:    ./build/Debug/14-flow-and-heat.exe
 
+# Run Beyond blocks (M16): a deliberately non-Minecraft, zero-gravity flythrough.
+# A single finite floating island (empty above, below, and on every side — a shape
+# no heightmap can make) drifts inside a vast, sparse immutable backdrop shell. The
+# island streams as a camera-centered BOX volume and the backdrop as a thin SHELL,
+# each under its own resident-chunk budget (the M16 heterogeneous-budget case). Fly
+# WASD + Space/Shift in any direction — there is no "down" (gravity is zero-g).
+# Single-config:   ./build/16-beyond-blocks
+# Multi-config:    ./build/Debug/16-beyond-blocks.exe
+
 # Run the test suite
 ctest --test-dir build
 ```
@@ -448,6 +457,15 @@ heat field races across the conductive iron floor and barely reaches the rock ha
 Aim at a voxel to read its temperature/fluid amount in the HUD probe. (The tank
 fills over a few seconds — the fluid model has no sink, so the seep is the
 transient; unload/reload `flow` with **0**/**1** to reset and replay it.)
+
+Controls for `16-beyond-blocks`: **WASD** move, **mouse** look, **Space/Shift**
+move up/down, **F** toggles the mouse cursor, **ESC** quits. There is no walk
+mode and no "down" — the world's gravity policy is zero-g, so flight is pure
+6-DOF. Fly around the floating island to watch its camera-centered **box** volume
+keep it resident from any side (above, below, or beside — no vertical bias), then
+look outward to the sparse immutable **shell** backdrop. The HUD reads the active
+gravity policy and each layer's resident-chunk count against its own budget — a
+tiny tight playspace and a vast sparse backdrop streaming side by side.
 
 ---
 
@@ -1094,7 +1112,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] The only generators in-tree today are Y-up heightmaps (`plugins/base-terrain/plugin.cpp:85-96`, `plugins/layered-world/plugin.cpp`) — nothing in the engine forbids volumetric ones, but none ship, so out-of-the-box the engine *looks* like a heightmap engine. The M16 demos supply the first **volumetric** generators (a radial density field for asteroids; a floating playspace for *Beyond blocks*), proving the engine hosts non-heightmap worlds. This is a demo/plugin deliverable — no engine change — and is unblocked by C2's `resolve_noise`. Shipped as two new plugins auto-discovered by the build: `plugins/asteroid-field/plugin.cpp` (a radial density field — space seeded with rocky bodies on a hashed cell lattice, each a noise-perturbed crust with `worley` ore veins, solid above/below/beside empty space with no privileged axis) and `plugins/floating-playspace/plugin.cpp` (a finite floating island — domed `fbm` top over a tapering pointed underside, bounded horizontally so it is an island not a slab, plus a sparse immutable backdrop shell). Both are pure functions of world position + a fixed seed (deterministic regeneration, ARCHITECTURE §4) and consume the built-in `fbm`/`worley`/`value` noise through `resolve_noise` (C2) — the first real consumers of that accessor
 
 *Demos*
-- [ ] **Demo — Beyond blocks:** a deliberately non-Minecraft configuration on the same engine — e.g. a flying game whose only interactive layer is a small box playspace adrift inside a huge immutable backdrop, or a continuous vertical descent that streams with the camera all the way down — demonstrating that with the generalized streaming and axis policy the engine is genuinely multi-purpose, not a block-game with extra layers
+- [x] **Demo — Beyond blocks:** a deliberately non-Minecraft configuration on the same engine — e.g. a flying game whose only interactive layer is a small box playspace adrift inside a huge immutable backdrop, or a continuous vertical descent that streams with the camera all the way down — demonstrating that with the generalized streaming and axis policy the engine is genuinely multi-purpose, not a block-game with extra layers
 - [ ] **Demo — Asteroid belt miner:** the complementary case to *Beyond blocks* — instead of one privileged "down", *many*. A rocketsuit player jets through a dense field of asteroids in zero ambient gravity; each asteroid is a composite voxel that decomposes on approach (M6) into a minable terminal grid, and exerts its **own radial gravity well** so the player can land on, walk around, and mine the surface of a body from any side — the same kinematic body and removal tool from M5/M8, but with "down" pointing at the nearest asteroid's center rather than a fixed axis. Streaming is a camera-centered 3D box with no vertical bias (asteroids surround the player in every direction), and mined-out resource voxels are driven by the M8 property system (richer ores are `hardness`-costlier). Together the two demos show two different ways to escape the block-game mold: *Beyond blocks* removes the gravity axis entirely, this one makes gravity **local and many-bodied**
 
 **M17 — Polish and Release**
