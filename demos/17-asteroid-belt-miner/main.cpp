@@ -92,6 +92,13 @@ const glm::dvec3 kPlayerHalf(0.4, 0.4, 0.4);  // isotropic suit — no canonical
 
 constexpr uint64_t kWorldSeed = 0xA57E401DF1E1Dull;  // matches the field seed
 
+// Valuable-mineral identity. The asteroid-field plugin paints worley ore veins
+// into palette slot 31 (its kOreIdx; rock=30, ice=32) — the only valuable, and
+// hardness-costliest, material in the field. The HUD's "minerals" tracker counts
+// mined-out voxels carrying this palette index, so it never miscounts plain rock
+// or ice as ore. Kept in sync with plugins/asteroid-field/plugin.cpp by value.
+constexpr uint8_t kOrePaletteIdx = 31;
+
 // The asteroid cascade is dense in 3D, so far clip and FOV match the renderer's
 // 60° vertical FOV. 2 km comfortably frames the resident box.
 constexpr float  kFarClipM = 2000.0f;
@@ -298,6 +305,9 @@ layers:
     // Held-to-mine accumulator for grid edits (M8 property-driven removal).
     sim::RemovalAccumulator remover;
 
+    // Running tally of valuable ore voxels mined this session (see kOrePaletteIdx).
+    int mineralsMined = 0;
+
     // ── Camera / player ───────────────────────────────────────────────────────
     // Start in open space looking toward the origin cell, where the field seed
     // reliably places bodies to jet toward.
@@ -464,6 +474,7 @@ layers:
                 const WorldCoord tgt = chunkmath::voxelCenter(hit.voxel, grid->voxelSizeM());
                 const Voxel target = world.getVoxel(tgt);
                 if (remover.accrue(hit.voxel, target.material.hardness, kToolPower, dt)) {
+                    if (target.material.palette_index == kOrePaletteIdx) ++mineralsMined;
                     world.setVoxel(tgt, Voxel::empty());
                     remeshGridChunk(hit.voxel);
                     remover.reset();
@@ -496,13 +507,13 @@ layers:
             const int gridChunks = static_cast<int>(grid->chunks().size());
             const int inFlight = static_cast<int>(decompMgr.inFlight());
 
-            char hud[256];
+            char hud[288];
             std::snprintf(hud, sizeof(hud),
-                "%s | %s | %s | decomp macro=%d micro=%d | grid=%d | in-flight=%d | LMB mine",
+                "%s | %s | %s | decomp macro=%d micro=%d | grid=%d | in-flight=%d | minerals=%d | LMB mine",
                 suitMode ? "SUIT" : "JET",
                 downStr,
                 suitMode ? (grounded ? "grounded" : "airborne") : "free-flight",
-                macroD, microD, gridChunks, inFlight);
+                macroD, microD, gridChunks, inFlight, mineralsMined);
             renderer.setHudText({std::string(hud)});
         }
 

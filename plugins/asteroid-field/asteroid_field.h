@@ -37,10 +37,20 @@ constexpr uint64_t kSeed = 0xA57E401DF1E1Dull;  // "ASTEROID FIELD"
 // point has its center within the point's 1-ring of cells — the 3×3×3
 // neighborhood scanned below is then exact, never missing a body reaching in
 // from a neighbor cell.
-constexpr double kCellM      = 80.0;
+constexpr double kCellM      = 160.0;
 constexpr double kFillChance = 0.55;  // fraction of cells that host an asteroid
 constexpr double kRadiusMin  = 12.0;
 constexpr double kRadiusMax  = 30.0;
+
+// Per-cell jitter amplitude (fraction of a cell). A body sits at the cell center
+// ± kJitterFrac/2 of a cell along each axis, NOT anywhere in the cell — full-cell
+// jitter would let two neighbours both drift to their shared boundary and end up
+// nearly touching no matter how large kCellM is. Bounding the jitter guarantees a
+// minimum centre spacing of kCellM·(1 − kJitterFrac) between axis-adjacent bodies
+// (160·0.6 = 96 m here), comfortably clear of the 2·kRadiusMax·(1+kReliefFrac) ≈
+// 81 m worst-case sum of two maximal surface radii — so the belt reads as
+// distinct, separated rocks rather than a fused clump.
+constexpr double kJitterFrac = 0.40;
 
 // Surface relief: the detailed (terminal) crust modulates the body radius by
 // ±kReliefFrac of fbm. The maximal possible surface radius is therefore
@@ -82,9 +92,15 @@ inline bool bodyInCell(int64_t gx, int64_t gy, int64_t gz, Body& out) {
     const double jz = voxel_rng_norm(&st);
     const double rr = voxel_rng_norm(&st);
     out.icy    = voxel_rng_norm(&st) < 0.18f;
-    out.center = glm::dvec3((static_cast<double>(gx) + jx) * kCellM,
-                            (static_cast<double>(gy) + jy) * kCellM,
-                            (static_cast<double>(gz) + jz) * kCellM);
+    // Centre the draw in the cell and damp it to ±kJitterFrac/2 so neighbours keep
+    // a guaranteed gap (see kJitterFrac). The five draws above are unchanged, so
+    // the field's draw-order contract still holds.
+    const double cjx = 0.5 + (jx - 0.5) * kJitterFrac;
+    const double cjy = 0.5 + (jy - 0.5) * kJitterFrac;
+    const double cjz = 0.5 + (jz - 0.5) * kJitterFrac;
+    out.center = glm::dvec3((static_cast<double>(gx) + cjx) * kCellM,
+                            (static_cast<double>(gy) + cjy) * kCellM,
+                            (static_cast<double>(gz) + cjz) * kCellM);
     out.radius = kRadiusMin + rr * (kRadiusMax - kRadiusMin);
     out.seed   = st;  // post-draw state — the relief-noise seed for this body
     return true;

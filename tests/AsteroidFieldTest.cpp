@@ -89,7 +89,7 @@ TEST(AsteroidField, NearestCenterReturnsTheActualNearestBody) {
 }
 
 TEST(AsteroidField, CoarseEnvelopeSupersetsTheFineField) {
-    // Densely sample a 256 m cube spanning several body cells (cell size 80 m). At
+    // Densely sample a 256 m cube spanning several body cells (cell size 160 m). At
     // every point the (worst-case) fine field could mark solid, the 1 m grid, 4 m
     // micro, AND 16 m macro voxels CONTAINING it must all be coarse-solid — the
     // cascade decomposes macro→micro→grid, so a gap at any level orphans the fine
