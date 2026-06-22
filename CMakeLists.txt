@@ -39,6 +39,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(bgfx_cmake)
 
+# Raise bgfx's static buffer-handle caps above the stock 4096. These are
+# compile-time constants inside bgfx (BGFX_CONFIG_MAX_*; the matching Caps::Limits
+# fields are read-only and there is no bgfx::Init knob), so they must be defined on
+# the bgfx target itself. The asteroid-belt miner (demos/17) decomposes solid
+# bodies into a deep 1 m grid; at large approach radii its peak resident non-empty
+# chunk count — each chunk costs one static vertex + one static index buffer —
+# exceeds 4096, which would otherwise exhaust the pools and drop geometry.
+target_compile_definitions(bgfx PRIVATE
+  BGFX_CONFIG_MAX_VERTEX_BUFFERS=16384
+  BGFX_CONFIG_MAX_INDEX_BUFFERS=16384)
+
 # GLM — math library required by WorldCoord (dvec3 / vec3)
 FetchContent_Declare(
   glm

@@ -97,6 +97,15 @@ LayerConfig LayerConfig::parseAndValidate(const std::string& yamlContent) {
                     std::to_string(def.resident_chunk_budget) + "). Use 0 for unlimited.");
         }
 
+        if (node["decompose_distance_m"]) {
+            const double d = node["decompose_distance_m"].as<double>();
+            if (d < 0.0)
+                throw std::runtime_error(
+                    "Layer '" + def.name + "': decompose_distance_m must be >= 0 (got " +
+                    std::to_string(d) + ").");
+            def.decompose_distance_m = d;
+        }
+
         // Streaming volume (M16, L1). Optional nested map; the default box keeps
         // existing configs byte-for-byte unchanged. The volume radius is taken
         // from view_distance_chunks (above); only the shape and the shell band

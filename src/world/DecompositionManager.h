@@ -149,6 +149,10 @@ private:
         Layer*             childLayer; // its direct child (owned by World)
         int64_t            ratio;      // child voxels per parent voxel edge
         int                parentIdx;  // index in composites_ of the coarser composite, or -1
+        // Per-layer decompose trigger radius in metres, cached from
+        // LayerDef::decompose_distance_m. 0 means "unset" — the manager then uses
+        // the approachRadiusM passed to tick(), preserving single-radius behaviour.
+        double             decomposeRadiusM = 0.0;
         DecompositionState state;
         // Per-layer caches computed once at construction (after plugin load, so
         // every recipe is already registered — late recipe registration is not

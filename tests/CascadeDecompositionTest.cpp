@@ -256,6 +256,71 @@ TEST(CascadeDecompositionTest, CascadeDecomposesAllLayersInOrder) {
         << "terrain chunks must be resident only after full ancestor chain decomposed";
 }
 
+// Per-layer decompose_distance_m: each composite layer triggers on its OWN radius,
+// so a coarse step can fire far out while a finer step only fires up close. Build
+// the same chain with continental's radius huge (decompose everything resident) and
+// local's tiny (cap the cascade depth so the test stays fast), and vary ONLY the
+// regional radius. The number of regional voxels that decompose must track the
+// regional radius — proving the finer step honours its own distance independent of
+// the coarse one (the decoupling the asteroid demo's micro/grid split relies on).
+static std::string perLayerYaml(double regionalRadiusM) {
+    return std::string(R"(
+layers:
+  - name: continental
+    voxel_size_m: 8.0
+    mode: composite
+    decompose_to: regional
+    chunk_size_voxels: 1
+    view_distance_chunks: 1
+    decompose_distance_m: 40.0
+  - name: regional
+    voxel_size_m: 4.0
+    mode: composite
+    decompose_to: local
+    chunk_size_voxels: 1
+    view_distance_chunks: 8
+    decompose_distance_m: )") + std::to_string(regionalRadiusM) + R"(
+  - name: local
+    voxel_size_m: 2.0
+    mode: composite
+    decompose_to: terrain
+    chunk_size_voxels: 1
+    view_distance_chunks: 8
+    decompose_distance_m: 0.5
+  - name: terrain
+    voxel_size_m: 1.0
+    mode: terminal
+    chunk_size_voxels: 1
+    view_distance_chunks: 8
+)";
+}
+
+TEST(CascadeDecompositionTest, PerLayerDecomposeDistanceDecouplesSteps) {
+    auto regionalDecomposedFor = [](double regionalRadiusM) {
+        auto cfg = LayerConfig::loadFromString(perLayerYaml(regionalRadiusM));
+        World world(cfg);
+        PluginManager pm;
+        pm.wireInPlugin(solidPluginInit);
+        DecompositionManager mgr(world, pm, cfg, 0xC0FFEEull, 2);
+        const WorldCoord cam(4.0, 4.0, 4.0);
+        // Drain to quiescence a few times so the full continental→regional cascade
+        // settles. The fallback radius passed to tick() is unused — every composite
+        // layer here sets its own decompose_distance_m.
+        for (int i = 0; i < 5; ++i)
+            drainUntilDone(mgr, world, cam, /*fallback=*/1.0);
+        return mgr.decomposedCount("regional");
+    };
+
+    const size_t few  = regionalDecomposedFor(3.0);   // only voxels right by the camera
+    const size_t many = regionalDecomposedFor(40.0);  // every resident regional voxel
+
+    EXPECT_GT(few, 0u)
+        << "the regional voxel under the camera must still decompose at a small radius";
+    EXPECT_LT(few, many)
+        << "a smaller regional radius must decompose strictly fewer regional voxels — "
+           "the finer step is gated by its own decompose_distance_m, not continental's";
+}
+
 TEST(CascadeDecompositionTest, TerminalVoxelResidentOnlyAfterFullChainDecomposed) {
     // Stronger version: assert that the terrain layer has zero chunks UNTIL the
     // full continental→regional→local chain has decomposed.

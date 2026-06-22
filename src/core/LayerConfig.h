@@ -43,6 +43,18 @@ struct LayerDef {
     // and dirty (player-edited) chunks are always pinned regardless of the cap.
     int resident_chunk_budget = 0;
 
+    // Per-layer decompose trigger distance in metres (the macro→child cascade
+    // follow-up). A composite layer's macro voxels decompose into their child layer
+    // once the camera is within this distance of the macro AABB surface. When unset,
+    // the manager falls back to the single approachRadiusM passed to
+    // DecompositionManager::tick(), so every config that omits it keeps the
+    // pre-existing single-radius behaviour byte-for-byte. Setting it per layer
+    // DECOUPLES the cascade steps: a deep stack can reveal its coarse child far out
+    // (a large value on the coarse layer) yet only build its fine, expensive child
+    // up close (a small value on the finer composite layer) — e.g. an asteroid's
+    // 4 m silhouette at 280 m but its 1 m mineable grid only within 90 m.
+    std::optional<double> decompose_distance_m;
+
     // Camera-centered streaming volume shape and radii (M16, L1). Optional in the
     // config; the default box reproduces the pre-M16 footprint, so existing
     // configs are byte-for-byte unchanged. The volume radius is view_distance_chunks;

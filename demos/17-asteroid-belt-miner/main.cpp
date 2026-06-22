@@ -75,7 +75,19 @@
 
 namespace {
 
-constexpr double kApproachRadiusM = 44.0;   // decompose when within this range
+// Fallback decompose radius for any composite layer that does NOT set its own
+// decompose_distance_m. Both composite layers below specify one (macro = 280 m,
+// micro = 90 m — see the LayerConfig), so this value is unused in practice; it is
+// kept as the tick() argument for layers that might omit a per-layer radius.
+constexpr double kApproachRadiusM = 120.0;
+// The cascade steps are now DECOUPLED per layer (decompose_distance_m). The coarse
+// macro→micro step fires far out (280 m) so an asteroid's 4 m silhouette takes
+// shape ~4 s before arrival, while the expensive micro→grid step fires only up
+// close (90 m) so the 1 m mineable grid — the only layer that meaningfully spends
+// the renderer's static-buffer handles (empty space meshes to nothing) — stays
+// bounded. The grid handle peak (bgfx's static-buffer cap is raised above its 4096
+// default via BGFX_CONFIG_MAX_* in CMakeLists.txt) is governed by the SMALL micro
+// radius, not the large macro one.
 constexpr double kReachM          = 8.0;    // voxel-pick reach in metres
 constexpr float  kToolPower       = 4.0f;   // dig speed (work-units/s)
 constexpr float  kFlySpeed        = 70.0f;  // jet free-flight speed
@@ -206,6 +218,29 @@ int main() {
     // Every layer streams as a BOX (M16 L1) — no vertical bias, because asteroids
     // surround the player in 3D. The root (macro) box is what makes "fly above the
     // field and it stays resident" work where the old Y-band would have emptied.
+    //
+    // The two cascade steps fire at DECOUPLED distances (decompose_distance_m), so a
+    // body refines coarse→fine in legible stages instead of all at once up close:
+    //   macro→micro at 280 m — the 4 m silhouette takes shape ~4 s out (70 m/s jet)
+    //   micro→grid  at  90 m — the 1 m mineable grid forms only near the player
+    //
+    // View distances / budgets are sized to the actual cost model, not RAM. Empty
+    // space meshes to nothing (rebuildMesh drops all-air chunks), so the coarse
+    // layers reach FAR cheaply: macro resolves crude 16 m blobs out to 7·64 = 448 m
+    // (> the 280 m macro radius, so macros are resident before they decompose).
+    // CRITICAL coupling: micro's view distance (20·16 = 320 m) must EXCEED the macro
+    // radius (280 m) — otherwise micro chunks created by macro decomposition would be
+    // evicted inside the macro bubble and instantly re-decompose (thrash). micro is
+    // non-root, so a large view distance only delays its eviction; it loads nothing.
+    //
+    // resident_chunk_budget caps CPU-side chunk count (~1.5 KB each — where the spare
+    // hundreds of MB go). The renderer's static-buffer cap (raised above bgfx's 4096
+    // default via BGFX_CONFIG_MAX_* in CMakeLists.txt) is spent almost entirely on
+    // non-empty GRID chunks, now bounded by the SMALL 90 m micro radius. grid's 6144
+    // budget is the real shedding mechanism behind the player: inside the 90 m bubble
+    // grid is pinned (eviction there would just re-decompose), and the farthest grids
+    // beyond it are re-atomized back to 4 m blocks once the resident set exceeds the
+    // budget — so memory hovers near the budget rather than growing to micro's range.
     LayerConfig cfg = [] {
         try {
             return LayerConfig::loadFromString(R"(
@@ -215,8 +250,9 @@ layers:
     mode: composite
     decompose_to: micro
     chunk_size_voxels: 4
-    view_distance_chunks: 3
-    resident_chunk_budget: 256
+    view_distance_chunks: 7
+    resident_chunk_budget: 3500
+    decompose_distance_m: 280.0
     streaming_volume:
       shape: box
 
@@ -225,8 +261,9 @@ layers:
     mode: composite
     decompose_to: grid
     chunk_size_voxels: 4
-    view_distance_chunks: 4
-    resident_chunk_budget: 768
+    view_distance_chunks: 20
+    resident_chunk_budget: 4096
+    decompose_distance_m: 90.0
     streaming_volume:
       shape: box
 
@@ -235,8 +272,8 @@ layers:
     mode: terminal
     interactive: true
     chunk_size_voxels: 4
-    view_distance_chunks: 6
-    resident_chunk_budget: 2048
+    view_distance_chunks: 10
+    resident_chunk_budget: 6144
     streaming_volume:
       shape: box
 )");
@@ -449,8 +486,8 @@ layers:
 
         // ── DecompositionManager tick ─────────────────────────────────────────
         auto diffs = decompMgr.tick(camPos, kApproachRadiusM,
-                                    /*loadPerFrame=*/32, /*decompPerFrame=*/128,
-                                    /*applyPerFrame=*/16);
+                                    /*loadPerFrame=*/64, /*decompPerFrame=*/256,
+                                    /*applyPerFrame=*/32);
         applyDiffs(diffs, world, meshStores);
 
         // Drop grid meshes whose chunk left the resident set (cascade-evicted).

@@ -64,6 +64,7 @@ DecompositionManager::DecompositionManager(World& world, PluginManager& pm,
         info.childLayer = childLyr;
         info.ratio     = chunkmath::layerRatio(layer->voxelSizeM(), childLyr->voxelSizeM());
         info.parentIdx = -1;  // set below once all are added
+        info.decomposeRadiusM = def.decompose_distance_m.value_or(0.0);
         compositeIdx_[def.name] = composites_.size();
         composites_.push_back(std::move(info));
     }
@@ -343,7 +344,11 @@ void DecompositionManager::enforceLayerBudget(size_t ci, ChunkCoord camChunkComp
                                                std::vector<LayerTickDiff>& diffs) {
     CompositeLayerInfo& info = composites_[ci];
     Layer& layer = *info.layer;
-    const double radiusSq = approachRadiusM * approachRadiusM;
+    // This layer's own decompose radius (its macros decompose, and its children are
+    // approach-pinned, within it); falls back to the tick-wide radius when unset.
+    const double effRadius = info.decomposeRadiusM > 0.0 ? info.decomposeRadiusM
+                                                         : approachRadiusM;
+    const double radiusSq = effRadius * effRadius;
     const int n = layer.chunkSizeVoxels();
 
     const LayerDef* def = config_.findLayer(layer.name());
@@ -663,13 +668,15 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
                 const chunkmath::VoxelCoord parentMacro = chunkmath::childToParentVoxel(
                     chunkmath::chunkLocalToVoxel(cc, 0, 0, 0, n), parent.ratio);
                 if (parent.state.isDecomposed(parentMacro)) {
-                    // Pin while the parent macro is still inside the approach
-                    // radius: collapsing it would just re-trigger decomposition
-                    // next tick (decompose/collapse thrash when a child layer's
-                    // eviction radius is smaller than the approach radius).
+                    // Pin while the parent macro is still inside ITS layer's
+                    // decompose radius: collapsing it would just re-trigger
+                    // decomposition next tick (decompose/collapse thrash when a
+                    // child layer's eviction radius is smaller than the radius that
+                    // decomposed the parent).
+                    const double parentRadius = parent.decomposeRadiusM > 0.0
+                                              ? parent.decomposeRadiusM : approachRadiusM;
                     if (macroSurfaceDistSq(parentMacro, parent.layer->voxelSizeM(),
-                                           cameraPos) >
-                        approachRadiusM * approachRadiusM) {
+                                           cameraPos) > parentRadius * parentRadius) {
                         reatomize(static_cast<size_t>(info.parentIdx), parentMacro,
                                   cameraPos, /*force=*/false, diffs);
                     }
@@ -712,8 +719,7 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
     //    enqueued NEAREST-FIRST so the block in front of the player never waits
     //    behind peripheral work. A fine layer's macro is only eligible once its
     //    parent macro is decomposed (the chain requirement).
-    if (decompPerFrame > 0 && approachRadiusM > 0.0) {
-        const double radiusSq = approachRadiusM * approachRadiusM;
+    if (decompPerFrame > 0) {
         struct Candidate { double distSq; size_t ci; chunkmath::VoxelCoord macro; };
         std::vector<Candidate> candidates;
 
@@ -722,6 +728,14 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
             Layer& layer = *info.layer;
             const double voxelSize = layer.voxelSizeM();
             const int    n         = layer.chunkSizeVoxels();
+
+            // Each composite layer triggers on its OWN decompose radius (so a coarse
+            // layer can reveal its child far out while a finer layer only refines up
+            // close); falls back to the tick-wide radius when the layer omits one.
+            const double effRadius = info.decomposeRadiusM > 0.0 ? info.decomposeRadiusM
+                                                                 : approachRadiusM;
+            if (effRadius <= 0.0) continue;
+            const double radiusSq = effRadius * effRadius;
 
             for (const auto& kv : layer.chunks()) {
                 if (chunkSurfaceDistSq(kv.first, voxelSize, n, cameraPos) > radiusSq)
