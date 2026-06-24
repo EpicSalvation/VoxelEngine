@@ -1164,8 +1164,35 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [ ] Make sure the engine has a name.
 - [ ] 1.0 tag
 
-**Post-1.0 — Planned for 1.1**
-- [ ] **Dedicated-server mode (sanity-check F2):** authority without a local player — a headless server that owns the world and serves connected clients, vs. the current host-as-authority-only model (M11). Important for any multiplayer game that needs persistent worlds or higher player counts
+**Post-1.0 — Deferred Features**
+
+Items below were evaluated during the M17 pre-release sanity check (`docs/m17-release-sanity-check.md`) and consciously deferred — not overlooked. Prioritized roughly by expected impact.
+
+*Planned for 1.1*
+- [ ] **Dedicated-server mode (F2):** authority without a local player — a headless server that owns the world and serves connected clients, vs. the current host-as-authority-only model (M11). Important for any multiplayer game that needs persistent worlds or higher player counts
+- [ ] **Auth / encryption / anti-tamper (F1):** M11 networking is explicitly unauthenticated UDP by design. A production multiplayer game will need at minimum session auth and transport encryption
+
+*Rendering*
+- [ ] **Time-of-day / directional sun (A3):** sun direction + ambient color as a renderer policy, mirroring the fog policy and §18 gravity policy. Couples to the voxel lighting model (A1) landing in M17
+- [ ] **Particle / transient-sprite seam (A4):** a renderer path for short-lived points/quads (break debris, dust, splashes). Today "falling debris" is whole voxels via the M13 plugin
+- [ ] **Texture animation + mipmapping/filtering (A6):** animated atlas frames (flowing lava/water), mip/aniso filtering on the atlas. Currently static, point-sampled (M15)
+- [ ] **Greedy meshing (A8):** merge coplanar same-material faces into larger quads to reduce vertex count. Standard voxel optimization — evaluate if M17 profiling shows mesh cost dominates
+- [ ] **Anti-aliasing / post-processing seam (A9):** MSAA toggle, tonemap hook, and a general post-processing insertion point
+
+*Tooling & developer experience*
+- [ ] **Asset hot-reload (D4):** live-reload shaders, textures, and plugin libraries during development without restarting the engine
+
+*Content & assets*
+- [ ] **Scripting tier (E2):** Lua/JS/Wren bindings for non-C++ modders. The flat C++ plugin ABI is a deliberate AI-agent-friendly choice for 1.0; a scripting bridge would widen the audience post-release
+- [ ] **Unified asset/resource manager (E3):** textures, audio, `.vox`, `.bbmodel` each load ad-hoc per subsystem today. A centralized loader could deduplicate and manage lifetimes — evaluate whether the plugin model makes this unnecessary
+
+*Platform & distribution*
+- [ ] **Asset bundling / packaging (G1):** how a shipped game bundles its plugins + assets for distribution. Dependency of M18 templates — flag when M18 lands
+- [ ] **Additional rendering backends (G2):** D3D12/DXIL, Wayland-native, WGSL. Already recorded in the architecture gap audit (G9)
+
+*Non-goals (recorded for posterity)*
+- **Dynamic rigid-body physics (B2):** tumbling debris, thrown objects beyond axis-resolved AABB — game/plugin concern, not engine-tier
+- **Weather / wind fields (B5):** game/plugin policy, not an engine mechanism
 
 ---
 
