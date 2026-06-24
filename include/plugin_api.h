@@ -25,6 +25,7 @@ struct MaterialProperties {
     float   thermal_conductivity = 0.0f;  // W/(m·K); drives heat and fire spread
     float   porosity             = 0.0f;  // 0.0–1.0; fraction permeable to fluid
     float   hardness             = 0.0f;  // relative resistance to removal/destruction
+    float   light_emission       = 0.0f;  // [0,1] emitted block light; drives LightingSystem (M17 §17)
     uint8_t palette_index        = 0;     // index into the 256-entry visual palette (.vox compat)
     uint8_t _pad[3]              = {};    // explicit padding — keeps memcmp-based determinism checks
                                           // valid across GCC optimization levels. Must stay zero;
@@ -271,6 +272,27 @@ struct ThermalFieldEvent {
     float         temperature = 0.0f;
     FieldCrossing crossing    = FieldCrossing::Rising;
 };
+
+// Flat-POD payload for on_lighting_event (M17, docs/ARCHITECTURE.md §17/§8).
+//
+// Describes a single sparse lighting-overlay cell crossing into (Rising) or
+// out of (Falling) the active set — i.e. away from or back to
+// tuning::lighting::kAmbientBrightness. Same ABI rule as ThermalFieldEvent.
+struct LightingEvent {
+    WorldCoord    position;
+    int64_t       voxel_x = 0;
+    int64_t       voxel_y = 0;
+    int64_t       voxel_z = 0;
+    float         brightness = 0.0f;
+    FieldCrossing crossing   = FieldCrossing::Rising;
+};
+
+// Called when LightingSystem finds a lighting-overlay cell crossing into or
+// out of the active set. Same pointer-lifetime rule as OnFluidEventFn.
+using OnLightingEventFn = void(*)(
+    const LightingEvent* event,
+    void*                user_data
+);
 
 // Called when FluidSystem finds a fluid-overlay cell crossing a saturation or
 // drain threshold. The pointer is valid only for the duration of the call —
@@ -571,6 +593,27 @@ struct PluginContext {
         WorldCoord     pos,
         float          rate,
         const char*    fluid_material
+    );
+
+    // -----------------------------------------------------------------------
+    // Lighting hooks (M17, ARCHITECTURE §17)
+    // -----------------------------------------------------------------------
+
+    void (*register_on_lighting_event)(
+        PluginContext*      ctx,
+        OnLightingEventFn   fn,
+        void*               user_data
+    );
+
+    // Register a point light source: the engine injects `brightness` into the
+    // lighting overlay at pos and propagates it each tick. Owner-tracked;
+    // torn down on plugin unload. For material-intrinsic emission, set
+    // light_emission on the MaterialProperties instead — the LightingSystem
+    // discovers emitting voxels automatically from the resident voxel grid.
+    void (*register_light_source)(
+        PluginContext* ctx,
+        WorldCoord     pos,
+        float          brightness
     );
 
     void (*register_on_chunk_created)(

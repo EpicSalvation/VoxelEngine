@@ -66,7 +66,9 @@ void buildChunkMeshData(const Chunk& chunk,
                         std::vector<uint32_t>&   out_opaque_indices,
                         std::vector<uint32_t>&   out_translucent_indices,
                         double                   voxel_size_m,
-                        const glm::dvec3&        gravity_dir) {
+                        const glm::dvec3&        gravity_dir,
+                        const LightQueryFn&      light_query,
+                        ChunkCoord               chunk_coord) {
     out_vertices.clear();
     out_opaque_indices.clear();
     out_translucent_indices.clear();
@@ -111,12 +113,23 @@ void buildChunkMeshData(const Chunk& chunk,
                             continue;
                     }
 
-                    // Bake directional shading into opaque face colors so flat-
-                    // colored terrain reads its shape (top brightest, sides/bottom
-                    // darker). Translucent media (water) keep a uniform color —
-                    // per-face shading on a flat fluid surface looks wrong.
+                    // Compute per-face brightness. Start with the fixed directional
+                    // shade (top brightest, sides/bottom darker). When a lighting
+                    // overlay is attached, multiply by the light level at the air
+                    // voxel the face is exposed to (or the voxel itself for borders).
+                    float shade = translucent ? 1.0f : f.shade;
+                    if (light_query) {
+                        const int cs = chunk.size();
+                        chunkmath::VoxelCoord lightVc;
+                        if (inBounds(n, nx, ny, nz))
+                            lightVc = chunkmath::chunkLocalToVoxel(chunk_coord, nx, ny, nz, cs);
+                        else
+                            lightVc = chunkmath::chunkLocalToVoxel(chunk_coord, x, y, z, cs);
+                        float light = light_query(lightVc);
+                        shade *= light;
+                    }
                     const uint32_t faceColor =
-                        translucent ? color : shadeColor(color, f.shade);
+                        translucent ? color : shadeColor(color, shade);
 
                     // Per-face tile binding (T4/T5). When the material binds this
                     // face to an atlas tile, emit the tile's sub-rect plus a

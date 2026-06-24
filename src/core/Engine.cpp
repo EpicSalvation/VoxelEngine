@@ -9,6 +9,8 @@
 #include "net/NetworkManager.h"
 #include "simulation/FluidSystem.h"
 #include "simulation/ThermalSystem.h"
+#include "simulation/LightingSystem.h"
+#include "core/Tuning.h"
 
 #include <iostream>
 
@@ -146,6 +148,10 @@ float Engine::temperatureAt(const WorldCoord& pos) const {
 
 float Engine::fluidAmountAt(const WorldCoord& pos) const {
     return fluid_ ? fluid_->amountAt(pos) : 0.0f;
+}
+
+float Engine::lightAt(const WorldCoord& pos) const {
+    return lighting_ ? lighting_->brightnessAt(pos) : tuning::lighting::kAmbientBrightness;
 }
 
 void Engine::gameLoop() {

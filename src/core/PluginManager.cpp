@@ -99,6 +99,8 @@ PluginId PluginManager::loadPlugin(const std::string& path) {
         eraseOwned(thermalEventHooks_,  id);
         eraseOwned(heatSources_,        id);
         eraseOwned(fluidSources_,       id);
+        eraseOwned(lightingEventHooks_, id);
+        eraseOwned(lightSources_,       id);
         eraseOwned(chunkCreatedHooks_,  id);
         eraseOwned(chunkEvictedHooks_,  id);
         eraseOwned(importers_,          id);
@@ -163,6 +165,8 @@ PluginId PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
         eraseOwned(thermalEventHooks_,  id);
         eraseOwned(heatSources_,        id);
         eraseOwned(fluidSources_,       id);
+        eraseOwned(lightingEventHooks_, id);
+        eraseOwned(lightSources_,       id);
         eraseOwned(chunkCreatedHooks_,  id);
         eraseOwned(chunkEvictedHooks_,  id);
         eraseOwned(importers_,          id);
@@ -201,6 +205,8 @@ bool PluginManager::unloadPlugin(PluginId id) {
     eraseOwned(thermalEventHooks_,    id);
     eraseOwned(heatSources_,          id);
     eraseOwned(fluidSources_,         id);
+    eraseOwned(lightingEventHooks_,  id);
+    eraseOwned(lightSources_,        id);
     eraseOwned(chunkCreatedHooks_,    id);
     eraseOwned(chunkEvictedHooks_,    id);
     eraseOwned(importers_,            id);
@@ -432,6 +438,20 @@ PluginContext PluginManager::buildContext() {
                       << fluid_material << "' not yet registered; palette_index defaults to 0.\n";
         }
         mgr->fluidSources_.push_back({pos, rate, fluid_material, palette_index, mgr->currentOwner_});
+    };
+
+    // -----------------------------------------------------------------------
+    // Lighting hooks (M17, ARCHITECTURE §17)
+    // -----------------------------------------------------------------------
+
+    ctx.register_on_lighting_event = [](PluginContext* c, OnLightingEventFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->lightingEventHooks_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.register_light_source = [](PluginContext* c, WorldCoord pos, float brightness) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->lightSources_.push_back({pos, brightness, mgr->currentOwner_});
     };
 
     ctx.register_on_chunk_created = [](PluginContext* c, const char* name,

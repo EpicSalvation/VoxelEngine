@@ -15,7 +15,7 @@ namespace {
 // save format for the platforms the engine targets (all little-endian), not a
 // portable interchange format — that role belongs to the M7 .vox/.vxe path.
 constexpr char     kMagic[4] = {'V', 'X', 'C', 'K'};
-constexpr uint32_t kVersion  = 1;
+constexpr uint32_t kVersion  = 2;
 
 // ── Byte writer ────────────────────────────────────────────────────────────
 void putU8 (std::vector<uint8_t>& b, uint8_t v)  { b.push_back(v); }
@@ -61,6 +61,7 @@ bool sameMaterial(const MaterialProperties& a, const MaterialProperties& b) {
            a.thermal_conductivity == b.thermal_conductivity &&
            a.porosity == b.porosity &&
            a.hardness == b.hardness &&
+           a.light_emission == b.light_emission &&
            a.palette_index == b.palette_index;
 }
 
@@ -99,6 +100,7 @@ std::vector<uint8_t> encodeChunkFile(const Chunk& chunk, const WorldIdentity& id
         putF32(b, m.thermal_conductivity);
         putF32(b, m.porosity);
         putF32(b, m.hardness);
+        putF32(b, m.light_emission);
         putU8 (b, m.palette_index);
     }
 
@@ -144,6 +146,7 @@ std::unique_ptr<Chunk> decodeChunkFile(const uint8_t* data, size_t size,
         m.thermal_conductivity = r.f32();
         m.porosity             = r.f32();
         m.hardness             = r.f32();
+        m.light_emission       = r.f32();
         m.palette_index        = r.u8();
     }
     if (!r.ok) return nullptr;
@@ -199,6 +202,7 @@ std::unique_ptr<Chunk> decodeChunkFilePermissive(const uint8_t* data, size_t siz
         m.thermal_conductivity = r.f32();
         m.porosity             = r.f32();
         m.hardness             = r.f32();
+        m.light_emission       = r.f32();
         m.palette_index        = r.u8();
     }
     if (!r.ok) return nullptr;
