@@ -1164,6 +1164,9 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [ ] Make sure the engine has a name.
 - [ ] 1.0 tag
 
+**Post-1.0 — Planned for 1.1**
+- [ ] **Dedicated-server mode (sanity-check F2):** authority without a local player — a headless server that owns the world and serves connected clients, vs. the current host-as-authority-only model (M11). Important for any multiplayer game that needs persistent worlds or higher player counts
+
 ---
 
 ## Further Reading
