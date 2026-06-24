@@ -189,9 +189,9 @@ The `.vox` format supports volumes up to 256³ per object. Larger volumes are au
 voxel-game-engine
 ├── src                                   # → voxel-engine library (all sources below)
 │   ├── core
-│   │   ├── Engine.cpp / .h               # Engine lifecycle, startup validation
+│   │   ├── Engine.cpp                    # Engine lifecycle, startup validation (header in include/core)
 │   │   ├── PluginManager.cpp / .h        # Plugin load/unload, hook registration
-│   │   └── LayerConfig.cpp / .h          # Layer stack definition and validation
+│   │   └── LayerConfig.cpp               # Layer stack definition and validation (header in include/core)
 │   ├── world
 │   │   ├── Voxel.cpp / .h                # Voxel data: material props, palette index, mode
 │   │   ├── Layer.cpp / .h                # Per-layer chunk management and coordinate space
@@ -199,12 +199,11 @@ voxel-game-engine
 │   │   ├── MacroVoxel.cpp / .h           # Composition recipe, decomposition state, mode
 │   │   └── DecompositionWorker.cpp / .h  # Async on-demand child grid generation
 │   ├── renderer
-│   │   ├── Renderer.h                    # Abstract renderer interface
+│   │   ├── RendererFactory.cpp           # createRenderer() impl; sole bgfx-naming public-API code
 │   │   ├── BgfxRenderer.cpp / .h         # bgfx backend: window surface, shaders, floating origin
 │   │   └── LODManager.cpp / .h           # Per-layer view distance and chunk budgets
 │   ├── platform
-│   │   ├── Window.cpp / .h               # GLFW window; exposes native handles
-│   │   └── NativeWindowHandles.h         # Library-neutral window↔renderer seam
+│   │   └── Window.cpp / .h               # GLFW window; exposes native handles
 │   ├── simulation
 │   │   ├── PhysicsSystem.cpp / .h        # Material-property-driven structural simulation
 │   │   └── PropagationSystem.cpp / .h    # Upward damage propagation across composite layers
@@ -228,7 +227,15 @@ voxel-game-engine
 │   └── generated/                        # Per-backend bytecode headers (committed; see ARCHITECTURE §9)
 ├── include                               # Public API (propagated to engine consumers)
 │   ├── plugin_api.h                      # Public plugin interface; flat callback registration
-│   └── WorldCoord.h                      # Double-precision coordinate type; wraps dvec3
+│   ├── WorldCoord.h                      # Double-precision coordinate type; wraps dvec3
+│   ├── core
+│   │   ├── Engine.h                      # Engine lifecycle / front-end entry point
+│   │   └── LayerConfig.h                 # Layer stack definition and validation
+│   ├── renderer
+│   │   ├── Renderer.h                    # Abstract renderer interface (no bgfx types)
+│   │   └── RendererFactory.h             # createRenderer(): bgfx-free renderer seam
+│   └── platform
+│       └── NativeWindowHandles.h         # Library-neutral window↔renderer seam
 ├── docs
 │   └── ARCHITECTURE.md                   # Subsystem design, invariants, AI agent guidance
 ├── CMakeLists.txt
@@ -1118,7 +1125,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 **M17 — Pre-Release Polish**
 - [x] Design task: identify gaps between current implementation and full architecture spec — audited ARCHITECTURE.md §1–§18 against the post-M16 tree; deliverable `docs/m17-architecture-gap-audit.md`. Finding: the engine is substantially as-built (most of §1–§14 was rewritten to as-implemented as each milestone landed), so the gaps cluster into three classes — **(A)** doc currency (capability shipped, prose still future-tense): §15/§16 still say "Files (planned)" / "implementation details will be added" though M11/M12 shipped, §7/§17 say "Consumers arrive in M13/M14", §11 calls chunk size "default TBD" — all folded into the ARCHITECTURE-currency task below; **(B)** deliberate deferrals the spec records but M17 didn't track — the two that need new task lines are surfaced below (multi-level propagation, public-header finalization); exposure-aware boundaries (§6), Blockbench export (§9→M18), D3D12/Wayland/WGSL (§9), and the decomp-state/byte-budget backstops (§11) are correctly left parked with their rationale; **(C)** spec-ahead-of-code — the example-plugin suite misses five first-class hooks (`on_thermal_event`, `on_chunk_created`/`on_chunk_evicted`, `register_noise`, `register_exporter`), which scopes the existing suite task, and the renderer's hard Y-up view vs §18, already the camera task below. Net: one real deferred engine feature + one API-surface decision + a doc-currency pass + a thin example tail
 - [x] **Multi-level upward damage propagation (gap audit G1):** M13 resolved structural stability at a **single composite level** only and handed the multi-level upward chain to M17. **Implemented the ancestor-chain re-aggregation** (option (a), the spec's stated intent): `PropagationSystem` now discovers the *full* composite chain at construction (level 0 = the layer whose `decompose_to` is the terminal layer; each coarser ancestor a higher level) and every aggregation/flood operation is parameterized by level. A coarse macro's aggregate is the volume-weighted average of its **child macros' aggregates**, recursively down to terminal voxels, so hollowing a grandchild lowers every ancestor's aggregate. `recomputeAggregate(level, macro)` marks the macro's next-coarser parent dirty; `PhysicsSystem::tick` drains and processes levels **fine→coarse within one tick** under a *shared* `kMaxAggregateRecomputesPerFrame`/`kMaxStructuralEventsPerFrame` budget (per-level `carry_`/`firedUnstable_`), so a deep chain reaction spreads across frames with overflow carried and the unstable set stays deterministic. A structural event fires per unstable macro at each level, carrying that level's `voxel_size_m`/`child_voxel_size_m`. The single-level (N=1) path is byte-identical — all prior structural suites stay green; new `tests/MultiLevelPropagationTest.cpp` (6 tests on a `macro→micro→grid` stack) proves recursive grandchild aggregation, a grandparent cantilever/doubly-anchored flood, a grid edit firing a macro-scale grandparent event (engine-never-writes), and a macro-level crumble cascade that terminates at the anchored remnant. ARCHITECTURE §7 updated; the in-code `M17 TODO` retired. This was the headline M17 engineering item
-- [ ] **Finalize the public-header surface (gap audit G2):** ARCHITECTURE §12 "Not Yet Finalized" (lines 589–591) frames `include/` as "the committed public API", but it currently holds only `WorldCoord.h` + `plugin_api.h` — every front-end type a real out-of-tree game needs (`Engine`, `LayerConfig`, the `Renderer` interface) still lives under `src/`, reachable only by the privileged in-tree demos. Promote the genuinely public consumer-facing types into `include/` and expose the renderer behind a **creation factory** so bgfx stays entirely out of the public API (the §12 plan), giving a third-party game a real surface to link against — a prerequisite for the M18 boilerplate/template series. May instead be consciously scheduled to M19 ("verify docs are all correct"); decide and record which
+- [x] **Finalize the public-header surface (gap audit G2):** ARCHITECTURE §12 "Not Yet Finalized" framed `include/` as "the committed public API" while it held only `WorldCoord.h` + `plugin_api.h` — every front-end type a real out-of-tree game needs (`Engine`, `LayerConfig`, the `Renderer` interface) still lived under `src/`, reachable only by the privileged in-tree demos. **Decision: done in M17, not deferred to M19.** Promoted the clean front-end leaves into `include/` (`core/Engine.h`, `core/LayerConfig.h`, `renderer/Renderer.h`, with the renderer's dep `platform/NativeWindowHandles.h`) — each depends only on already-public types, so it graduates without dragging engine internals across the boundary — preserving the `src/`-mirroring subpaths so no consumer include line changed. Exposed the renderer behind a **creation factory** (`createRenderer()` → `std::unique_ptr<Renderer>` in `renderer/RendererFactory.h`, impl in `src/renderer/RendererFactory.cpp`): the one-line factory body is now the *only* public-API-reachable code that names `BgfxRenderer`/includes bgfx, so bgfx stays entirely out of `include/` (the §12 plan). New `tests/RendererFactoryTest.cpp` links the factory + front-end types through **`include/`-only** includes — a compile-time tripwire that fails if a private `src/` type ever leaks into a public header. The *richer* surface a fuller game also touches (`PluginManager`, `World`/`Chunk`, `ChunkMesh`, `LODManager`, `Window`, plus `BgfxRenderer`'s concrete bgfx-typed `renderChunk`/`setAtlas`) was **consciously left private** as a recorded next tranche (deeper dependency graphs needing their own promotion pass), and the abstract `Renderer` was widened no further this milestone since the in-tree demos remain privileged consumers of the concrete renderer. ARCHITECTURE §12 rewritten to as-built; all 382 tests green (+2 new). Unblocks the M18 boilerplate/template series
 - [ ] ARCHITECTURE.md fully reflects implemented behavior (not just intended behavior) — incl. the gap-audit Class-A doc-currency fixes: retire "(planned)" / "implementation details will be added" from §15 (Networking) and §16 (Audio) and rewrite their bodies to as-built past tense (M11/M12 shipped); change §7/§17 "Consumers arrive in M13/M14" to "landed"; replace §11's chunk-size "default TBD" with the per-layer config value actually used
 - [ ] Discussion task: perform a sanity check. Considering the current feature set, design philosophy, stated goals, and typical game engine behaviors and features, are there any other features, tools, or knobs that we should consider for the initial release of the engine? Add tasks to this milestone (or an additional milestones prior to release, if appropriate) to address accepted features and knobs.
 - [ ] Example plugin suite covers all major hook types

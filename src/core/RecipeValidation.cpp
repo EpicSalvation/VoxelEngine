@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "LayerConfig.h"
+#include "core/LayerConfig.h"
 #include "PluginManager.h"
 #include "world/Recipe.h"
 

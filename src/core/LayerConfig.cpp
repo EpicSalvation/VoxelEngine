@@ -1,4 +1,4 @@
-#include "LayerConfig.h"
+#include "core/LayerConfig.h"
 #include <yaml-cpp/yaml.h>
 #include <cmath>
 #include <fstream>

@@ -181,9 +181,13 @@ file(GLOB_RECURSE ENGINE_SOURCES
 
 add_library(voxel-engine ${ENGINE_SOURCES})
 
-# include/ is the public API (WorldCoord.h, plugin_api.h) and propagates to
-# consumers; src/ holds engine internals and is private to the library's own
-# compilation. In-tree demos/tests opt into src/ explicitly when they need it.
+# include/ is the public API and propagates to consumers; src/ holds engine
+# internals and is private to the library's own compilation. The committed
+# public surface is WorldCoord.h, plugin_api.h, the consumer front-end types
+# (core/Engine.h, core/LayerConfig.h), and the renderer seam (renderer/Renderer.h
+# + renderer/RendererFactory.h, with platform/NativeWindowHandles.h) — the
+# concrete bgfx renderer stays under src/ behind createRenderer() (§12).
+# In-tree demos/tests opt into src/ explicitly when they need engine internals.
 target_include_directories(voxel-engine
   PUBLIC  include
   PRIVATE src

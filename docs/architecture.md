@@ -58,7 +58,7 @@ If raw floats are used early in development, precision errors compound silently 
 
 ## 2. Layer Configuration and Validation
 
-**Files:** `src/core/LayerConfig.cpp/.h`
+**Files:** `include/core/LayerConfig.h`, `src/core/LayerConfig.cpp`
 
 ### Purpose
 
@@ -388,7 +388,7 @@ Feature generators (`register_feature_generator`) post-process an already-filled
 
 ## 9. Renderer and LOD
 
-**Files:** `src/renderer/Renderer.cpp/.h`, `src/renderer/BgfxRenderer.cpp/.h`, `src/renderer/LODManager.cpp/.h`, `src/platform/Window.cpp/.h`, `src/platform/NativeWindowHandles.h`
+**Files:** `include/renderer/Renderer.h` (abstract interface), `include/renderer/RendererFactory.h` + `src/renderer/RendererFactory.cpp` (the bgfx-free creation seam), `src/renderer/BgfxRenderer.cpp/.h`, `src/renderer/LODManager.cpp/.h`, `src/platform/Window.cpp/.h`, `include/platform/NativeWindowHandles.h`
 
 ### Windowing and Surface
 
@@ -565,7 +565,7 @@ A shared build becomes worthwhile only when shipping a prebuilt engine SDK that 
 
 The library's include directories encode the API surface:
 
-- **`include/` is `PUBLIC`** — the committed public API. It propagates to every consumer that links the library. Currently `WorldCoord.h` and `plugin_api.h`.
+- **`include/` is `PUBLIC`** — the committed public API. It propagates to every consumer that links the library. It holds `WorldCoord.h`, `plugin_api.h`, the consumer front-end types (`core/Engine.h`, `core/LayerConfig.h`), and the renderer seam (`renderer/Renderer.h` + `renderer/RendererFactory.h`, with `platform/NativeWindowHandles.h`). Subdirectories under `include/` mirror the `src/` layout, so an include path like `"core/Engine.h"` resolves the same for an in-tree demo and an out-of-tree game.
 - **`src/` is `PRIVATE`** — engine internals, on the path only for the library's own compilation.
 
 Dependency visibility mirrors this boundary, and is itself a load-bearing decision:
@@ -586,9 +586,11 @@ This is the invariant that makes static-vs-shared a free decision rather than a 
 - **C++20 is required** (bgfx's `bx` uses designated initializers in its SIMD headers).
 - Third-party dependencies are fetched with CMake `FetchContent` and pinned (bgfx.cmake to a release tag) for reproducible builds. Some pinned deps predate modern CMake's policy floor, which `CMAKE_POLICY_VERSION_MINIMUM` accommodates.
 
-### Not Yet Finalized
+### The Public-Header Surface (finalized in M17)
 
-The exact public-header surface is a deliberate open decision, not the current state frozen. Consumer-facing types such as `Engine`, `LayerConfig`, and `PluginManager` still live under `src/` and are reached by in-tree demos directly. Promoting the genuinely public ones into `include/` — and exposing the renderer behind a creation factory so bgfx stays entirely out of the public API — is a planned follow-up. Until then: treat `include/` as the **committed** public API and `src/` as internal and subject to change.
+The core consumer-facing types now live in `include/` and are the **committed** public API. M17 promoted the clean front-end leaves — `Engine` (lifecycle / entry point) and `LayerConfig` (the layer-stack DSL) — and the renderer's abstract `Renderer` interface, each of which depends only on already-public types (`WorldCoord`, `NativeWindowHandles`) and so promotes without dragging engine internals across the boundary. The renderer is exposed behind a **creation factory** (`createRenderer()` in `renderer/RendererFactory.h`): a game asks the factory for a `std::unique_ptr<Renderer>` and drives it through the abstract interface alone, so bgfx — a `PRIVATE` dependency whose handles must never appear in a public header — stays entirely inside `src/RendererFactory.cpp`. This is the §12 "renderer exposed through the abstract `Renderer` interface, never through concrete bgfx handles" rule made concrete: the only public-API-reachable code that names `BgfxRenderer` is the one-line factory body.
+
+**Deliberately still private (a recorded next tranche, not a silent gap):** the *richer* surface a full game also touches — `PluginManager`, `World`/`Chunk`/`Voxel`, `ChunkMesh`, `LODManager`, and `platform::Window` — remains under `src/`. These were left private on purpose: they carry deeper dependency graphs (and, in the renderer's case, bgfx-typed methods like `renderChunk`/`setAtlas` on the *concrete* `BgfxRenderer`) that need their own promotion pass before they can be committed without leaking internals. Until that pass lands, an out-of-tree game links the committed core (config + lifecycle + a bgfx-free renderer handle) and reaches the rest through `src/` exactly as the in-tree demos do — those demos remain privileged consumers (they call `BgfxRenderer`'s concrete chunk/atlas methods directly), which is why the abstract `Renderer` interface was widened no further this milestone. Treat `include/` as the **committed** public API and `src/` as internal and subject to change.
 
 ---
 

@@ -43,7 +43,7 @@
 class Layer;
 class PluginManager;
 class World;
-struct LayerConfig;
+class LayerConfig;
 struct WorldCoord;
 
 // Per-composite-layer diff returned by DecompositionManager::tick().
