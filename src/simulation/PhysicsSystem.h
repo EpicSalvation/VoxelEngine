@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <set>
+#include <vector>
 
 #include "simulation/PropagationSystem.h"
 
@@ -67,14 +68,21 @@ public:
     // Structural events fired during the most recent tick().
     int eventsFiredLastTick() const { return eventsLastTick_; }
     // Macros waiting to be (re-)evaluated next tick because they overflowed a
-    // per-frame budget — the carried-overflow backlog the demo HUD surfaces.
-    std::size_t carryBacklog() const { return carry_.size(); }
+    // per-frame budget — the carried-overflow backlog the demo HUD surfaces,
+    // summed across every composite level.
+    std::size_t carryBacklog() const {
+        std::size_t n = 0;
+        for (const auto& s : carry_) n += s.size();
+        return n;
+    }
 
     PropagationSystem&       propagation()       { return prop_; }
     const PropagationSystem& propagation() const { return prop_; }
 
 private:
-    void fireEvent(const PropagationSystem::Unstable& u);
+    void fireEvent(int level, const PropagationSystem::Unstable& u);
+
+    using MacroSet = std::set<chunkmath::VoxelCoord, VoxelCoordLess>;
 
     // Engine-owned on_voxel_modified trampoline (registered on PluginManager).
     static void onVoxelModifiedThunk(WorldCoord pos, const Voxel* oldVoxel,
@@ -84,13 +92,17 @@ private:
     PluginManager&    pm_;
     PropagationSystem prop_;
 
-    // Macros to (re-)evaluate next tick: those that overflowed the recompute or
-    // event budget this tick. Kept in deterministic sorted-coord order so the
-    // carried set — and thus the fired sequence across frames — is reproducible.
-    std::set<chunkmath::VoxelCoord, VoxelCoordLess> carry_;
-    // Macros already announced as unstable and still unstable: suppresses
-    // re-firing the same macro every frame while the response plugin works on it.
-    std::set<chunkmath::VoxelCoord, VoxelCoordLess> firedUnstable_;
+    // Per composite level (sized lazily to prop_.levelCount()):
+    //   carry_ — macros to (re-)evaluate next tick: those that overflowed the
+    //            recompute or event budget this tick. Sorted-coord order so the
+    //            carried set — and the fired sequence across frames — is reproducible.
+    //   firedUnstable_ — macros already announced as unstable and still unstable:
+    //            suppresses re-firing the same macro every frame while the response
+    //            plugin works on it.
+    // Kept per-level because the same VoxelCoord names different macros at
+    // different scales.
+    std::vector<MacroSet> carry_;
+    std::vector<MacroSet> firedUnstable_;
 
     int eventsLastTick_ = 0;
 };
