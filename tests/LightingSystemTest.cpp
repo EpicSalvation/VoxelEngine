@@ -51,8 +51,7 @@ protected:
 };
 
 TEST_F(LightingSystemTest, EmptyWorldHasAmbientBrightness) {
-    World world;
-    world.addLayer(terminalDef());
+    World world(terminalDef());
     sim::LightingSystem lighting(world, *pm);
 
     lighting.tick(1.0 / 60.0);
@@ -62,9 +61,8 @@ TEST_F(LightingSystemTest, EmptyWorldHasAmbientBrightness) {
 }
 
 TEST_F(LightingSystemTest, SkyLitCellGetMaxBrightness) {
-    World world;
-    world.addLayer(terminalDef());
-    Layer* layer = world.findLayer("grid");
+    World world(terminalDef());
+    Layer* layer = world.primaryLayer();
     ASSERT_NE(layer, nullptr);
 
     // Load a chunk with a floor at y=0 so cells above have sky access.
@@ -79,9 +77,8 @@ TEST_F(LightingSystemTest, SkyLitCellGetMaxBrightness) {
 }
 
 TEST_F(LightingSystemTest, BlockEmitterPropagatesToNeighbors) {
-    World world;
-    world.addLayer(terminalDef());
-    Layer* layer = world.findLayer("grid");
+    World world(terminalDef());
+    Layer* layer = world.primaryLayer();
     ASSERT_NE(layer, nullptr);
 
     layer->loadChunk({0, 0, 0}, nullGen);
@@ -105,9 +102,8 @@ TEST_F(LightingSystemTest, BlockEmitterPropagatesToNeighbors) {
 }
 
 TEST_F(LightingSystemTest, LightAttenuatesWithDistance) {
-    World world;
-    world.addLayer(terminalDef());
-    Layer* layer = world.findLayer("grid");
+    World world(terminalDef());
+    Layer* layer = world.primaryLayer();
     ASSERT_NE(layer, nullptr);
 
     layer->loadChunk({0, 0, 0}, nullGen);
@@ -128,9 +124,8 @@ TEST_F(LightingSystemTest, LightAttenuatesWithDistance) {
 }
 
 TEST_F(LightingSystemTest, PluginLightSourceEmitsLight) {
-    World world;
-    world.addLayer(terminalDef());
-    Layer* layer = world.findLayer("grid");
+    World world(terminalDef());
+    Layer* layer = world.primaryLayer();
     ASSERT_NE(layer, nullptr);
 
     layer->loadChunk({0, 0, 0}, nullGen);
@@ -147,9 +142,8 @@ TEST_F(LightingSystemTest, PluginLightSourceEmitsLight) {
 }
 
 TEST_F(LightingSystemTest, VoxelModificationMarksDirty) {
-    World world;
-    world.addLayer(terminalDef());
-    Layer* layer = world.findLayer("grid");
+    World world(terminalDef());
+    Layer* layer = world.primaryLayer();
     ASSERT_NE(layer, nullptr);
 
     layer->loadChunk({0, 0, 0}, nullGen);
@@ -173,9 +167,8 @@ TEST_F(LightingSystemTest, VoxelModificationMarksDirty) {
 }
 
 TEST_F(LightingSystemTest, DropChunkClearsLighting) {
-    World world;
-    world.addLayer(terminalDef());
-    Layer* layer = world.findLayer("grid");
+    World world(terminalDef());
+    Layer* layer = world.primaryLayer();
     ASSERT_NE(layer, nullptr);
 
     layer->loadChunk({0, 0, 0}, nullGen);
