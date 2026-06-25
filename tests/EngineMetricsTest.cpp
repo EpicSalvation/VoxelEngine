@@ -25,17 +25,15 @@ LayerDef terminalLayer(const std::string& name = "terrain") {
 class StubAudioBackend : public audio::IAudioBackend {
 public:
     size_t voices = 0;
-    bool initialize() override { return true; }
+    bool loadSound(const std::string&, const std::string&, const SoundParams&) override { return true; }
+    void playOneShot(const std::string&, const glm::vec3&, const SoundParams*) override {}
+    AudioEmitterId createEmitter(const std::string&, const glm::vec3&, const EmitterParams&) override { return kInvalidEmitterId; }
+    void setEmitterPosition(AudioEmitterId, const glm::vec3&) override {}
+    void stopEmitter(AudioEmitterId) override {}
+    void setListener(const glm::vec3&, const glm::vec3&) override {}
+    void update() override {}
     void shutdown() override {}
     bool isReady() const override { return true; }
-    audio::SoundId loadSound(const std::string&) override { return 0; }
-    void unloadSound(audio::SoundId) override {}
-    void playOneShot(audio::SoundId, float, float, float, const audio::SoundParams&) override {}
-    audio::EmitterId startEmitter(audio::SoundId, float, float, float, const audio::SoundParams&) override { return 0; }
-    void updateEmitter(audio::EmitterId, float, float, float) override {}
-    void stopEmitter(audio::EmitterId) override {}
-    void setListenerPosition(float, float, float) override {}
-    void setListenerOrientation(float, float, float, float, float, float) override {}
     size_t activeVoiceCount() const override { return voices; }
 };
 
