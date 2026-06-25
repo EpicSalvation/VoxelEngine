@@ -3,6 +3,7 @@
 #include "Palette.h"
 #include <bgfx/platform.h>
 #include <iostream>
+#include <algorithm>
 #include <cstring>
 
 // Restrict the embedded-shader backend matrix to the profiles actually compiled
@@ -242,6 +243,13 @@ void BgfxRenderer::render() {
     // Per-chunk static meshes: one draw call per non-empty batch, placed via a
     // floating-origin model transform of the chunk's world origin (ARCHITECTURE
     // §9). Opaque batch on view 0; translucent (water) batch on view 1.
+    // Sort back-to-front so alpha-blended translucent faces composite correctly.
+    std::sort(pendingChunks.begin(), pendingChunks.end(),
+              [this](const PendingChunk& a, const PendingChunk& b) {
+                  glm::vec3 da = a.origin.toLocalFloat(this->cameraPos);
+                  glm::vec3 db = b.origin.toLocalFloat(this->cameraPos);
+                  return glm::dot(da, da) > glm::dot(db, db);
+              });
     for (const auto& pc : pendingChunks) {
         glm::vec3 lo = pc.origin.toLocalFloat(cameraPos);
         // model = translate(origin - camera) * scale(voxelSizeM): the mesh is in
