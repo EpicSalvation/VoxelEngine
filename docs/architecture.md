@@ -174,7 +174,7 @@ Through M9 the approach-trigger / `drain` / insert / evict loop lived in each de
 
 ## 5. Material Property System
 
-**Files:** `include/plugin_api.h` (the `MaterialProperties` struct), `src/world/Voxel.h`, `src/simulation/RemovalModel.{h,cpp}` (the first property consumer; M8), `src/simulation/RemovalAccumulator.{h,cpp}` (the transient per-target progress state that drives held-to-mine on top of `RemovalModel`; M8). The structural `PhysicsSystem`/`PropagationSystem` consumers arrive in M13.
+**Files:** `include/plugin_api.h` (the `MaterialProperties` struct), `src/world/Voxel.h`, `src/simulation/RemovalModel.{h,cpp}` (the first property consumer; M8), `src/simulation/RemovalAccumulator.{h,cpp}` (the transient per-target progress state that drives held-to-mine on top of `RemovalModel`; M8). The structural `PhysicsSystem`/`PropagationSystem` consumers landed in M13.
 
 ### Design Intent
 
@@ -282,7 +282,7 @@ This is what lets a 10km "mountain range" recipe constrain its constituent 1km "
 
 ## 7. Upward Damage Propagation
 
-**Files:** `src/simulation/PropagationSystem.cpp/.h` (detection), `src/simulation/PhysicsSystem.cpp/.h` (per-frame driver + event firing), `src/core/Tuning.h` (`tuning::physics` knobs). Consumers arrive in M13; the design below is the M13 contract.
+**Files:** `src/simulation/PropagationSystem.cpp/.h` (detection), `src/simulation/PhysicsSystem.cpp/.h` (per-frame driver + event firing), `src/core/Tuning.h` (`tuning::physics` knobs). Consumers landed in M13; the design below is the M13 contract.
 
 ### Purpose
 
@@ -516,7 +516,7 @@ If a plugin adds non-standard voxel data but does not register an exporter, the 
 
 ### Dirty Tracking Granularity
 
-Dirty tracking is at **chunk granularity within a composite voxel**, not per-voxel. A chunk is a fixed-size subvolume of a layer (size is a tunable constant, default TBD). When any voxel in a chunk is modified, the chunk is marked dirty and scheduled for persistence.
+Dirty tracking is at **chunk granularity within a composite voxel**, not per-voxel. A chunk is a fixed-size subvolume of a layer; its side length is a per-layer config value (`chunk_size_voxels` in `LayerConfig`, default 32, with shipped configs setting it as low as 4 for finely decomposed layers). The chunk grid is `chunk_size_voxels³`. When any voxel in a chunk is modified, the chunk is marked dirty and scheduled for persistence.
 
 Per-voxel dirty tracking was rejected because a single large edit (removing many voxels at once) could mark millions of individual voxels dirty, producing save file write amplification that makes autosave impractical.
 
@@ -725,11 +725,11 @@ Raise as a design question when: a new feature requires a dependency not in the 
 
 ## 15. Networking and Multiplayer
 
-**Files (planned):** `src/net/NetworkManager.{h,cpp}`, `src/net/ENetTransport.{h,cpp}`, `include/plugin_api.h` (network hook additions)
+**Files:** `src/net/NetworkManager.{h,cpp}`, `src/net/ITransport.{h,cpp}`, `src/net/ENetTransport.{h,cpp}`, `src/net/NetPackets.h`, `src/net/NetJoinHandshake.h`, `include/plugin_api.h` (network hook additions). Built-in policy/feature plugins: `plugins/server-authority/`, `plugins/chat/`.
 
 ### Design Decisions (M11)
 
-This section records the design decisions made for M11. Implementation details will be added as the milestone is built out.
+This section records the design that shipped in M11. The subsystem is implemented and exercised by demo 11 (shared world) and the `tests/Network*`/`EditReplication`/`JoinHandshake`/`InterestManagement`/`MessageEnvelope` suite; the decisions below describe the as-built behavior.
 
 ### Authority Model
 
@@ -806,7 +806,7 @@ Clients only ever hold a connection to the authority node, so the authority is a
 
 ### Plugin API Surface for Networking
 
-The following additions to `plugin_api.h` are planned for M11. The existing `on_voxel_modified` hook is extended; all others are new:
+M11 added the following to `plugin_api.h`. The existing `on_voxel_modified` hook is extended; all others are new:
 
 | Hook / function | Direction | Purpose |
 |---|---|---|
@@ -827,11 +827,11 @@ The following additions to `plugin_api.h` are planned for M11. The existing `on_
 
 ## 16. Audio
 
-**Files (planned):** `src/audio/AudioManager.{h,cpp}`, `src/audio/IAudioBackend.{h,cpp}`, `src/audio/MiniaudioBackend.{h,cpp}`, `include/plugin_api.h` (audio registration functions, `PluginContext` playback functions, and POD/enum types)
+**Files:** `src/audio/AudioManager.{h,cpp}`, `src/audio/IAudioBackend.{h,cpp}`, `src/audio/MiniaudioBackend.{h,cpp}`, `include/plugin_api.h` (audio registration functions, `PluginContext` playback functions, and POD/enum types)
 
 ### Design Decisions (M12)
 
-This section records the design decisions made for M12. Implementation details will be added as the milestone is built out.
+This section records the design that shipped in M12. The subsystem is implemented and exercised by demo 12 (soundscape) and the audio test suite; the decisions below describe the as-built behavior.
 
 ### Audio Backend
 
@@ -879,7 +879,7 @@ Consequently **M12 adds no new event hook to `plugin_api.h`.** Audio rides the *
 
 ### Plugin API Surface for Audio
 
-The following additions to `plugin_api.h` are planned for M12. All are new; no existing hook changes.
+M12 added the following to `plugin_api.h`. All are new; no existing hook changes.
 
 | Hook / function | Direction | Purpose |
 |---|---|---|
@@ -916,7 +916,7 @@ It is set via the project config (`audio.strict: auto | error | warn`, the one-l
 
 ## 17. Fluid and Thermal Simulation
 
-**Files:** `src/simulation/FluidSystem.cpp/.h`, `src/simulation/ThermalSystem.cpp/.h`, `src/core/Tuning.h` (`tuning::fluid` / `tuning::thermal` knobs), `plugins/flow/plugin.cpp` (the mandatory fluid-response plugin). Consumers arrive in M14; the design below is the M14 contract. These are the `porosity` and `thermal_conductivity` consumers promised by the §5 property contract.
+**Files:** `src/simulation/FluidSystem.cpp/.h`, `src/simulation/ThermalSystem.cpp/.h`, `src/core/Tuning.h` (`tuning::fluid` / `tuning::thermal` knobs), `plugins/flow/plugin.cpp` (the mandatory fluid-response plugin). Consumers landed in M14; the design below is the M14 contract. These are the `porosity` and `thermal_conductivity` consumers promised by the §5 property contract.
 
 ### Purpose
 
