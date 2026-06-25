@@ -47,7 +47,7 @@ TEST(Frustum, ChunkAboveCameraIsHidden) {
 
 TEST(Frustum, RotatedCameraSeesChunkInNewDirection) {
     // Yaw = π/2 → camera looks along +X.
-    float yaw = static_cast<float>(M_PI / 2.0);
+    float yaw = static_cast<float>(3.14159265358979323846 / 2.0);
     Frustum f = makeFrustum(WorldCoord(0, 0, 0), 0.0f, yaw, 1000.0);
     EXPECT_TRUE(f.sphereVisible(glm::dvec3(50, 0, 0), 10.0));
     EXPECT_FALSE(f.sphereVisible(glm::dvec3(0, 0, 50), 5.0));
