@@ -41,6 +41,11 @@ void floorGen(WorldCoord origin, int size, Voxel* out, void*) {
                 if (y == 0) out[z * size * size + y * size + x] = solid();
 }
 
+// Solid generator: all voxels filled (blocks sky access).
+void solidGen(WorldCoord, int size, Voxel* out, void*) {
+    for (int i = 0; i < size * size * size; ++i) out[i] = solid();
+}
+
 class LightingSystemTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -81,7 +86,9 @@ TEST_F(LightingSystemTest, BlockEmitterPropagatesToNeighbors) {
     Layer* layer = world.primaryLayer();
     ASSERT_NE(layer, nullptr);
 
-    layer->loadChunk({0, 0, 0}, nullGen);
+    // Use solidGen so all cells are opaque and have no sky access —
+    // only the emitter's light should contribute.
+    layer->loadChunk({0, 0, 0}, solidGen);
 
     // Place an emitter at (4,4,4).
     WorldCoord emitPos{4.5, 4.5, 4.5};
@@ -106,7 +113,7 @@ TEST_F(LightingSystemTest, LightAttenuatesWithDistance) {
     Layer* layer = world.primaryLayer();
     ASSERT_NE(layer, nullptr);
 
-    layer->loadChunk({0, 0, 0}, nullGen);
+    layer->loadChunk({0, 0, 0}, solidGen);
 
     WorldCoord emitPos{4.5, 4.5, 4.5};
     layer->setVoxel(emitPos, emitter(1.0f));
