@@ -11,7 +11,7 @@
 #include "world/World.h"
 #include "world/Layer.h"
 #include "core/LayerConfig.h"
-#include "PluginManager.h"
+#include "core/PluginManager.h"
 
 #include <gtest/gtest.h>
 #include <memory>
