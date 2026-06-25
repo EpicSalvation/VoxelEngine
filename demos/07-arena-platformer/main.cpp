@@ -1022,23 +1022,23 @@ layers:
 
         for (const auto& kv : foundationMeshes) {
             const Chunk* c = foundation->getChunk(kv.first);
-            if (c) renderer.renderChunk(kv.second, c->origin(), foundation->voxelSizeM());
+            if (c) renderer.renderChunk(kv.second, c->origin(), foundation->voxelSizeM(), foundation->chunkSizeVoxels());
         }
         for (const auto& kv : rampartsMeshes) {
             const Chunk* c = ramparts->getChunk(kv.first);
-            if (c) renderer.renderChunk(kv.second, c->origin(), ramparts->voxelSizeM());
+            if (c) renderer.renderChunk(kv.second, c->origin(), ramparts->voxelSizeM(), ramparts->chunkSizeVoxels());
         }
         for (const auto& kv : propsMeshes) {
             const Chunk* c = props->getChunk(kv.first);
-            if (c) renderer.renderChunk(kv.second, c->origin(), props->voxelSizeM());
+            if (c) renderer.renderChunk(kv.second, c->origin(), props->voxelSizeM(), props->chunkSizeVoxels());
         }
         for (const auto& kv : terracesMeshes) {
             const Chunk* c = terraces->getChunk(kv.first);
-            if (c) renderer.renderChunk(kv.second, c->origin(), terraces->voxelSizeM());
+            if (c) renderer.renderChunk(kv.second, c->origin(), terraces->voxelSizeM(), terraces->chunkSizeVoxels());
         }
         for (const auto& kv : detailMeshes) {
             const Chunk* c = detail->getChunk(kv.first);
-            if (c) renderer.renderChunk(kv.second, c->origin(), detail->voxelSizeM());
+            if (c) renderer.renderChunk(kv.second, c->origin(), detail->voxelSizeM(), detail->chunkSizeVoxels());
         }
 
         renderer.render();

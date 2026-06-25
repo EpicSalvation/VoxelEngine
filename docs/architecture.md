@@ -389,7 +389,7 @@ Feature generators (`register_feature_generator`) post-process an already-filled
 
 ## 9. Renderer and LOD
 
-**Files:** `include/renderer/Renderer.h` (abstract interface), `include/renderer/RendererFactory.h` + `src/renderer/RendererFactory.cpp` (the bgfx-free creation seam), `src/renderer/BgfxRenderer.cpp/.h`, `src/renderer/LODManager.cpp/.h`, `src/platform/Window.cpp/.h`, `include/platform/NativeWindowHandles.h`
+**Files:** `include/renderer/Renderer.h` (abstract interface), `include/renderer/Frustum.h` (view-frustum culling), `include/renderer/RendererFactory.h` + `src/renderer/RendererFactory.cpp` (the bgfx-free creation seam), `src/renderer/BgfxRenderer.cpp/.h`, `src/renderer/LODManager.cpp/.h`, `src/platform/Window.cpp/.h`, `include/platform/NativeWindowHandles.h`
 
 ### Windowing and Surface
 
@@ -435,6 +435,12 @@ A material is translucent when its **palette entry's alpha byte is below `0xff`*
 - **Submission** uses two bgfx views sharing the camera transform and the back buffer's depth: view 0 draws the opaque batch with `BGFX_STATE_DEFAULT` (depth write on); view 1 draws the translucent batch after it with alpha blend, depth **test** on but depth **write off**, and **no backface cull** (so a water surface reads from both above and below). View 1 does not clear, so it composites over view 0's color and tests against its depth. Chunks are sorted back-to-front by squared distance from the camera before submission so that overlapping translucent faces alpha-blend in the correct order.
 
 This keeps transparency a property of the data (palette alpha), not of any subsystem's special-casing: a plugin makes a material translucent simply by pointing it at a translucent palette index. Interior faces between like voxels are still culled, so a filled body of water renders only its outer shell.
+
+### View-Frustum Culling
+
+`BgfxRenderer::render()` performs conservative view-frustum culling before sorting or submitting chunks to the GPU. Each frame the renderer builds a `Frustum` (`include/renderer/Frustum.h`) from the current camera position, orientation, aspect ratio, vertical FOV (60°), and far clip distance. Pending chunks are tested against the frustum's five planes (near, far, left, right, top/bottom) using a bounding-sphere check — each chunk's sphere is centered at its world-space midpoint with radius `chunkWorldSize × √3/2` (the half-diagonal). Chunks whose sphere lies entirely outside any plane are discarded via `std::remove_if` before the back-to-front sort.
+
+The test is conservative: it never culls geometry the GPU would actually draw, but may submit chunks that are marginally outside the frustum (sphere vs. box overestimation). `renderChunk()` accepts an optional `chunkSizeVoxels` parameter (default 32) alongside `voxelSizeM` so the renderer can compute the correct bounding sphere for any layer scale.
 
 ### Texture Atlas
 

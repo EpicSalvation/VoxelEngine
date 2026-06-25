@@ -854,15 +854,15 @@ layers:
         renderer.setCameraRotation(pitch, yaw, 0.0f);
         for (const auto& kv : backdropMeshes) {
             const Chunk* chunk = backdrop->getChunk(kv.first);
-            if (chunk) renderer.renderChunk(kv.second, chunk->origin(), backdrop->voxelSizeM());
+            if (chunk) renderer.renderChunk(kv.second, chunk->origin(), backdrop->voxelSizeM(), backdrop->chunkSizeVoxels());
         }
         for (const auto& kv : blocksMeshes) {
             const Chunk* chunk = blocks->getChunk(kv.first);
-            if (chunk) renderer.renderChunk(kv.second, chunk->origin(), blocks->voxelSizeM());
+            if (chunk) renderer.renderChunk(kv.second, chunk->origin(), blocks->voxelSizeM(), blocks->chunkSizeVoxels());
         }
         for (const auto& kv : terrainMeshes) {
             const Chunk* chunk = terrain->getChunk(kv.first);
-            if (chunk) renderer.renderChunk(kv.second, chunk->origin(), terrain->voxelSizeM());
+            if (chunk) renderer.renderChunk(kv.second, chunk->origin(), terrain->voxelSizeM(), terrain->chunkSizeVoxels());
         }
         // Remote players: a colored marker cube at each last-known position.
         for (const auto& kv : nm.playerPositions()) {

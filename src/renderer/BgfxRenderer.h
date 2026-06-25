@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/Renderer.h"
+#include "renderer/Frustum.h"
 #include "../world/World.h"
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
@@ -47,7 +48,7 @@ public:
     // is in chunk-local units (1 voxel == 1 unit); voxelSizeM scales it to the
     // layer's world scale, so composite/immutable layers render at their own size.
     void renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin,
-                     double voxelSizeM = 1.0);
+                     double voxelSizeM = 1.0, int chunkSizeVoxels = 32);
 
     // Submit a wireframe box centered at a world-space position, drawn as lines
     // over the scene (depth-tested, no depth write) — used to outline the voxel
@@ -89,6 +90,7 @@ private:
     struct PendingChunk {
         WorldCoord               origin;
         double                   voxelSizeM;
+        int                      chunkSizeVoxels;
         bgfx::VertexBufferHandle vbh;
         bgfx::IndexBufferHandle  opaqueIbh;
         bgfx::IndexBufferHandle  translucentIbh;

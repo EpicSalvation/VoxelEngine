@@ -72,42 +72,6 @@ constexpr uint64_t kWorldSeed = 0xB3402DB10C5ull;  // matches the plugin's seed 
 // near the island never approaches the shell, so a 1200 m far clip comfortably
 // frames both with room to spare for the floating-origin depth budget.
 constexpr float  kFarClipM = 1200.0f;
-constexpr double kVFovDeg  = 60.0;
-
-// Conservative view-frustum cull for chunk bounding spheres, built from the same
-// camera basis and projection the renderer uses (identical to demo 10). After a
-// long flight the mesh stores hold many chunks behind the camera or outside the
-// view cone; this skips submitting them without ever culling visible geometry.
-struct Frustum {
-    glm::dvec3 pos{}, fwd{}, right{}, up{};
-    double tanH = 0.0, tanV = 0.0, cosH = 1.0, cosV = 1.0, farClip = 0.0;
-
-    void update(const WorldCoord& camPos, float pitch, float yaw,
-                double aspect, double vfovDeg, double farClipM) {
-        pos = camPos.value;
-        const double cp = std::cos(pitch), sp = std::sin(pitch);
-        const double cy = std::cos(yaw),   sy = std::sin(yaw);
-        fwd   = glm::dvec3(cp * sy, sp, cp * cy);
-        right = glm::dvec3(cy, 0.0, -sy);
-        up    = glm::cross(fwd, right);
-        tanV  = std::tan(glm::radians(vfovDeg) * 0.5);
-        tanH  = tanV * aspect;
-        cosV  = 1.0 / std::sqrt(1.0 + tanV * tanV);
-        cosH  = 1.0 / std::sqrt(1.0 + tanH * tanH);
-        farClip = farClipM;
-    }
-
-    bool sphereVisible(const glm::dvec3& center, double radius) const {
-        const glm::dvec3 rel = center - pos;
-        const double z = glm::dot(rel, fwd);
-        if (z + radius < 0.0 || z - radius > farClip) return false;
-        const double x = glm::dot(rel, right);
-        if ((std::abs(x) - z * tanH) * cosH > radius) return false;
-        const double y = glm::dot(rel, up);
-        if ((std::abs(y) - z * tanV) * cosV > radius) return false;
-        return true;
-    }
-};
 
 using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
 
@@ -191,16 +155,13 @@ void streamLayer(StreamedLayer& s, const LODManager& lod, const WorldCoord& camP
     }
 }
 
-void renderLayer(const StreamedLayer& s, BgfxRenderer& renderer, const Frustum& frustum) {
+void renderLayer(const StreamedLayer& s, BgfxRenderer& renderer) {
     const Layer& layer = *s.layer;
-    const double chunkWorld   = layer.voxelSizeM() * layer.chunkSizeVoxels();
-    const double sphereRadius = chunkWorld * 0.8660254;  // √3/2 · side, the half-diagonal
     for (const auto& kv : s.meshes) {
         const Chunk* chunk = layer.getChunk(kv.first);
         if (!chunk || kv.second.empty()) continue;
-        const glm::dvec3 center = chunk->origin().value + glm::dvec3(chunkWorld * 0.5);
-        if (!frustum.sphereVisible(center, sphereRadius)) continue;
-        renderer.renderChunk(kv.second, chunk->origin(), layer.voxelSizeM());
+        renderer.renderChunk(kv.second, chunk->origin(),
+                             layer.voxelSizeM(), layer.chunkSizeVoxels());
     }
 }
 
@@ -389,14 +350,9 @@ layers:
         renderer.setCameraPosition(camPos);
         renderer.setCameraRotation(pitch, yaw, 0.0f);
 
-        Frustum frustum;
-        frustum.update(camPos, pitch, yaw,
-                       static_cast<double>(fbW) / static_cast<double>(fbH),
-                       kVFovDeg, kFarClipM);
-
         // Coarsest first so finer voxels occlude coarser ones via the depth test.
-        renderLayer(backdrop,  renderer, frustum);
-        renderLayer(playspace, renderer, frustum);
+        renderLayer(backdrop,  renderer);
+        renderLayer(playspace, renderer);
 
         renderer.render();
     }

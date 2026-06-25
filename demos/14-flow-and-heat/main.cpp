@@ -432,7 +432,7 @@ int main() {
 
         for (const auto& kv : meshes) {
             const Chunk* ch = terrain->getChunk(kv.first);
-            if (ch) renderer.renderChunk(kv.second, ch->origin(), cvs);
+            if (ch) renderer.renderChunk(kv.second, ch->origin(), cvs, terrain->chunkSizeVoxels());
         }
 
         // ── Field tints (the two read-only accessors), over the interior slab ─
