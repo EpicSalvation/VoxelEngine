@@ -142,3 +142,36 @@ inline constexpr int kMaxFluidCellsPerFrame  = 4096;
 inline constexpr int kMaxFluidEventsPerFrame = 256;
 
 }  // namespace tuning::fluid
+
+namespace tuning::lighting {
+
+// Sky light + block (emitter) light model (M17, docs/ARCHITECTURE.md §17).
+//
+// LightingSystem owns a sparse FieldOverlay of combined brightness at
+// terminal-voxel granularity. Block light propagates via BFS from emitters
+// (materials with light_emission > 0); sky light floods downward from
+// unobstructed columns. Both are clamped to [0, kMaxBrightness].
+
+// Ambient floor: the minimum brightness every voxel receives even in total
+// darkness. 0 means unlit areas are pitch black; raise for a "you can
+// always see" baseline.
+inline constexpr float kAmbientBrightness = 0.05f;
+
+// Maximum brightness value (full sky light or a maximum-power emitter).
+inline constexpr float kMaxBrightness = 1.0f;
+
+// Block-light attenuation per voxel step: each BFS hop reduces the
+// propagated brightness by this fraction of kMaxBrightness, so the
+// effective range of a full-power emitter is kMaxBrightness / kAttenuationPerStep.
+inline constexpr float kAttenuationPerStep = 1.0f / 15.0f;
+
+// Per-frame budget on distinct cells the lighting pass visits (active set +
+// frontier, sorted-coord order). Same carry convention as thermal/fluid:
+// a cell skipped this frame stays in the overlay's active set for next tick.
+inline constexpr int kMaxLightingCellsPerFrame = 8192;
+
+// Per-frame budget on lighting events fired (rising/falling boundary
+// crossings). Overflow carries to the next frame.
+inline constexpr int kMaxLightingEventsPerFrame = 256;
+
+}  // namespace tuning::lighting

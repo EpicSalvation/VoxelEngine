@@ -175,6 +175,7 @@ void NetworkManager::applyEdit(PlayerId source, WorldCoord pos, const Voxel& vox
         intent.thermal_conductivity = voxel.material.thermal_conductivity;
         intent.porosity             = voxel.material.porosity;
         intent.hardness             = voxel.material.hardness;
+        intent.light_emission       = voxel.material.light_emission;
         intent.palette_index        = voxel.material.palette_index;
         auto buf = encode_edit_intent(intent);
         // Send on channel 0 (Reliable) to the server (peer 1 in a simple two-node setup).
@@ -249,6 +250,7 @@ void NetworkManager::broadcastCommittedEdit(uint32_t seq, PlayerId source,
     p.thermal_conductivity   = voxel.material.thermal_conductivity;
     p.porosity               = voxel.material.porosity;
     p.hardness               = voxel.material.hardness;
+    p.light_emission         = voxel.material.light_emission;
     p.palette_index          = voxel.material.palette_index;
 
     auto buf = encode_committed_edit(p);
@@ -411,6 +413,7 @@ void NetworkManager::handleEditIntent(PeerId sender_peer, const InboundPacket& p
     v.material.thermal_conductivity = intent.thermal_conductivity;
     v.material.porosity             = intent.porosity;
     v.material.hardness             = intent.hardness;
+    v.material.light_emission       = intent.light_emission;
     v.material.palette_index        = intent.palette_index;
 
     // Route through the authority policies and on_edit_received, then commit.
@@ -455,6 +458,7 @@ void NetworkManager::handleCommittedEdit(const InboundPacket& pkt)
     v.material.thermal_conductivity = p.thermal_conductivity;
     v.material.porosity             = p.porosity;
     v.material.hardness             = p.hardness;
+    v.material.light_emission       = p.light_emission;
     v.material.palette_index        = p.palette_index;
 
     const Voxel old_voxel = world_->getVoxel(pos);

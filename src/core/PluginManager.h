@@ -172,6 +172,22 @@ struct RegisteredFluidSource {
     PluginId    owner;
 };
 
+// ---------------------------------------------------------------------------
+// Lighting registries (M17, ARCHITECTURE §17)
+// ---------------------------------------------------------------------------
+
+struct RegisteredLightingEventHook {
+    OnLightingEventFn fn;
+    void*             user_data;
+    PluginId          owner;
+};
+
+struct RegisteredLightSource {
+    WorldCoord pos;
+    float      brightness = 0.0f;
+    PluginId   owner;
+};
+
 struct RegisteredChunkLifecycleHook {
     std::string      layer_name;
     ChunkLifecycleFn fn;
@@ -317,6 +333,8 @@ public:
     const std::vector<RegisteredThermalEventHook>&    thermalEventHooks()    const { return thermalEventHooks_; }
     const std::vector<RegisteredHeatSource>&          heatSources()          const { return heatSources_; }
     const std::vector<RegisteredFluidSource>&         fluidSources()         const { return fluidSources_; }
+    const std::vector<RegisteredLightingEventHook>&   lightingEventHooks()   const { return lightingEventHooks_; }
+    const std::vector<RegisteredLightSource>&         lightSources()         const { return lightSources_; }
     const std::vector<RegisteredChunkLifecycleHook>&  chunkCreatedHooks()    const { return chunkCreatedHooks_; }
     const std::vector<RegisteredChunkLifecycleHook>&  chunkEvictedHooks()    const { return chunkEvictedHooks_; }
     const std::vector<RegisteredImporter>&            importers()            const { return importers_; }
@@ -386,6 +404,8 @@ private:
     std::vector<RegisteredThermalEventHook>    thermalEventHooks_;
     std::vector<RegisteredHeatSource>          heatSources_;
     std::vector<RegisteredFluidSource>         fluidSources_;
+    std::vector<RegisteredLightingEventHook>   lightingEventHooks_;
+    std::vector<RegisteredLightSource>         lightSources_;
     std::vector<RegisteredChunkLifecycleHook>  chunkCreatedHooks_;
     std::vector<RegisteredChunkLifecycleHook>  chunkEvictedHooks_;
     std::vector<RegisteredImporter>            importers_;

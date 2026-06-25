@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include <glm/glm.hpp>
 
 #include "world/Chunk.h"
+#include "world/ChunkCoordMath.h"
 
 // Plain interleaved vertex for chunk meshes: position + packed ABGR color +
 // tile-local atlas UV (u,v) + the bound tile's atlas sub-rect (r0..r3).
@@ -60,9 +62,16 @@ struct MeshVertex {
 // (M16 G1): the geometric face most opposing gravity shows the material's `top`
 // tile, so a textured surface follows "up" instead of being painted on +Y. The
 // default constant -Y reproduces the historical Y-up mapping byte-for-byte.
+// Optional per-voxel light query for the mesher. Given a voxel coordinate,
+// returns the brightness [0,1] at that cell. When null, the mesher uses the
+// fixed directional shading only (pre-M17 behavior, byte-identical).
+using LightQueryFn = std::function<float(const chunkmath::VoxelCoord&)>;
+
 void buildChunkMeshData(const Chunk& chunk,
                         std::vector<MeshVertex>& out_vertices,
                         std::vector<uint32_t>&   out_opaque_indices,
                         std::vector<uint32_t>&   out_translucent_indices,
                         double                   voxel_size_m = 1.0,
-                        const glm::dvec3&        gravity_dir  = glm::dvec3(0.0, -1.0, 0.0));
+                        const glm::dvec3&        gravity_dir  = glm::dvec3(0.0, -1.0, 0.0),
+                        const LightQueryFn&      light_query  = nullptr,
+                        ChunkCoord               chunk_coord  = {0, 0, 0});

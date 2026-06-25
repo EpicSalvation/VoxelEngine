@@ -191,6 +191,7 @@ Material properties replace the ID with a data record. Simulation systems query 
 | `thermal_conductivity` | `float` | W/(m·K); drives heat transfer and fire spread |
 | `porosity` | `float` | 0.0–1.0; fraction of volume permeable to fluid |
 | `hardness` | `float` | Relative resistance to removal/destruction; not mapped to any real-world scale. `0` = no resistance (instant removal); `< 0` = indestructible (sentinel). See the consumption contract below |
+| `light_emission` | `float` | Emitted block light `[0,1]`; drives LightingSystem (§17). `0` = no emission; `1` = full-power emitter (15-voxel range) |
 | `palette_index` | `uint8_t` | Index into the 256-entry visual palette; used for `.vox` compatibility |
 
 ### Palette Index and Editor Compatibility
@@ -953,6 +954,27 @@ Heat and fluid originate from **plugin-registered emitters** — `register_heat_
 Both passes obey the §4 determinism contract: they run **end-of-frame**, visit cells in **deterministic sorted-coord order** (no unordered iteration, no `rand`/`time`), and are bounded by `tuning::fluid` / `tuning::thermal` budgets with **overflow carried to the next frame**, so a large flood or heat front spreads across frames instead of stalling one — the `tuning::physics` pattern from M13.
 
 The overlays are **transient**. Durable fluid is the realized *voxels* the `flow` plugin already placed (persisted by §9 with no format change); on load, both fields are re-derived from re-registered emitters and the existing fluid voxels. Heat resets to ambient on load and re-warms from its emitters — acceptable, and the same "state re-establishes from its source" stance the transient `RemovalAccumulator` took (§5). Network replication of the field itself is deferred: the realized fluid voxels already replicate through the M11 edit choke point, so remote clients see the same geometry without the field crossing the wire.
+
+---
+
+### Lighting Overlay (M17, A1)
+
+**Files:** `src/simulation/LightingSystem.cpp/.h`, `src/core/Tuning.h` (`tuning::lighting` knobs).
+
+A third engine-owned sparse field overlay, following the same architecture as thermal and fluid: a `FieldOverlay` of per-voxel brightness, advanced once per frame after fluid, scoped to the resident terminal-layer region.
+
+**Two light channels, one overlay value:**
+
+- **Sky light** — a voxel with no opaque block above it in the resident region receives full brightness (`kMaxBrightness = 1.0`). Sky access is a per-column check, not a lateral propagation.
+- **Block (emitter) light** — materials with `light_emission > 0` (a new `MaterialProperties` field) and plugin-registered point sources (`register_light_source`, §8) inject brightness that propagates via BFS through transparent voxels, attenuating by `kAttenuationPerStep` per hop. The effective range of a full-power emitter is `1.0 / kAttenuationPerStep` = 15 voxels.
+
+Both channels are combined into a single overlay value per cell (max wins). The mesher (`buildChunkMeshData`) accepts an optional `LightQueryFn` callback and multiplies each face's vertex color by the sampled light level at the neighboring air voxel; when no callback is provided, the pre-M17 fixed directional shading is byte-identical.
+
+**Rebuild, not incremental:** Each tick the overlay is cleared and rebuilt from scratch (sky columns + emitter BFS), bounded by `kMaxLightingCellsPerFrame`. This is simpler and more correct for light removal (a block placed above a column immediately darkens everything below it) at the cost of per-tick work proportional to the lit region size. The dirty flag (`on_voxel_modified` hook) skips the rebuild when nothing changed.
+
+**Events:** `on_lighting_event` fires on active-set boundary crossings (Rising/Falling), mirroring `on_thermal_event`. Same detect/respond split: what a plugin does with a lighting change (e.g., trigger mob spawning in darkness) is game policy.
+
+**Persistence:** The overlay is transient — re-derived each tick from sky geometry, material emitters, and registered sources. No §9 format change beyond the `light_emission` field on `MaterialProperties` (`.vxc` version bumped to 2).
 
 ---
 

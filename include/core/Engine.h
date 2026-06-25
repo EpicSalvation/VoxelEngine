@@ -11,7 +11,7 @@ class PluginManager;
 class World;
 namespace net   { class NetworkManager; }
 namespace audio { class AudioManager;   }
-namespace sim   { class FluidSystem; class ThermalSystem; }
+namespace sim   { class FluidSystem; class ThermalSystem; class LightingSystem; }
 
 class Engine {
 public:
@@ -70,13 +70,16 @@ public:
     sim::FluidSystem*     fluidSystem() const { return fluid_; }
     void                  setThermalSystem(sim::ThermalSystem* ts) { thermal_ = ts; }
     sim::ThermalSystem*   thermalSystem() const { return thermal_; }
+    void                  setLightingSystem(sim::LightingSystem* ls) { lighting_ = ls; }
+    sim::LightingSystem*  lightingSystem() const { return lighting_; }
 
-    // Read-only field query accessors (M14, docs/ARCHITECTURE.md §17). Return the
-    // sparse overlays' ambient/absent-cell default (0.0f) when no system is
-    // attached. No write path is exposed here — only the engine-owned solver
-    // writes its own overlay.
+    // Read-only field query accessors (M14/M17, docs/ARCHITECTURE.md §17). Return
+    // the sparse overlays' ambient/absent-cell default when no system is attached.
+    // No write path is exposed here — only the engine-owned solver writes its
+    // own overlay.
     float temperatureAt(const WorldCoord& pos) const;
     float fluidAmountAt(const WorldCoord& pos) const;
+    float lightAt(const WorldCoord& pos) const;
 
 private:
     void gameLoop();
@@ -86,7 +89,8 @@ private:
     net::NetworkManager*  nm_      = nullptr;
     audio::AudioManager*  am_      = nullptr;
     sim::FluidSystem*     fluid_   = nullptr;
-    sim::ThermalSystem*   thermal_ = nullptr;
+    sim::ThermalSystem*   thermal_  = nullptr;
+    sim::LightingSystem*  lighting_ = nullptr;
 
     std::atomic<bool>  isRunning      = false;
     std::thread        gameLoopThread;

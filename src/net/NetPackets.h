@@ -129,22 +129,23 @@ inline double read_f64(const std::vector<uint8_t>& buf, size_t& off)
 // EditIntent  (client → server)
 //
 //   [kind:u8][x:f64][y:f64][z:f64][density:f32][structural_strength:f32]
-//   [thermal_conductivity:f32][porosity:f32][hardness:f32][palette_index:u8]
-//   [_pad:3×u8]
+//   [thermal_conductivity:f32][porosity:f32][hardness:f32]
+//   [light_emission:f32][palette_index:u8][_pad:3×u8]
 //
-// Total: 1 + 3*8 + 5*4 + 1 + 3 = 49 bytes
+// Total: 1 + 3*8 + 6*4 + 1 + 3 = 53 bytes
 // ---------------------------------------------------------------------------
 
 struct EditIntentPayload {
     double  x, y, z;
     float   density, structural_strength, thermal_conductivity, porosity, hardness;
+    float   light_emission;
     uint8_t palette_index;
 };
 
 inline std::vector<uint8_t> encode_edit_intent(const EditIntentPayload& p)
 {
     std::vector<uint8_t> buf;
-    buf.reserve(49);
+    buf.reserve(53);
     write_u8 (buf, static_cast<uint8_t>(NetPacketKind::EditIntent));
     write_f64(buf, p.x);
     write_f64(buf, p.y);
@@ -154,6 +155,7 @@ inline std::vector<uint8_t> encode_edit_intent(const EditIntentPayload& p)
     write_f32(buf, p.thermal_conductivity);
     write_f32(buf, p.porosity);
     write_f32(buf, p.hardness);
+    write_f32(buf, p.light_emission);
     write_u8 (buf, p.palette_index);
     write_u8 (buf, 0); write_u8(buf, 0); write_u8(buf, 0); // _pad
     return buf;
@@ -161,7 +163,7 @@ inline std::vector<uint8_t> encode_edit_intent(const EditIntentPayload& p)
 
 inline bool decode_edit_intent(const std::vector<uint8_t>& buf, EditIntentPayload& out)
 {
-    if (buf.size() < 49 || buf[0] != static_cast<uint8_t>(NetPacketKind::EditIntent))
+    if (buf.size() < 53 || buf[0] != static_cast<uint8_t>(NetPacketKind::EditIntent))
         return false;
     size_t off = 1;
     out.x                    = read_f64(buf, off);
@@ -172,6 +174,7 @@ inline bool decode_edit_intent(const std::vector<uint8_t>& buf, EditIntentPayloa
     out.thermal_conductivity = read_f32(buf, off);
     out.porosity             = read_f32(buf, off);
     out.hardness             = read_f32(buf, off);
+    out.light_emission       = read_f32(buf, off);
     out.palette_index        = read_u8 (buf, off);
     return true;
 }
@@ -181,9 +184,9 @@ inline bool decode_edit_intent(const std::vector<uint8_t>& buf, EditIntentPayloa
 //
 //   [kind:u8][seq:u32][source:u32][x:f64][y:f64][z:f64][density:f32]
 //   [structural_strength:f32][thermal_conductivity:f32][porosity:f32]
-//   [hardness:f32][palette_index:u8][_pad:3×u8]
+//   [hardness:f32][light_emission:f32][palette_index:u8][_pad:3×u8]
 //
-// Total: 1 + 4 + 4 + 3*8 + 5*4 + 1 + 3 = 57 bytes
+// Total: 1 + 4 + 4 + 3*8 + 6*4 + 1 + 3 = 61 bytes
 // ---------------------------------------------------------------------------
 
 struct CommittedEditPayload {
@@ -191,13 +194,14 @@ struct CommittedEditPayload {
     uint32_t source_player;
     double   x, y, z;
     float    density, structural_strength, thermal_conductivity, porosity, hardness;
+    float    light_emission;
     uint8_t  palette_index;
 };
 
 inline std::vector<uint8_t> encode_committed_edit(const CommittedEditPayload& p)
 {
     std::vector<uint8_t> buf;
-    buf.reserve(57);
+    buf.reserve(61);
     write_u8 (buf, static_cast<uint8_t>(NetPacketKind::CommittedEdit));
     write_u32(buf, p.seq);
     write_u32(buf, p.source_player);
@@ -209,6 +213,7 @@ inline std::vector<uint8_t> encode_committed_edit(const CommittedEditPayload& p)
     write_f32(buf, p.thermal_conductivity);
     write_f32(buf, p.porosity);
     write_f32(buf, p.hardness);
+    write_f32(buf, p.light_emission);
     write_u8 (buf, p.palette_index);
     write_u8 (buf, 0); write_u8(buf, 0); write_u8(buf, 0); // _pad
     return buf;
@@ -216,7 +221,7 @@ inline std::vector<uint8_t> encode_committed_edit(const CommittedEditPayload& p)
 
 inline bool decode_committed_edit(const std::vector<uint8_t>& buf, CommittedEditPayload& out)
 {
-    if (buf.size() < 57 || buf[0] != static_cast<uint8_t>(NetPacketKind::CommittedEdit))
+    if (buf.size() < 61 || buf[0] != static_cast<uint8_t>(NetPacketKind::CommittedEdit))
         return false;
     size_t off = 1;
     out.seq                    = read_u32(buf, off);
@@ -229,6 +234,7 @@ inline bool decode_committed_edit(const std::vector<uint8_t>& buf, CommittedEdit
     out.thermal_conductivity   = read_f32(buf, off);
     out.porosity               = read_f32(buf, off);
     out.hardness               = read_f32(buf, off);
+    out.light_emission         = read_f32(buf, off);
     out.palette_index          = read_u8 (buf, off);
     return true;
 }
