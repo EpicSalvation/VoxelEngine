@@ -14,7 +14,6 @@
 #include "core/PluginManager.h"
 
 #include <gtest/gtest.h>
-#include <memory>
 
 namespace {
 
@@ -40,9 +39,9 @@ TEST(EngineMetrics, DefaultsWithNoAttachments) {
     Engine engine;
     LayerDef def;
     def.name = "test";
-    def.mode = LayerMode::Terminal;
+    def.mode = VoxelMode::terminal;
     def.voxel_size_m = 1.0;
-    def.chunk_size = 32;
+    def.chunk_size_voxels = 32;
     World world(def);
     PluginManager pm;
     engine.init(pm, world);
@@ -60,16 +59,16 @@ TEST(EngineMetrics, ReportsVoiceCount) {
     Engine engine;
     LayerDef def;
     def.name = "terrain";
-    def.mode = LayerMode::Terminal;
+    def.mode = VoxelMode::terminal;
     def.voxel_size_m = 1.0;
-    def.chunk_size = 32;
+    def.chunk_size_voxels = 32;
     World world(def);
     PluginManager pm;
     engine.init(pm, world);
 
-    auto backend = std::make_unique<StubAudioBackend>();
+    auto* backend = new StubAudioBackend();
     backend->voices = 7;
-    audio::AudioManager audioMgr(std::move(backend));
+    audio::AudioManager audioMgr(backend, pm);
     engine.setAudioManager(&audioMgr);
 
     EngineMetrics m = engine.getMetrics();
@@ -80,9 +79,9 @@ TEST(EngineMetrics, ReportsResidentChunks) {
     Engine engine;
     LayerDef def;
     def.name = "terrain";
-    def.mode = LayerMode::Terminal;
+    def.mode = VoxelMode::terminal;
     def.voxel_size_m = 1.0;
-    def.chunk_size = 32;
+    def.chunk_size_voxels = 32;
     World world(def);
     PluginManager pm;
     engine.init(pm, world);
@@ -101,14 +100,14 @@ TEST(EngineMetrics, MultiLayerChunkCounts) {
     LayerConfig config;
     LayerDef coarse;
     coarse.name = "coarse";
-    coarse.mode = LayerMode::Composite;
+    coarse.mode = VoxelMode::composite;
     coarse.voxel_size_m = 8.0;
     coarse.chunk_size = 32;
     coarse.decompose_to = "fine";
 
     LayerDef fine;
     fine.name = "fine";
-    fine.mode = LayerMode::Terminal;
+    fine.mode = VoxelMode::terminal;
     fine.voxel_size_m = 1.0;
     fine.chunk_size = 32;
     fine.interactive = true;
@@ -138,9 +137,9 @@ TEST(EngineMetrics, FrameTimeReflectsDeltaTime) {
     Engine engine;
     LayerDef def;
     def.name = "terrain";
-    def.mode = LayerMode::Terminal;
+    def.mode = VoxelMode::terminal;
     def.voxel_size_m = 1.0;
-    def.chunk_size = 32;
+    def.chunk_size_voxels = 32;
     World world(def);
     PluginManager pm;
     engine.init(pm, world);
