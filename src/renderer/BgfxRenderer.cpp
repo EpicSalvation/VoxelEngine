@@ -99,6 +99,7 @@ BgfxRenderer::BgfxRenderer()
       viewWidth(800),
       viewHeight(600),
       farClip(1000.0f),
+      lastDrawCalls(0),
       crosshair(false),
       initialized(false)
 {}
@@ -364,6 +365,8 @@ void BgfxRenderer::render() {
     pendingChunks.clear();
     pendingHighlights.clear();
     bgfx::frame();
+    const bgfx::Stats* stats = bgfx::getStats();
+    lastDrawCalls = stats ? stats->numDraw : 0;
 }
 
 void BgfxRenderer::drawVoxel(const WorldCoord& position, uint32_t abgr) {

@@ -236,6 +236,8 @@ layers:
     // depth precision for the 1 m terrain (the default 1000 m would clip context).
     renderer.setFarClip(kFarClipM);
     renderer.setCrosshair(true);
+    engine.setRenderer(&renderer);
+    engine.setDecompositionManager(&decompMgr);
 
     // One MeshStore per layer (all four, plus terminal).
     // Keys are layer names; each MeshStore maps ChunkCoord → ChunkMesh.
@@ -446,16 +448,19 @@ layers:
 
         // ── HUD ───────────────────────────────────────────────────────────────
         {
-            const int contDecomp = static_cast<int>(decompMgr.decomposedCount("continental"));
-            const int regDecomp  = static_cast<int>(decompMgr.decomposedCount("regional"));
-            const int locDecomp  = static_cast<int>(decompMgr.decomposedCount("local"));
-            const int inFlight   = static_cast<int>(decompMgr.inFlight());
-            const int terrChunks = static_cast<int>(terrain->chunks().size());
+            const auto metrics = engine.getMetrics();
+            int contDecomp = 0, regDecomp = 0, locDecomp = 0, terrChunks = 0;
+            for (const auto& lm : metrics.layers) {
+                if (lm.layerName == "continental") contDecomp = static_cast<int>(lm.decomposedMacros);
+                else if (lm.layerName == "regional") regDecomp = static_cast<int>(lm.decomposedMacros);
+                else if (lm.layerName == "local") locDecomp = static_cast<int>(lm.decomposedMacros);
+                else if (lm.layerName == "terrain") terrChunks = static_cast<int>(lm.residentChunks);
+            }
             char hud[256];
             std::snprintf(hud, sizeof(hud),
-                "Decomposed: cont=%d  reg=%d  loc=%d | terrain chunks=%d | in-flight=%d"
+                "Decomposed: cont=%d  reg=%d  loc=%d | terrain chunks=%d | in-flight=%zu"
                 " | LMB=break  RMB=place soil",
-                contDecomp, regDecomp, locDecomp, terrChunks, inFlight);
+                contDecomp, regDecomp, locDecomp, terrChunks, metrics.decompInFlight);
             renderer.setHudText({std::string(hud)});
         }
 

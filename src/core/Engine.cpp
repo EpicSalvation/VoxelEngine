@@ -4,6 +4,8 @@
 #include "audio/AudioManager.h"
 #include "io/VoxImporter.h"
 #include "io/VoxExporter.h"
+#include "renderer/BgfxRenderer.h"
+#include "world/DecompositionManager.h"
 #include "world/Layer.h"
 #include "world/World.h"
 #include "net/NetworkManager.h"
@@ -132,6 +134,7 @@ void Engine::stop()
 
 void Engine::update(double dt)
 {
+    deltaTime = dt;
     // Network update runs after world update and before render (ARCHITECTURE §15).
     if (nm_ && nm_->isActive()) {
         nm_->update(dt);
@@ -172,4 +175,24 @@ void Engine::gameLoop() {
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+}
+
+EngineMetrics Engine::getMetrics() const {
+    EngineMetrics m;
+    m.frameTimeSec = deltaTime;
+    m.drawCalls    = renderer_ ? renderer_->drawCallCount() : 0;
+    m.voiceCount   = am_ ? am_->activeVoiceCount() : 0;
+    m.decompInFlight = decompMgr_ ? decompMgr_->inFlight() : 0;
+
+    if (world_) {
+        for (const auto& lp : world_->layers()) {
+            LayerChunkMetrics lm;
+            lm.layerName      = lp->name();
+            lm.residentChunks = lp->chunks().size();
+            if (decompMgr_)
+                lm.decomposedMacros = decompMgr_->decomposedCount(lm.layerName);
+            m.layers.push_back(std::move(lm));
+        }
+    }
+    return m;
 }
