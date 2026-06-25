@@ -34,6 +34,7 @@
 #else
 #  define VOXEL_PLUGIN_EXPORT extern "C"
 #endif
+VOXEL_PLUGIN_ABI_STAMP();
 
 namespace {
 

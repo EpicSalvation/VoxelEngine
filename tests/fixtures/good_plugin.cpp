@@ -7,6 +7,7 @@
 #else
 #  define VOXEL_PLUGIN_EXPORT extern "C"
 #endif
+VOXEL_PLUGIN_ABI_STAMP();
 
 VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
     MaterialProperties m;

@@ -76,6 +76,24 @@ PluginId PluginManager::loadPlugin(const std::string& path) {
         return kInvalidPluginId;
     }
 
+    auto* abiPtr = reinterpret_cast<const uint32_t*>(
+        platformDlSym(handle, VOXEL_PLUGIN_ABI_VERSION_SYMBOL));
+    if (!abiPtr) {
+        std::cerr << "[PluginManager] " << path
+                  << " does not export '" VOXEL_PLUGIN_ABI_VERSION_SYMBOL
+                  "'; recompile the plugin against the current engine headers.\n";
+        platformDlClose(handle);
+        return kInvalidPluginId;
+    }
+    if (*abiPtr != VOXEL_PLUGIN_ABI_VERSION) {
+        std::cerr << "[PluginManager] " << path
+                  << ": ABI version mismatch (plugin=" << *abiPtr
+                  << ", engine=" << VOXEL_PLUGIN_ABI_VERSION
+                  << "); recompile the plugin against the current engine headers.\n";
+        platformDlClose(handle);
+        return kInvalidPluginId;
+    }
+
     const PluginId id = nextPluginId_++;
     // Store the context in a stable location: the plugin may retain &ctx and call
     // its function pointers long after init returns (see pluginContexts_ in the

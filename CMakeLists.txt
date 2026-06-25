@@ -452,7 +452,7 @@ enable_testing()
 # libraries built from tests/fixtures/*.cpp. Excluded from the test executable's
 # own sources below; their on-disk paths are injected as compile definitions.
 set(VOXEL_TEST_PLUGINS)
-foreach(_fx good badinit nosym)
+foreach(_fx good badinit nosym badabi)
   set(_fx_src ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${_fx}_plugin.cpp)
   if(EXISTS ${_fx_src})
     add_library(test-plugin-${_fx} MODULE ${_fx_src})
@@ -483,7 +483,8 @@ if(TEST_SOURCES)
     target_compile_definitions(voxel-engine-tests PRIVATE
       VOXEL_FIXTURE_GOOD="$<TARGET_FILE:test-plugin-good>"
       VOXEL_FIXTURE_BADINIT="$<TARGET_FILE:test-plugin-badinit>"
-      VOXEL_FIXTURE_NOSYM="$<TARGET_FILE:test-plugin-nosym>")
+      VOXEL_FIXTURE_NOSYM="$<TARGET_FILE:test-plugin-nosym>"
+      VOXEL_FIXTURE_BADABI="$<TARGET_FILE:test-plugin-badabi>")
   endif()
   # The M9 recipe tests load the recipe-world plugin to exercise its real
   # cave/ore feature generators through the registered FeatureGeneratorFn.

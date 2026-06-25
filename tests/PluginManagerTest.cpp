@@ -61,6 +61,11 @@ TEST(PluginManager, MissingInitSymbolFails) {
     EXPECT_EQ(pm.loadPlugin(VOXEL_FIXTURE_NOSYM), kInvalidPluginId);
 }
 
+TEST(PluginManager, AbiVersionMismatchFails) {
+    PluginManager pm;
+    EXPECT_EQ(pm.loadPlugin(VOXEL_FIXTURE_BADABI), kInvalidPluginId);
+}
+
 TEST(PluginManager, NonZeroInitFailsAndRollsBack) {
     PluginManager pm;
     EXPECT_EQ(pm.loadPlugin(VOXEL_FIXTURE_BADINIT), kInvalidPluginId);
