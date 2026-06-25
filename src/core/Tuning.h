@@ -175,3 +175,23 @@ inline constexpr int kMaxLightingCellsPerFrame = 8192;
 inline constexpr int kMaxLightingEventsPerFrame = 256;
 
 }  // namespace tuning::lighting
+
+namespace tuning::ao {
+
+// Per-vertex ambient occlusion in the chunk mesher (M17, sanity-check A2).
+//
+// "Smooth lighting": each face vertex is darkened by how enclosed its concave
+// corner is. The mesher counts opaque voxels in the 2x2 neighborhood around the
+// vertex in the voxel layer just OUTSIDE the face (the air side) and derives an
+// occlusion level 0..3 (3 = fully open corner, 0 = a corner boxed in on two
+// sides). This is a purely mesher-local computation — no overlay, no new data —
+// so it costs nothing at runtime beyond the per-vertex multiply baked into the
+// vertex color, alongside the fixed directional shade and the optional light.
+
+// Brightness multiplier indexed by occlusion level. kVertexFactor[3] is a fully
+// open corner (1.0 — no darkening, so flat/convex terrain is unchanged); lower
+// levels darken progressively toward a corner enclosed on multiple sides. Set
+// every entry to 1.0 to disable AO without touching the mesher.
+inline constexpr float kVertexFactor[4] = {0.46f, 0.64f, 0.82f, 1.0f};
+
+}  // namespace tuning::ao

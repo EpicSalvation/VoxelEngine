@@ -3,9 +3,13 @@
 // batch split on geometry counts.
 
 #include "renderer/ChunkMeshData.h"
+#include "renderer/MaterialFaces.h"
+#include "renderer/Palette.h"
 #include "world/Chunk.h"
 
 #include <gtest/gtest.h>
+
+#include <vector>
 
 namespace {
 
@@ -152,4 +156,88 @@ TEST(ChunkMeshData, OpaqueNeighborStillCullsOpaqueFace) {
     std::vector<uint32_t> opaque, translucent;
     buildChunkMeshData(chunk, verts, opaque, translucent);
     EXPECT_EQ(opaque.size(), static_cast<size_t>((kFacesPerCube - 1) * 2 * kVertsPerFace));  // 60
+}
+
+// ── Ambient occlusion (M17, sanity-check A2) ────────────────────────────────
+//
+// AO is baked into the per-vertex color: a face corner is darkened by the opaque
+// voxels in the 2x2 block around it in the air layer just outside the face. The
+// red channel of the (uniform grey stone) color is a direct proxy for brightness.
+
+namespace {
+
+// Red channel of a vertex color (the AO multiplier scales all RGB equally, so one
+// channel is enough to compare brightness). Stone is 0xffaaaaaa → R = 0xaa = 170.
+uint32_t redOf(const MeshVertex& mv) { return mv.abgr & 0xffu; }
+
+constexpr uint32_t kStoneR = 0xaa;  // full-bright top face (shade 1.0, AO factor 1.0)
+
+}  // namespace
+
+TEST(ChunkMeshData, AmbientOcclusionOpenTopFaceIsFullBright) {
+    // A lone voxel has no neighbors anywhere, so every top-face corner is a fully
+    // open AO level 3 (factor 1.0) and the color is unchanged from the pre-AO mesh.
+    palette::resetToDefault();
+    materialfaces::clearBindings();
+    Chunk chunk(ChunkCoord{0, 0, 0}, 4, WorldCoord());
+    chunk.at(2, 2, 2) = solid();
+    std::vector<MeshVertex> verts;
+    std::vector<uint32_t> opaque, translucent;
+    buildChunkMeshData(chunk, verts, opaque, translucent);
+
+    const int base = materialfaces::Face::PosY * kVertsPerFace;  // top face block
+    for (int i = 0; i < kVertsPerFace; ++i)
+        EXPECT_EQ(redOf(verts[base + i]), kStoneR) << "vertex " << i;
+}
+
+TEST(ChunkMeshData, AmbientOcclusionFlatGroundIsUniform) {
+    // Two coplanar voxels side by side: a coplanar neighbor sits in the SAME layer,
+    // not in the air layer above, so it must not occlude the top face. The first
+    // voxel's +Y block stays full-bright (no false self-AO seam between flat tiles).
+    palette::resetToDefault();
+    materialfaces::clearBindings();
+    Chunk chunk(ChunkCoord{0, 0, 0}, 4, WorldCoord());
+    chunk.at(1, 1, 1) = solid();
+    chunk.at(2, 1, 1) = solid();  // coplanar neighbor to +X (shared face culled)
+    std::vector<MeshVertex> verts;
+    std::vector<uint32_t> opaque, translucent;
+    buildChunkMeshData(chunk, verts, opaque, translucent);
+
+    // (1,1,1) is processed first and only loses its +X face (index 5, after +Y),
+    // so its +Y block is still at PosY*6.
+    const int base = materialfaces::Face::PosY * kVertsPerFace;
+    for (int i = 0; i < kVertsPerFace; ++i)
+        EXPECT_EQ(redOf(verts[base + i]), kStoneR) << "vertex " << i;
+}
+
+TEST(ChunkMeshData, AmbientOcclusionRaisedNeighborDarkensSharedCorner) {
+    // A voxel whose top face has a taller block diagonally beside it: the two top
+    // corners on that side sit in a concave nook and must be darkened, while the two
+    // corners on the open side stay full-bright.
+    palette::resetToDefault();
+    materialfaces::clearBindings();
+    Chunk chunk(ChunkCoord{0, 0, 0}, 6, WorldCoord());
+    chunk.at(2, 2, 2) = solid();          // the voxel under test (processed first)
+    chunk.at(3, 3, 2) = solid();          // rises beside its top face, +X side
+
+    std::vector<MeshVertex> verts;
+    std::vector<uint32_t> opaque, translucent;
+    buildChunkMeshData(chunk, verts, opaque, translucent);
+
+    // The first 6 faces belong to voxel (2,2,2) (z,y,x iteration reaches it before
+    // the raised neighbor), so its +Y face is the usual block.
+    const int base = materialfaces::Face::PosY * kVertsPerFace;
+    bool sawDark = false, sawBright = false;
+    for (int i = 0; i < kVertsPerFace; ++i) {
+        const MeshVertex& mv = verts[base + i];
+        if (mv.x == 3.0f) {            // +X edge: beside the raised neighbor
+            EXPECT_LT(redOf(mv), kStoneR) << "occluded corner should darken";
+            sawDark = true;
+        } else if (mv.x == 2.0f) {     // open edge
+            EXPECT_EQ(redOf(mv), kStoneR) << "open corner stays full-bright";
+            sawBright = true;
+        }
+    }
+    EXPECT_TRUE(sawDark);
+    EXPECT_TRUE(sawBright);
 }

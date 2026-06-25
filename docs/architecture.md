@@ -978,6 +978,18 @@ Both channels are combined into a single overlay value per cell (max wins). The 
 
 ---
 
+### Ambient Occlusion (M17, A2)
+
+**Files:** `src/renderer/ChunkMeshData.cpp` (the mesher), `src/core/Tuning.h` (`tuning::ao` knobs).
+
+Per-vertex ambient occlusion ("smooth lighting") darkens concave voxel corners. Unlike the lighting overlay above, AO needs **no field, no overlay, no persistence** — it is a purely mesher-local computation folded into the vertex color the same way the directional shade and the optional light level are.
+
+For each face vertex, the mesher reads the 2×2 block of voxels around that corner in the air layer one step outside the face (voxel + face normal): two edge-adjacent cells and the diagonal cell. The standard kernel maps these to an occlusion level — `0` when two opposing sides enclose the corner, otherwise `3 − (sides + corner)` — and `tuning::ao::kVertexFactor[level]` is the brightness multiplier (level 3 = open corner = `1.0`, so flat/convex terrain is unchanged). The four corner levels also drive the **quad-flip**: the face splits along whichever diagonal isolates the darker corner, avoiding the asymmetric shading smear that fixed triangulation produces at a single dark corner. Both triangulations stay CCW-outward, so face culling is unaffected.
+
+AO is deliberately scoped to the chunk being meshed: out-of-chunk and translucent neighbors count as non-occluding, so a concave corner that straddles a chunk seam is faintly under-darkened there — an accepted trade for keeping the mesher free of cross-chunk neighbor plumbing.
+
+---
+
 ## 18. Gravity Provider and Axis-Agnostic Kinematics
 
 **Files:** `src/world/GravityProvider.h`, `src/world/AxisRole.h`, `src/world/VoxelCollision.{h,cpp}`, `src/simulation/FluidSystem.{h,cpp}`, `src/renderer/MaterialFaces.{h,cpp}`, `src/renderer/ChunkMeshData.{h,cpp}`, `src/world/ResolvedRecipe.{h,cpp}`
