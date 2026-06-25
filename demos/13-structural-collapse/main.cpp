@@ -465,11 +465,11 @@ int main() {
 
         for (const auto& kv : bedrockMeshes) {
             const Chunk* ch = bedrock_l->getChunk(kv.first);
-            if (ch) renderer.renderChunk(kv.second, ch->origin(), bvs);
+            if (ch) renderer.renderChunk(kv.second, ch->origin(), bvs, bedrock_l->chunkSizeVoxels());
         }
         for (const auto& kv : terrainMeshes) {
             const Chunk* ch = terrain->getChunk(kv.first);
-            if (ch) renderer.renderChunk(kv.second, ch->origin(), cvs);
+            if (ch) renderer.renderChunk(kv.second, ch->origin(), cvs, terrain->chunkSizeVoxels());
         }
         renderer.render();
     }

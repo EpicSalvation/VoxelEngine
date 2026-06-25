@@ -240,6 +240,23 @@ void BgfxRenderer::render() {
             bgfx::submit(0, program);
     }
 
+    // View-frustum culling: discard chunks whose bounding sphere lies entirely
+    // outside the camera frustum before sorting or submitting them to the GPU.
+    Frustum frustum;
+    frustum.update(cameraPos, cameraRot.x, cameraRot.y,
+                   static_cast<double>(viewWidth) / static_cast<double>(viewHeight),
+                   60.0, static_cast<double>(farClip));
+    pendingChunks.erase(
+        std::remove_if(pendingChunks.begin(), pendingChunks.end(),
+                       [&frustum](const PendingChunk& pc) {
+                           const double chunkWorld = pc.voxelSizeM * pc.chunkSizeVoxels;
+                           const double radius = chunkWorld * 0.8660254; // √3/2
+                           const glm::dvec3 center =
+                               pc.origin.value + glm::dvec3(chunkWorld * 0.5);
+                           return !frustum.sphereVisible(center, radius);
+                       }),
+        pendingChunks.end());
+
     // Per-chunk static meshes: one draw call per non-empty batch, placed via a
     // floating-origin model transform of the chunk's world origin (ARCHITECTURE
     // §9). Opaque batch on view 0; translucent (water) batch on view 1.
@@ -367,9 +384,9 @@ void BgfxRenderer::renderWorld(const World& world) {
 }
 
 void BgfxRenderer::renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin,
-                               double voxelSizeM) {
+                               double voxelSizeM, int chunkSizeVoxels) {
     if (mesh.empty()) return;
-    pendingChunks.push_back({chunkOrigin, voxelSizeM, mesh.vbh(), mesh.opaqueIbh(), mesh.translucentIbh()});
+    pendingChunks.push_back({chunkOrigin, voxelSizeM, chunkSizeVoxels, mesh.vbh(), mesh.opaqueIbh(), mesh.translucentIbh()});
 }
 
 void BgfxRenderer::drawVoxelHighlight(const WorldCoord& center, float size, uint32_t abgr,
