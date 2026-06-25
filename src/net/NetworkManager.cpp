@@ -55,11 +55,11 @@ void NetworkManager::init(World& world, PluginManager& pm)
 bool NetworkManager::startServer(uint16_t port, int max_peers)
 {
     if (!transport_) {
-        Log::warn("[NetworkManager] startServer called before init()");
+        Log::error("Net", "startServer called before init()");
         return false;
     }
     if (!transport_->listen(port, max_peers)) {
-        Log::warn("[NetworkManager] transport listen() failed");
+        Log::error("Net", "transport listen() failed");
         return false;
     }
     role_          = SessionRole::Server;
@@ -72,11 +72,11 @@ bool NetworkManager::startServer(uint16_t port, int max_peers)
 bool NetworkManager::startHostPeer(uint16_t port, int max_peers)
 {
     if (!transport_) {
-        Log::warn("[NetworkManager] startHostPeer called before init()");
+        Log::error("Net", "startHostPeer called before init()");
         return false;
     }
     if (!transport_->listen(port, max_peers)) {
-        Log::warn("[NetworkManager] transport listen() failed");
+        Log::error("Net", "transport listen() failed");
         return false;
     }
     // HostPeer runs the authority in-process and acts as its own local client.
@@ -93,11 +93,11 @@ bool NetworkManager::startHostPeer(uint16_t port, int max_peers)
 bool NetworkManager::startClient(const std::string& host, uint16_t port)
 {
     if (!transport_) {
-        Log::warn("[NetworkManager] startClient called before init()");
+        Log::error("Net", "startClient called before init()");
         return false;
     }
     if (!transport_->connect(host, port)) {
-        Log::warn(("[NetworkManager] transport connect() to " + host + ":" +
+        Log::error("Net", ("transport connect() to " + host + ":" +
                    std::to_string(port) + " failed").c_str());
         return false;
     }
@@ -399,7 +399,7 @@ void NetworkManager::handleEditIntent(PeerId sender_peer, const InboundPacket& p
 
     EditIntentPayload intent;
     if (!decode_edit_intent(pkt.data, intent)) {
-        Log::warn("[NetworkManager] malformed EditIntent packet");
+        Log::warn("Net", "malformed EditIntent packet");
         return;
     }
 
@@ -430,7 +430,7 @@ void NetworkManager::handleCommittedEdit(const InboundPacket& pkt)
 
     CommittedEditPayload p;
     if (!decode_committed_edit(pkt.data, p)) {
-        Log::warn("[NetworkManager] malformed CommittedEdit packet");
+        Log::warn("Net", "malformed CommittedEdit packet");
         return;
     }
 
@@ -438,7 +438,7 @@ void NetworkManager::handleCommittedEdit(const InboundPacket& pkt)
     // request a full dirty-chunk resync from the server.
     static constexpr uint32_t kResyncGapThreshold = 32;
     if (lastAppliedSeq_ > 0 && p.seq > lastAppliedSeq_ + kResyncGapThreshold) {
-        Log::warn("[NetworkManager] sequence gap detected — requesting resync");
+        Log::warn("Net", "sequence gap detected — requesting resync");
         std::vector<uint8_t> resync_buf;
         write_u8(resync_buf, static_cast<uint8_t>(NetPacketKind::ResyncRequest));
         for (auto& [peer_id, player_id] : peerToPlayer_) {
@@ -476,7 +476,7 @@ void NetworkManager::handleNetMessage(const InboundPacket& pkt)
 
     NetMessagePayload p;
     if (!decode_net_message(pkt.data, p)) {
-        Log::warn("[NetworkManager] malformed NetMessage packet");
+        Log::warn("Net", "malformed NetMessage packet");
         return;
     }
 
@@ -702,7 +702,7 @@ void NetworkManager::handleJoinResponse(const InboundPacket& pkt)
 {
     JoinResponsePayload p;
     if (!decode_join_response(pkt.data, p)) {
-        Log::warn("[NetworkManager] malformed JoinResponse");
+        Log::warn("Net", "malformed JoinResponse");
         return;
     }
     worldSeed_ = p.world_seed;
@@ -717,7 +717,7 @@ void NetworkManager::handleDirtyChunkData(const InboundPacket& pkt)
 {
     DirtyChunkDataPayload p;
     if (!decode_dirty_chunk_data(pkt.data, p)) {
-        Log::warn("[NetworkManager] malformed DirtyChunkData");
+        Log::warn("Net", "malformed DirtyChunkData");
         return;
     }
     if (!world_ || p.chunk_bytes.empty()) return;
@@ -728,7 +728,7 @@ void NetworkManager::handleDirtyChunkData(const InboundPacket& pkt)
     auto chunk = persistence::decodeChunkFilePermissive(
         p.chunk_bytes.data(), p.chunk_bytes.size());
     if (!chunk) {
-        Log::warn("[NetworkManager] DirtyChunkData: could not decode chunk");
+        Log::warn("Net", "DirtyChunkData: could not decode chunk");
         return;
     }
     world_->insertChunk(std::move(chunk));
