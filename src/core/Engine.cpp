@@ -38,7 +38,7 @@ bool Engine::importVox(const std::string& path,
                        const WorldCoord&  anchor)
 {
     if (!pm_ || !world_) {
-        Log::warn("Engine::importVox called before Engine::init");
+        Log::error("Engine", "importVox called before init");
         return false;
     }
 
@@ -53,7 +53,7 @@ bool Engine::importVox(const std::string& path,
 
     Layer* layer = world_->layer(layerName);
     if (!layer) {
-        Log::warn(("Engine::importVox: layer not found: " + layerName).c_str());
+        Log::warn("Engine", ("importVox: layer not found: " + layerName).c_str());
         return false;
     }
 
@@ -67,7 +67,7 @@ bool Engine::exportVox(const std::string& layerName,
                        const std::string& path)
 {
     if (!pm_ || !world_) {
-        Log::warn("Engine::exportVox called before Engine::init");
+        Log::error("Engine", "exportVox called before init");
         return false;
     }
 
@@ -82,7 +82,7 @@ bool Engine::exportVox(const std::string& layerName,
 
     Layer* layer = world_->layer(layerName);
     if (!layer) {
-        Log::warn(("Engine::exportVox: layer not found: " + layerName).c_str());
+        Log::warn("Engine", ("exportVox: layer not found: " + layerName).c_str());
         return false;
     }
 
@@ -104,7 +104,7 @@ bool Engine::exportVox(const std::string& layerName,
         }
     }
     if (hasExtended) {
-        Log::warn("extended voxel properties dropped; register an exporter plugin to preserve them");
+        Log::warn("Engine", "extended voxel properties dropped; register an exporter plugin to preserve them");
     }
 
     VoxExporter exporter;
