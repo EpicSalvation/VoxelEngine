@@ -245,9 +245,9 @@ void BgfxRenderer::render() {
     // §9). Opaque batch on view 0; translucent (water) batch on view 1.
     // Sort back-to-front so alpha-blended translucent faces composite correctly.
     std::sort(pendingChunks.begin(), pendingChunks.end(),
-              [&cameraPos](const PendingChunk& a, const PendingChunk& b) {
-                  glm::vec3 da = a.origin.toLocalFloat(cameraPos);
-                  glm::vec3 db = b.origin.toLocalFloat(cameraPos);
+              [this](const PendingChunk& a, const PendingChunk& b) {
+                  glm::vec3 da = a.origin.toLocalFloat(this->cameraPos);
+                  glm::vec3 db = b.origin.toLocalFloat(this->cameraPos);
                   return glm::dot(da, da) > glm::dot(db, db);
               });
     for (const auto& pc : pendingChunks) {
