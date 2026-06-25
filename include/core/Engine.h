@@ -6,7 +6,10 @@
 #include <thread>
 
 #include "WorldCoord.h"
+#include "core/EngineMetrics.h"
 
+class BgfxRenderer;
+class DecompositionManager;
 class PluginManager;
 class World;
 namespace net   { class NetworkManager; }
@@ -73,6 +76,18 @@ public:
     void                  setLightingSystem(sim::LightingSystem* ls) { lighting_ = ls; }
     sim::LightingSystem*  lightingSystem() const { return lighting_; }
 
+    // Attach a BgfxRenderer for metrics queries (draw-call count).
+    void           setRenderer(BgfxRenderer* r) { renderer_ = r; }
+    BgfxRenderer*  renderer() const { return renderer_; }
+
+    // Attach a DecompositionManager for metrics queries (queue depth, per-layer counts).
+    void                    setDecompositionManager(DecompositionManager* dm) { decompMgr_ = dm; }
+    DecompositionManager*   decompositionManager() const { return decompMgr_; }
+
+    // Snapshot of engine-wide performance metrics. Replaces ad-hoc per-demo
+    // HUD stat recomputation (ARCHITECTURE §17, M17 sanity-check D2).
+    EngineMetrics getMetrics() const;
+
     // Read-only field query accessors (M14/M17, docs/ARCHITECTURE.md §17). Return
     // the sparse overlays' ambient/absent-cell default when no system is attached.
     // No write path is exposed here — only the engine-owned solver writes its
@@ -91,6 +106,8 @@ private:
     sim::FluidSystem*     fluid_   = nullptr;
     sim::ThermalSystem*   thermal_  = nullptr;
     sim::LightingSystem*  lighting_ = nullptr;
+    BgfxRenderer*         renderer_  = nullptr;
+    DecompositionManager* decompMgr_ = nullptr;
 
     std::atomic<bool>  isRunning      = false;
     std::thread        gameLoopThread;

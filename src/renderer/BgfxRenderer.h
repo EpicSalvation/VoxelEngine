@@ -74,6 +74,9 @@ public:
     // lifetime (the §8 owner-tracked teardown); the renderer only references it.
     void setAtlas(bgfx::TextureHandle atlas) { atlasTex = atlas; }
 
+    // Number of draw calls submitted in the most recent frame (via bgfx stats).
+    uint32_t drawCallCount() const { return lastDrawCalls; }
+
     // Enable/disable a centered crosshair drawn via bgfx debug text.
     void setCrosshair(bool enabled) { crosshair = enabled; }
 
@@ -118,6 +121,7 @@ private:
     uint32_t                  viewWidth;
     uint32_t                  viewHeight;
     float                     farClip;
+    uint32_t                  lastDrawCalls;
     bool                      crosshair;
     bool                      initialized;
 };
