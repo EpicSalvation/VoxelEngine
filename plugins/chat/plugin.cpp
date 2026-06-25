@@ -17,6 +17,7 @@
 #else
 #  define VOXEL_PLUGIN_EXPORT extern "C"
 #endif
+VOXEL_PLUGIN_ABI_STAMP();
 
 static std::vector<std::string> g_chatLog;
 static std::mutex               g_chatMutex;

@@ -882,6 +882,16 @@ struct PluginContext {
 };
 
 // ---------------------------------------------------------------------------
+// Plugin ABI version
+//
+// Bumped whenever the layout of PluginContext, callback signatures, or any
+// POD struct that crosses the plugin boundary changes in a binary-incompatible
+// way. The engine checks a plugin's stamped version at load time and rejects
+// a mismatch with a clear diagnostic rather than risking silent corruption.
+// ---------------------------------------------------------------------------
+static constexpr uint32_t VOXEL_PLUGIN_ABI_VERSION = 1;
+
+// ---------------------------------------------------------------------------
 // Plugin entry point
 //
 // Every plugin shared library (.so/.dylib/.dll) must export this symbol with
@@ -890,3 +900,20 @@ struct PluginContext {
 // ---------------------------------------------------------------------------
 #define VOXEL_PLUGIN_INIT_SYMBOL "voxel_plugin_init"
 extern "C" typedef int (VoxelPluginInitFn)(PluginContext* ctx);
+
+// ---------------------------------------------------------------------------
+// ABI version stamp
+//
+// Every native plugin should include VOXEL_PLUGIN_ABI_STAMP() at file scope.
+// It exports a uint32_t symbol the engine reads before calling init; a
+// mismatch aborts the load with a diagnostic.
+// ---------------------------------------------------------------------------
+#define VOXEL_PLUGIN_ABI_VERSION_SYMBOL "voxel_plugin_abi_version"
+
+#if defined(_WIN32)
+#  define VOXEL_PLUGIN_ABI_STAMP() \
+       extern "C" __declspec(dllexport) const uint32_t voxel_plugin_abi_version = VOXEL_PLUGIN_ABI_VERSION
+#else
+#  define VOXEL_PLUGIN_ABI_STAMP() \
+       extern "C" const uint32_t voxel_plugin_abi_version = VOXEL_PLUGIN_ABI_VERSION
+#endif
