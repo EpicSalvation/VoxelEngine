@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/PluginManager.h"
+#include "core/EngineConfig.h"
 #include "core/Tuning.h"
 #include "world/Layer.h"
 #include "world/Voxel.h"
@@ -132,7 +133,7 @@ void LightingSystem::propagate() {
         }
     }
 
-    int cellBudget = tl::kMaxLightingCellsPerFrame;
+    int cellBudget = engineConfig().lightingMaxCellsPerFrame;
     while (!queue.empty() && cellBudget > 0) {
         auto [pos, brightness] = queue.front();
         queue.pop();
@@ -164,7 +165,7 @@ void LightingSystem::propagate() {
     }
 
     // Commit to overlay and fire events.
-    int eventBudget = tl::kMaxLightingEventsPerFrame;
+    int eventBudget = engineConfig().lightingMaxEventsPerFrame;
     for (const auto& [c, b] : lightMap) {
         float clamped = std::max(b, tl::kAmbientBrightness);
         if (eventBudget > 0)

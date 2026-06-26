@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/EngineConfig.h"
 #include "core/PluginManager.h"
 #include "core/Tuning.h"
 #include "world/Layer.h"
@@ -95,8 +96,9 @@ void ThermalSystem::tick(double dt) {
     if (work.empty()) return;
 
     namespace tt = tuning::thermal;
-    if (static_cast<int>(work.size()) > tt::kMaxThermalCellsPerFrame)
-        work.resize(tt::kMaxThermalCellsPerFrame);  // sorted prefix; the rest stays
+    const int maxCells = engineConfig().thermalMaxCellsPerFrame;
+    if (static_cast<int>(work.size()) > maxCells)
+        work.resize(maxCells);  // sorted prefix; the rest stays
                                                      // in the overlay's own active
                                                      // set/frontier for next tick
 

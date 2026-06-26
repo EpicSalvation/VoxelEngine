@@ -1,5 +1,7 @@
 #include "LODManager.h"
 
+#include "core/EngineConfig.h"
+
 LODManager::LODManager(const LayerConfig& config) : config_(config) {}
 
 const LayerDef* LODManager::layer(const std::string& name) const {
@@ -13,7 +15,7 @@ int LODManager::viewDistanceChunks(const std::string& layerName) const {
 
 int LODManager::evictDistanceChunks(const std::string& layerName) const {
     const LayerDef* l = layer(layerName);
-    return l ? l->view_distance_chunks + kHysteresisChunks : 0;
+    return l ? l->view_distance_chunks + engineConfig().streamingHysteresisChunks : 0;
 }
 
 StreamingVolume LODManager::volumeFor(const std::string& layerName) const {
@@ -48,5 +50,5 @@ bool LODManager::shouldEvict(ChunkCoord center, ChunkCoord coord,
     // Outside the load volume grown by the hysteresis margin: the margin keeps a
     // chunk that just crossed the load radius resident a little longer so camera
     // jitter at the boundary does not thrash load/evict.
-    return !volumeFor(layerName).expandedBy(kHysteresisChunks).contains(center, coord);
+    return !volumeFor(layerName).expandedBy(engineConfig().streamingHysteresisChunks).contains(center, coord);
 }

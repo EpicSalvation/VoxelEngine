@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "core/PluginManager.h"
+#include "core/EngineConfig.h"
 #include "core/Tuning.h"
 #include "world/Layer.h"
 #include "world/Voxel.h"
@@ -68,8 +69,8 @@ void PhysicsSystem::tick() {
     // deep chain reaction (grandchild edit → parent → grandparent → …) spreads
     // across frames instead of stalling one — overflow at any level carries to
     // that level's next tick (§7 "Performance", gap audit G1).
-    int recomputeBudget = tp::kMaxAggregateRecomputesPerFrame;
-    int eventBudget     = tp::kMaxStructuralEventsPerFrame;
+    int recomputeBudget = engineConfig().physicsMaxAggregateRecomputesPerFrame;
+    int eventBudget     = engineConfig().physicsMaxStructuralEventsPerFrame;
 
     // Process levels fine→coarse. recomputeAggregate at level li marks each macro's
     // parent at level li+1 dirty, so draining li+1 *after* li picks those up and

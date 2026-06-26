@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "core/EngineConfig.h"
+
 // ---------------------------------------------------------------------------
 // Central engine tuning knobs.
 //
@@ -18,6 +20,13 @@
 //     invariant rather than a tuning choice (e.g. `sim::kIndestructible`, the
 //     256-entry palette size). Those stay with the model they belong to.
 //
+// PER-FRAME BUDGETS ARE NOW RUNTIME-SETTABLE (M17 D3b). The work-budget caps
+// below are no longer the live values the subsystems read — they are derived
+// from `EngineConfig`'s defaults and kept as the documented compile-time
+// baseline (tests reference them). The value actually used each tick comes from
+// the runtime `engineConfig()` store; see include/core/EngineConfig.h. The
+// model constants (support span, stability factor, attenuation, …) remain
+// compile-time.
 // ---------------------------------------------------------------------------
 
 namespace tuning::decomposition {
@@ -30,9 +39,9 @@ namespace tuning::decomposition {
 //   kDefaultLoadPerFrame   — max composite chunks loaded per tick
 //   kDefaultDecompPerFrame — max decomposition jobs enqueued per tick (nearest-first)
 //   kDefaultApplyPerFrame  — max completed jobs applied per tick (overflow stays queued)
-inline constexpr int kDefaultLoadPerFrame   = 4;
-inline constexpr int kDefaultDecompPerFrame = 64;
-inline constexpr int kDefaultApplyPerFrame  = 16;
+inline constexpr int kDefaultLoadPerFrame   = EngineConfig{}.decompositionLoadPerFrame;
+inline constexpr int kDefaultDecompPerFrame = EngineConfig{}.decompositionDecompPerFrame;
+inline constexpr int kDefaultApplyPerFrame  = EngineConfig{}.decompositionApplyPerFrame;
 
 }  // namespace tuning::decomposition
 
@@ -42,7 +51,7 @@ namespace tuning::streaming {
 // radius. A chunk loads at the view distance but is not evicted until it passes
 // view distance + this margin, so a camera hovering on the boundary does not
 // thrash a chunk between resident and evicted (LODManager).
-inline constexpr int kHysteresisChunks = 2;
+inline constexpr int kHysteresisChunks = EngineConfig{}.streamingHysteresisChunks;
 
 }  // namespace tuning::streaming
 
@@ -81,9 +90,9 @@ inline constexpr float kAnchorPotential = 1.0f;
 // on_voxel_modified delta), so full re-sums are a bounded fallback, not the
 // common path. Events beyond the cap carry to the next frame, spreading a
 // cascade across frames instead of stalling one.
-inline constexpr int kMaxAggregateRecomputesPerFrame = 64;
-inline constexpr int kMaxStructuralEventsPerFrame     = 256;
-inline constexpr int kMaxSupportFloodNodes            = 4096;
+inline constexpr int kMaxAggregateRecomputesPerFrame = EngineConfig{}.physicsMaxAggregateRecomputesPerFrame;
+inline constexpr int kMaxStructuralEventsPerFrame     = EngineConfig{}.physicsMaxStructuralEventsPerFrame;
+inline constexpr int kMaxSupportFloodNodes            = EngineConfig{}.physicsMaxSupportFloodNodes;
 
 }  // namespace tuning::physics
 
@@ -111,7 +120,7 @@ inline constexpr float kStabilityFactor = 1.0f / 6.0f;
 // frontier, sorted-coord order). Unlike the M13 dirty queue this needs no
 // explicit carry bookkeeping: a cell skipped this frame simply stays in the
 // overlay's own active set/frontier and is reconsidered next tick.
-inline constexpr int kMaxThermalCellsPerFrame = 4096;
+inline constexpr int kMaxThermalCellsPerFrame = EngineConfig{}.thermalMaxCellsPerFrame;
 
 }  // namespace tuning::thermal
 
@@ -138,8 +147,8 @@ inline constexpr float kMinFluidAmount = 0.05f;
 // Per-frame budgets for the end-of-frame flow pass. Overflow beyond either cap
 // carries to the next frame (the tuning::physics carry pattern), so a large
 // release spreads across frames instead of stalling one.
-inline constexpr int kMaxFluidCellsPerFrame  = 4096;
-inline constexpr int kMaxFluidEventsPerFrame = 256;
+inline constexpr int kMaxFluidCellsPerFrame  = EngineConfig{}.fluidMaxCellsPerFrame;
+inline constexpr int kMaxFluidEventsPerFrame = EngineConfig{}.fluidMaxEventsPerFrame;
 
 }  // namespace tuning::fluid
 
@@ -168,11 +177,11 @@ inline constexpr float kAttenuationPerStep = 1.0f / 15.0f;
 // Per-frame budget on distinct cells the lighting pass visits (active set +
 // frontier, sorted-coord order). Same carry convention as thermal/fluid:
 // a cell skipped this frame stays in the overlay's active set for next tick.
-inline constexpr int kMaxLightingCellsPerFrame = 8192;
+inline constexpr int kMaxLightingCellsPerFrame = EngineConfig{}.lightingMaxCellsPerFrame;
 
 // Per-frame budget on lighting events fired (rising/falling boundary
 // crossings). Overflow carries to the next frame.
-inline constexpr int kMaxLightingEventsPerFrame = 256;
+inline constexpr int kMaxLightingEventsPerFrame = EngineConfig{}.lightingMaxEventsPerFrame;
 
 }  // namespace tuning::lighting
 

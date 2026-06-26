@@ -62,8 +62,9 @@ public:
     bool shouldEvict(ChunkCoord center, ChunkCoord coord,
                      const std::string& layerName) const;
 
-    // The eviction hysteresis margin lives centrally in tuning::streaming; kept
-    // as a public alias so call sites and tests can reference LODManager::kHysteresisChunks.
+    // Compile-time DEFAULT eviction hysteresis margin. The value actually applied
+    // is runtime-settable via engineConfig().streamingHysteresisChunks (M17 D3b);
+    // this alias is the documented baseline tests and call sites reference.
     static constexpr int kHysteresisChunks = tuning::streaming::kHysteresisChunks;
 
 private:

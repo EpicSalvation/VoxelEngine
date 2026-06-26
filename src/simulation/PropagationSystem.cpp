@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "core/EngineConfig.h"
 #include "core/Tuning.h"
 #include "world/Layer.h"
 #include "world/World.h"
@@ -273,7 +274,7 @@ std::vector<PropagationSystem::Unstable> PropagationSystem::findUnstable(
     // ── Region discovery: the connected solid macros reachable from the
     //    candidates, expanded in sorted-coord order and capped at
     //    kMaxSupportFloodNodes so the truncated set (if ever hit) is reproducible.
-    const int kMaxNodes = tuning::physics::kMaxSupportFloodNodes;
+    const int kMaxNodes = engineConfig().physicsMaxSupportFloodNodes;
     std::set<VoxelCoord, VoxelCoordLess> region;
     std::set<VoxelCoord, VoxelCoordLess> open(cand.begin(), cand.end());
     while (!open.empty() && static_cast<int>(region.size()) < kMaxNodes) {

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/PluginManager.h"
+#include "core/EngineConfig.h"
 #include "core/Tuning.h"
 #include "world/Layer.h"
 #include "world/World.h"
@@ -180,11 +181,12 @@ void FluidSystem::tick(double dt) {
     if (cand.empty()) return;
 
     std::vector<VoxelCoord> work(cand.begin(), cand.end());  // already sorted
-    if (static_cast<int>(work.size()) > tf::kMaxFluidCellsPerFrame) {
-        for (std::size_t i = static_cast<std::size_t>(tf::kMaxFluidCellsPerFrame);
+    const int maxCells = engineConfig().fluidMaxCellsPerFrame;
+    if (static_cast<int>(work.size()) > maxCells) {
+        for (std::size_t i = static_cast<std::size_t>(maxCells);
              i < work.size(); ++i)
             carryCells_.insert(work[i]);
-        work.resize(tf::kMaxFluidCellsPerFrame);
+        work.resize(maxCells);
     }
 
     // Delta accumulation so the pass is order-independent within a step:
@@ -261,7 +263,7 @@ void FluidSystem::tick(double dt) {
     std::set<VoxelCoord, VoxelCoordLess> touched(work.begin(), work.end());
     for (const auto& kv : delta) touched.insert(kv.first);
 
-    int eventBudget = tf::kMaxFluidEventsPerFrame;
+    int eventBudget = engineConfig().fluidMaxEventsPerFrame;
     for (const VoxelCoord& c : touched) {
         auto it = delta.find(c);
         const float newAmount = overlay_.get(c) + (it != delta.end() ? it->second : 0.0f);

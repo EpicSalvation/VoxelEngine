@@ -7,18 +7,21 @@ across three surfaces by *how often and by whom* a value is set:
 | Surface | Lives in | Set at | Who sets it |
 |---------|----------|--------|-------------|
 | **A. World shape** | a YAML layer config (`LayerConfig`) | startup, per project | game / world author |
-| **B. Engine model & budgets** | `src/core/Tuning.h` (compile-time `constexpr`) | build time | engine integrator |
-| **C. Runtime APIs** | per-subsystem setters | any time while running | game code, per frame |
+| **B. Engine model constants** | `src/core/Tuning.h` (compile-time `constexpr`) | build time | engine integrator |
+| **C. Runtime APIs** | per-subsystem setters + `engineConfig()` | any time while running | game code, per frame |
 
 If you are configuring a *world* (how big voxels are, how far they stream, where the
-player edits) you want **A**. If you are retuning *feel or performance* of a
-simulation subsystem (collapse reach, fluid spread rate, per-frame work caps) you
-want **B**. If you are driving the engine *live* (frame rate cap, camera, audio
-listener, log verbosity) you want **C**.
+player edits) you want **A**. If you are retuning a simulation *model* (collapse reach,
+diffusion stability, light attenuation) you want **B**. If you are driving the engine
+*live* — frame rate cap, camera, audio listener, log verbosity, or the **per-frame
+work budgets** (§C.6) — you want **C**.
 
-> **Pending change (M17 D3b).** The per-frame budgets in surface **B** are slated to
-> be promoted from compile-time constants to runtime-settable values. When that lands,
-> the affected rows move from this guide's §B to §C; this doc is the place to update.
+> **Note (M17 D3b landed).** The per-frame work budgets were promoted from compile-time
+> constants to a runtime struct (`EngineConfig`). They are now configured through the **Per-frame work budgets** API in §C,
+> not by rebuilding. `Tuning.h` still publishes them as named constants — now *derived*
+> from the `EngineConfig` defaults — as the documented baseline, and the §B budget rows
+> below note their runtime field. Only the genuine *model* constants in §B still require
+> a rebuild.
 
 ---
 
@@ -104,7 +107,8 @@ layers:
 
 `Tuning.h` is the single home for *tunable* engine constants — the values you turn to
 change feel or performance. They are header-only `inline constexpr`, grouped by
-subsystem namespace, so **changing one requires a rebuild** (see the D3b note above).
+subsystem namespace. The genuine **model constants** here (support span, stability
+factor, attenuation, AO factors, ambient floors) **require a rebuild** to change.
 Format/invariant constants (palette size, sentinels) deliberately live with their
 model, not here.
 
@@ -113,6 +117,11 @@ tick may do, so a burst of work spreads across frames instead of hitching one. R
 budget to converge faster (more work per frame, risk of hitches); lower it for
 smoother frame pacing at the cost of slower convergence. Overflow carries to the next
 frame in every subsystem that has one.
+
+> Every budget row below (each marked *(budget)*) is now **runtime-settable** via
+> `engineConfig()` — the `Tuning.h` constant is just the compile-time default. The **Per-frame work budgets** API in §C maps
+> each budget to its `EngineConfig` member. The non-budget *model* constants have no
+> runtime field (rebuild only). Set a budget once at startup, or live for a quality slider.
 
 ### `tuning::decomposition` — streaming/decomposition throughput
 
@@ -234,6 +243,38 @@ listener; `playSound(id, pos, overrides)` for one-shots; `createEmitter` /
 | `startClient(host, port)` | — | Connect to a server. |
 | `setInterestMode(BroadcastAll \| StreamingRadius)` | `BroadcastAll` | Switch edit replication from broadcast-to-all to streaming-radius interest filtering as player counts grow. |
 | `setTransport(unique_ptr<ITransport>)` | ENet | Replace the transport backend before starting (testing or a custom transport). |
+
+### Per-frame work budgets (`include/core/EngineConfig.h` `engineConfig()`)
+
+The per-frame work caps from §B, promoted to a runtime struct (M17 D3b) so a game can
+expose quality sliders and a developer can retune without a rebuild. Read by each
+subsystem's tick from the process-global `engineConfig()`; mutate before or between
+ticks. Every field defaults to its §B `Tuning.h` value, so an engine that never touches
+it is byte-identical to the pre-D3b build. `resetEngineConfig()` restores all defaults.
+
+```cpp
+#include "core/EngineConfig.h"
+engineConfig().fluidMaxCellsPerFrame = 1024;  // e.g. a "low" quality preset
+```
+
+| `EngineConfig` field | Default | §B constant it overrides |
+|----------------------|---------|--------------------------|
+| `decompositionLoadPerFrame` | `4` | `tuning::decomposition::kDefaultLoadPerFrame` |
+| `decompositionDecompPerFrame` | `64` | `tuning::decomposition::kDefaultDecompPerFrame` |
+| `decompositionApplyPerFrame` | `16` | `tuning::decomposition::kDefaultApplyPerFrame` |
+| `streamingHysteresisChunks` | `2` | `tuning::streaming::kHysteresisChunks` |
+| `physicsMaxAggregateRecomputesPerFrame` | `64` | `tuning::physics::kMaxAggregateRecomputesPerFrame` |
+| `physicsMaxStructuralEventsPerFrame` | `256` | `tuning::physics::kMaxStructuralEventsPerFrame` |
+| `physicsMaxSupportFloodNodes` | `4096` | `tuning::physics::kMaxSupportFloodNodes` |
+| `thermalMaxCellsPerFrame` | `4096` | `tuning::thermal::kMaxThermalCellsPerFrame` |
+| `fluidMaxCellsPerFrame` | `4096` | `tuning::fluid::kMaxFluidCellsPerFrame` |
+| `fluidMaxEventsPerFrame` | `256` | `tuning::fluid::kMaxFluidEventsPerFrame` |
+| `lightingMaxCellsPerFrame` | `8192` | `tuning::lighting::kMaxLightingCellsPerFrame` |
+| `lightingMaxEventsPerFrame` | `256` | `tuning::lighting::kMaxLightingEventsPerFrame` |
+
+The `DecompositionManager::tick` decomposition budgets are the function's default
+arguments (read from `engineConfig()` when omitted); a caller may still pass explicit
+per-call values that override the runtime config for that tick.
 
 ### Per-material properties (`include/plugin_api.h` `MaterialProperties`)
 
