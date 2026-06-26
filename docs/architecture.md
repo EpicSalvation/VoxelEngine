@@ -545,6 +545,10 @@ Clean chunks can be evicted from memory when they fall outside the LOD view dist
 
 Dirty chunks are never evicted from disk, but may be evicted from the in-memory cache and reloaded on demand. A dirty chunk is always **saved before its in-RAM drop** (never silently discarded).
 
+### Save Format and Versioning
+
+Dirty chunks are written as per-chunk `.vxc` files (`persistence::WorldSave`, `src/io/ChunkPersistence.cpp`): a `VXCK` header carrying a `uint32` format version + the world identity (`voxel_size_m`, `chunk_size_voxels`) + the chunk coord, then a deduplicated material palette and a run-length encoding of the per-voxel index stream. This is the engine's own little-endian save format, distinct from the portable `.vox`/`.qb` interop path (§9). The reader requires an **exact version match** — an older or newer file decodes to `nullptr`, which the world treats as a cache miss and regenerates from the recipe (safe but edit-dropping). The full versioning contract — what bumps the version, what the engine does on a mismatch, and the forward-migration path consumers should plan around past 1.0 — is documented in [`save-format-versioning.md`](save-format-versioning.md).
+
 **Memory budget across a deep stack (M10).** Distance + hysteresis is the primary eviction signal, but a deep chain holds several layers resident at once, so each composite/terminal layer also carries a **per-layer resident-chunk cap** (a `LayerDef` field). When a layer exceeds its cap the `DecompositionManager` evicts its **farthest-first clean** chunks to fit, pinning near and dirty chunks. (A global estimated-byte budget is a deferred outer backstop — farthest-first across all layers — that layers over the per-layer caps if a lopsided-density config needs it; per-layer chunk count is the deliberately simple starting metric.) Eviction is **cascading**: evicting a parent macro voxel back to atomic evicts every decomposed descendant across all deeper layers in one consistent pass — the inverse of the level-by-level decomposition walk — clearing each layer's `DecompositionState` entry with no orphaned resident child grids.
 
 ---
