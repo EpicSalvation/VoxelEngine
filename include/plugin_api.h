@@ -433,6 +433,24 @@ using AudioEmitterId = uint32_t;
 static constexpr AudioEmitterId kInvalidEmitterId = 0;
 
 // ---------------------------------------------------------------------------
+// Per-frame tick callback (M17 B1, docs/ARCHITECTURE.md §8)
+//
+// Called once per frame by Engine::update with the frame's elapsed dt (seconds).
+// The kinematic-body plugin registers one of these to step all bodies each frame.
+// ---------------------------------------------------------------------------
+using OnTickFn = void(*)(double dt, void* user_data);
+
+// Move result returned by the plugin ABI's move_aabb — a flat-POD mirror of
+// the engine-internal voxelcollide::MoveResult. Same field semantics: position
+// is the resolved center, grounded is true when blocked along the gravity
+// vector, and hitX/hitY/hitZ report per-axis wall contact.
+struct BodyMoveResult {
+    WorldCoord position;
+    bool       grounded = false;
+    bool       hitX = false, hitY = false, hitZ = false;
+};
+
+// ---------------------------------------------------------------------------
 // Composition recipe (M9, docs/ARCHITECTURE.md §6)
 //
 // A flat, POD description a plugin passes to register_recipe for a composite
@@ -879,6 +897,32 @@ struct PluginContext {
         PluginContext* ctx,
         const char*    noise_id
     );
+
+    // -----------------------------------------------------------------------
+    // Per-frame tick + collision primitive (M17 B1, ARCHITECTURE §8)
+    //
+    // The tick hook fires once per frame from Engine::update with the elapsed
+    // dt — the minimal engine-core seam that a kinematic-body plugin (or any
+    // per-frame simulation plugin) needs to step its own state.
+    //
+    // move_aabb exposes the engine's sweep-and-resolve AABB collision
+    // primitive (voxelcollide::moveAABB) through the plugin ABI so the
+    // kinematic-body plugin can call it without linking engine internals.
+    // -----------------------------------------------------------------------
+
+    void (*register_on_tick)(
+        PluginContext* ctx,
+        OnTickFn       fn,
+        void*          user_data
+    );
+
+    BodyMoveResult (*move_aabb)(
+        PluginContext* ctx,
+        WorldCoord     center,
+        double         half_x, double half_y, double half_z,
+        double         delta_x, double delta_y, double delta_z,
+        double         gravity_dir_x, double gravity_dir_y, double gravity_dir_z
+    );
 };
 
 // ---------------------------------------------------------------------------
@@ -889,7 +933,7 @@ struct PluginContext {
 // way. The engine checks a plugin's stamped version at load time and rejects
 // a mismatch with a clear diagnostic rather than risking silent corruption.
 // ---------------------------------------------------------------------------
-static constexpr uint32_t VOXEL_PLUGIN_ABI_VERSION = 1;
+static constexpr uint32_t VOXEL_PLUGIN_ABI_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Plugin entry point
