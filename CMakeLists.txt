@@ -483,6 +483,10 @@ if(TEST_SOURCES)
   # kinbody::api() inline static resolves in one address space.
   set(_kb_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body/plugin.cpp)
   add_executable(voxel-engine-tests ${TEST_SOURCES} ${_kb_plugin_src})
+  # Suppress the generic voxel_plugin_init wrapper in kinematic-body/plugin.cpp
+  # so it doesn't clash with ExamplePlugin's voxel_plugin_init in the engine lib.
+  set_source_files_properties(${_kb_plugin_src} PROPERTIES
+    COMPILE_DEFINITIONS KINBODY_COMPILED_IN)
   target_link_libraries(voxel-engine-tests PRIVATE voxel-engine gtest gtest_main)
   target_include_directories(voxel-engine-tests PRIVATE src)
   # AsteroidFieldTest.cpp checks the body lattice the asteroid-field plugin and

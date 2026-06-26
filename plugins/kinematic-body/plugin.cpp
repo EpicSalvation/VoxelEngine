@@ -235,6 +235,10 @@ VOXEL_PLUGIN_EXPORT int kinematic_body_plugin_init(PluginContext* ctx) {
 }
 
 // Standard plugin entry point for .so/.dll loading via PluginManager::loadPlugin.
+// Suppressed when compiled into a binary that already has a voxel_plugin_init
+// (e.g. the test binary links ExamplePlugin's version from the engine library).
+#ifndef KINBODY_COMPILED_IN
 VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
     return kinematic_body_plugin_init(ctx);
 }
+#endif
