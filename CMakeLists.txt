@@ -504,8 +504,12 @@ if(TEST_SOURCES)
   # kbinput::api() / gpinput::api() inline statics resolve in one address space.
   set(_km_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse/plugin.cpp)
   set(_gp_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad/plugin.cpp)
+  # ExampleHooksTest.cpp wires in the example-hooks plugin (M17) to verify it
+  # registers every otherwise-unexampled hook; compiled in so example_hooks::
+  # observed() resolves in one address space.
+  set(_eh_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/example-hooks/plugin.cpp)
   add_executable(voxel-engine-tests ${TEST_SOURCES}
-    ${_kb_plugin_src} ${_km_plugin_src} ${_gp_plugin_src})
+    ${_kb_plugin_src} ${_km_plugin_src} ${_gp_plugin_src} ${_eh_plugin_src})
   # Suppress each plugin's generic voxel_plugin_init wrapper so they don't clash
   # with each other or with ExamplePlugin's voxel_plugin_init in the engine lib.
   set_source_files_properties(${_kb_plugin_src} PROPERTIES
@@ -514,6 +518,8 @@ if(TEST_SOURCES)
     COMPILE_DEFINITIONS KBINPUT_COMPILED_IN)
   set_source_files_properties(${_gp_plugin_src} PROPERTIES
     COMPILE_DEFINITIONS GPINPUT_COMPILED_IN)
+  set_source_files_properties(${_eh_plugin_src} PROPERTIES
+    COMPILE_DEFINITIONS EXAMPLE_HOOKS_COMPILED_IN)
   target_link_libraries(voxel-engine-tests PRIVATE voxel-engine gtest gtest_main)
   target_include_directories(voxel-engine-tests PRIVATE src)
   # AsteroidFieldTest.cpp checks the body lattice the asteroid-field plugin and
@@ -524,7 +530,8 @@ if(TEST_SOURCES)
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/asteroid-field
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad)
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/example-hooks)
   voxel_set_warnings(voxel-engine-tests)
   if(VOXEL_TEST_PLUGINS)
     add_dependencies(voxel-engine-tests ${VOXEL_TEST_PLUGINS})
