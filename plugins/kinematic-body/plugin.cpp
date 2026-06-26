@@ -23,7 +23,7 @@
 #else
 #  define VOXEL_PLUGIN_EXPORT extern "C"
 #endif
-VOXEL_PLUGIN_ABI_STAMP();
+VOXEL_PLUGIN_ABI_STAMP();  // no-op in compiled-in host builds (VOXEL_PLUGIN_NO_ABI_STAMP)
 
 // ---------------------------------------------------------------------------
 // Internal body representation

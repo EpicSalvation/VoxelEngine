@@ -450,8 +450,12 @@ foreach(_demo ${_voxel_demo_dirs})
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body/plugin.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse/plugin.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad/plugin.cpp)
+      # *_COMPILED_IN suppress each plugin's generic voxel_plugin_init wrapper;
+      # VOXEL_PLUGIN_NO_ABI_STAMP drops their (here-unused) ABI stamps so the
+      # single exported symbol isn't multiply defined in this binary.
       target_compile_definitions(${_demo} PRIVATE
-        KINBODY_COMPILED_IN KBINPUT_COMPILED_IN GPINPUT_COMPILED_IN)
+        KINBODY_COMPILED_IN KBINPUT_COMPILED_IN GPINPUT_COMPILED_IN
+        VOXEL_PLUGIN_NO_ABI_STAMP)
       target_include_directories(${_demo} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse
@@ -510,6 +514,12 @@ if(TEST_SOURCES)
   set(_eh_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/example-hooks/plugin.cpp)
   add_executable(voxel-engine-tests ${TEST_SOURCES}
     ${_kb_plugin_src} ${_km_plugin_src} ${_gp_plugin_src} ${_eh_plugin_src})
+  # The compiled-in plugins are wired in (wireInPlugin) and never ABI-checked, so
+  # drop their stamps target-wide — several stamps of the one exported symbol would
+  # collide at link. The disk-loaded fixture plugins (test-plugin-*) are separate
+  # MODULE targets without this define, so they keep their stamps for the loader's
+  # version-check tests.
+  target_compile_definitions(voxel-engine-tests PRIVATE VOXEL_PLUGIN_NO_ABI_STAMP)
   # Suppress each plugin's generic voxel_plugin_init wrapper so they don't clash
   # with each other or with ExamplePlugin's voxel_plugin_init in the engine lib.
   set_source_files_properties(${_kb_plugin_src} PROPERTIES

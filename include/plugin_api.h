@@ -948,13 +948,29 @@ extern "C" typedef int (VoxelPluginInitFn)(PluginContext* ctx);
 // ---------------------------------------------------------------------------
 // ABI version stamp
 //
-// Every native plugin should include VOXEL_PLUGIN_ABI_STAMP() at file scope.
-// It exports a uint32_t symbol the engine reads before calling init; a
-// mismatch aborts the load with a diagnostic.
+// Every native plugin includes VOXEL_PLUGIN_ABI_STAMP() at file scope, always
+// unconditionally. It exports a uint32_t symbol the engine reads before calling
+// init; a mismatch aborts the load with a diagnostic.
+//
+// The stamp matters ONLY for a runtime-loaded plugin .dll/.so: the loader reads
+// it from that one module's own handle (GetProcAddress/dlsym — see
+// PluginManager::loadPlugin) before deciding whether to call init. A plugin that
+// is instead compiled directly into a host binary (the test binary, and demos
+// that compile reference plugins in) is wired in via PluginManager::wireInPlugin
+// and is NEVER version-checked — so its stamp is dead weight there, and several
+// such stamps in one binary would collide at link (one exported symbol, many
+// definitions). Those host targets therefore define VOXEL_PLUGIN_NO_ABI_STAMP
+// once, target-wide, which drops EVERY stamp in that binary — zero is fine
+// because nothing reads it. Runtime plugin modules are built without the macro,
+// so each keeps its stamp and the loader's check still works. This replaces the
+// old per-plugin "#ifndef FOO_COMPILED_IN" stamp guards: a new compiled-in plugin
+// now needs no new guard, it just inherits the host target's define.
 // ---------------------------------------------------------------------------
 #define VOXEL_PLUGIN_ABI_VERSION_SYMBOL "voxel_plugin_abi_version"
 
-#if defined(_WIN32)
+#ifdef VOXEL_PLUGIN_NO_ABI_STAMP
+#  define VOXEL_PLUGIN_ABI_STAMP()  /* suppressed: this plugin is compiled into a host binary */
+#elif defined(_WIN32)
 #  define VOXEL_PLUGIN_ABI_STAMP() \
        extern "C" __declspec(dllexport) const uint32_t voxel_plugin_abi_version = VOXEL_PLUGIN_ABI_VERSION
 #else

@@ -40,12 +40,7 @@
 #  define VOXEL_PLUGIN_EXPORT extern "C"
 #endif
 
-// Stamp the ABI version for runtime .dll/.so loading. Suppressed when compiled
-// into a binary that already stamps it (the test binary stamps via the
-// kinematic-body plugin), so the single symbol isn't multiply defined.
-#ifndef EXAMPLE_HOOKS_COMPILED_IN
-VOXEL_PLUGIN_ABI_STAMP();
-#endif
+VOXEL_PLUGIN_ABI_STAMP();  // no-op in compiled-in host builds (VOXEL_PLUGIN_NO_ABI_STAMP)
 
 namespace {
 

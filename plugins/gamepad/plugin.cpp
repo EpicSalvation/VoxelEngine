@@ -22,12 +22,7 @@
 #else
 #  define VOXEL_PLUGIN_EXPORT extern "C"
 #endif
-// Suppressed when compiled in (e.g. the test binary compiles several plugins
-// together); the ABI stamp is a single exported symbol. Runtime-loaded builds
-// keep it. See the keyboard-mouse plugin for the same guard.
-#ifndef GPINPUT_COMPILED_IN
-VOXEL_PLUGIN_ABI_STAMP();
-#endif
+VOXEL_PLUGIN_ABI_STAMP();  // no-op in compiled-in host builds (VOXEL_PLUGIN_NO_ABI_STAMP)
 
 namespace {
 

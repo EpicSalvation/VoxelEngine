@@ -23,13 +23,7 @@
 #else
 #  define VOXEL_PLUGIN_EXPORT extern "C"
 #endif
-// Suppressed when compiled into a binary that already stamps the ABI version
-// (e.g. the test binary, which compiles several plugins in alongside each
-// other). The stamp is a single exported symbol, so only one may exist per
-// binary; runtime-loaded plugin builds keep it.
-#ifndef KBINPUT_COMPILED_IN
-VOXEL_PLUGIN_ABI_STAMP();
-#endif
+VOXEL_PLUGIN_ABI_STAMP();  // no-op in compiled-in host builds (VOXEL_PLUGIN_NO_ABI_STAMP)
 
 namespace {
 
