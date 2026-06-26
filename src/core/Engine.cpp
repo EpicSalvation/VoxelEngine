@@ -4,6 +4,8 @@
 #include "audio/AudioManager.h"
 #include "io/VoxImporter.h"
 #include "io/VoxExporter.h"
+#include "io/QbImporter.h"
+#include "io/QbExporter.h"
 #include "renderer/BgfxRenderer.h"
 #include "world/DecompositionManager.h"
 #include "world/Layer.h"
@@ -110,6 +112,76 @@ bool Engine::exportVox(const std::string& layerName,
     }
 
     VoxExporter exporter;
+    return exporter.save(path, *layer, minCorner, maxCorner);
+}
+
+bool Engine::importQb(const std::string& path,
+                      const std::string& layerName,
+                      const WorldCoord&  anchor)
+{
+    if (!pm_ || !world_) {
+        Log::error("Engine", "importQb called before init");
+        return false;
+    }
+
+    for (const auto& reg : pm_->importers()) {
+        if (reg.extension == "qb" && !reg.isBuiltin) {
+            break;
+        }
+    }
+
+    Layer* layer = world_->layer(layerName);
+    if (!layer) {
+        Log::warn("Engine", ("importQb: layer not found: " + layerName).c_str());
+        return false;
+    }
+
+    QbImporter importer;
+    return importer.load(path, *layer, anchor, *pm_);
+}
+
+bool Engine::exportQb(const std::string& layerName,
+                      const WorldCoord&  minCorner,
+                      const WorldCoord&  maxCorner,
+                      const std::string& path)
+{
+    if (!pm_ || !world_) {
+        Log::error("Engine", "exportQb called before init");
+        return false;
+    }
+
+    for (const auto& reg : pm_->exporters()) {
+        if (reg.extension == "qb" && !reg.isBuiltin) {
+            break;
+        }
+    }
+
+    Layer* layer = world_->layer(layerName);
+    if (!layer) {
+        Log::warn("Engine", ("exportQb: layer not found: " + layerName).c_str());
+        return false;
+    }
+
+    bool hasExtended = false;
+    for (const auto& [coord, chunk] : layer->chunks()) {
+        if (hasExtended) break;
+        const int n = chunk->size();
+        for (int z = 0; z < n && !hasExtended; ++z)
+        for (int y = 0; y < n && !hasExtended; ++y)
+        for (int x = 0; x < n && !hasExtended; ++x) {
+            const auto& m = chunk->at(x, y, z).material;
+            if (m.density != 0.0f || m.structural_strength != 0.0f ||
+                m.thermal_conductivity != 0.0f || m.porosity != 0.0f ||
+                m.hardness != 0.0f) {
+                hasExtended = true;
+            }
+        }
+    }
+    if (hasExtended) {
+        Log::warn("Engine", "extended voxel properties dropped; register an exporter plugin to preserve them");
+    }
+
+    QbExporter exporter;
     return exporter.save(path, *layer, minCorner, maxCorner);
 }
 

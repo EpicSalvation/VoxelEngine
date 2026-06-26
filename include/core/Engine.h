@@ -45,6 +45,24 @@ public:
                    const WorldCoord&  maxCorner,
                    const std::string& path);
 
+    // Import a .qb (Qubicle Binary) file into the named layer at anchor.
+    // Prefers a plugin-registered importer for ".qb" if one exists;
+    // otherwise falls back to the built-in QbImporter.
+    // Returns true on success; logs warnings on failure.
+    bool importQb(const std::string& path,
+                  const std::string& layerName,
+                  const WorldCoord&  anchor);
+
+    // Export the named layer's region [minCorner, maxCorner) to a .qb file.
+    // Prefers a plugin-registered exporter for ".qb" if one exists;
+    // otherwise falls back to QbExporter and emits a LOG_WARN when any
+    // voxel in the region carries non-default extended properties.
+    // Returns true on success; logs warnings on failure.
+    bool exportQb(const std::string& layerName,
+                  const WorldCoord&  minCorner,
+                  const WorldCoord&  maxCorner,
+                  const std::string& path);
+
     void start();
     void stop();
     void update(double dt);

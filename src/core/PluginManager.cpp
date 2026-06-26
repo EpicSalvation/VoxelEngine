@@ -318,6 +318,8 @@ void PluginManager::registerBuiltinHandlers() {
     // VoxExporter directly instead.
     importers_.push_back({"vox", nullptr, nullptr, kBuiltinOwnerId, true});
     exporters_.push_back({"vox", nullptr, nullptr, kBuiltinOwnerId, true});
+    importers_.push_back({"qb",  nullptr, nullptr, kBuiltinOwnerId, true});
+    exporters_.push_back({"qb",  nullptr, nullptr, kBuiltinOwnerId, true});
 }
 
 const RegisteredSound* PluginManager::findSound(const std::string& sound_id) const {
