@@ -118,10 +118,12 @@ budget to converge faster (more work per frame, risk of hitches); lower it for
 smoother frame pacing at the cost of slower convergence. Overflow carries to the next
 frame in every subsystem that has one.
 
-> Every budget row below (each marked *(budget)*) is now **runtime-settable** via
-> `engineConfig()` — the `Tuning.h` constant is just the compile-time default. The **Per-frame work budgets** API in §C maps
-> each budget to its `EngineConfig` member. The non-budget *model* constants have no
-> runtime field (rebuild only). Set a budget once at startup, or live for a quality slider.
+> Any constant below that has a matching field in §C's **Per-frame work budgets** table
+> (every per-frame budget, plus the streaming hysteresis margin) is now **runtime-settable**
+> via `engineConfig()` — the `Tuning.h` constant is just the compile-time default. That
+> table is the authoritative list of what is runtime-tunable; everything else here is a
+> rebuild-only *model* constant. Set a runtime value once at startup, or live for a
+> quality slider.
 
 ### `tuning::decomposition` — streaming/decomposition throughput
 
@@ -246,11 +248,13 @@ listener; `playSound(id, pos, overrides)` for one-shots; `createEmitter` /
 
 ### Per-frame work budgets (`include/core/EngineConfig.h` `engineConfig()`)
 
-The per-frame work caps from §B, promoted to a runtime struct (M17 D3b) so a game can
-expose quality sliders and a developer can retune without a rebuild. Read by each
-subsystem's tick from the process-global `engineConfig()`; mutate before or between
-ticks. Every field defaults to its §B `Tuning.h` value, so an engine that never touches
-it is byte-identical to the pre-D3b build. `resetEngineConfig()` restores all defaults.
+The per-frame work caps from §B (plus the streaming hysteresis margin), promoted to a
+runtime struct (M17 D3b) so a game can expose quality sliders and a developer can retune
+without a rebuild. Read by each subsystem's tick (or `LODManager` call) from the
+process-global `engineConfig()`; mutate before or between ticks. Every field defaults to
+its §B `Tuning.h` value, so an engine that never touches it is byte-identical to the
+pre-D3b build. `resetEngineConfig()` restores all defaults. There is no per-subsystem
+alias for these values — `engineConfig()` is the single place they are read and set.
 
 ```cpp
 #include "core/EngineConfig.h"
