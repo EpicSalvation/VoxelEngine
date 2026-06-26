@@ -345,9 +345,11 @@ void BgfxRenderer::render() {
         }
     }
 
-    // Debug-text overlays (8x16 character cells): a centered crosshair '+' and a
-    // top-left HUD. Both share one debug-text pass, cleared once per frame.
-    const bool wantText = crosshair || !hudLines.empty();
+    // Debug-text overlays (8x16 character cells): a centered crosshair '+', the
+    // top-left setHudText() lines, and the immediate-mode cell-grid overlay
+    // (hud* draw list, M17 C2). All share one debug-text pass, cleared once per
+    // frame.
+    const bool wantText = crosshair || !hudLines.empty() || !hudCmds.empty();
     bgfx::setDebug(wantText ? BGFX_DEBUG_TEXT : BGFX_DEBUG_NONE);
     if (wantText) {
         bgfx::dbgTextClear();
@@ -359,7 +361,35 @@ void BgfxRenderer::render() {
         for (size_t i = 0; i < hudLines.size(); ++i)
             bgfx::dbgTextPrintf(1, static_cast<uint16_t>(1 + i), 0x0f, "%s",
                                 hudLines[i].c_str());
+        // Replay the immediate-mode draw list in submission order so later calls
+        // paint over earlier ones (e.g. a selection box over an inventory panel).
+        for (const HudCmd& c : hudCmds) {
+            switch (c.kind) {
+                case HudCmd::Text:
+                    bgfx::dbgTextPrintf(static_cast<uint16_t>(c.col),
+                                        static_cast<uint16_t>(c.row),
+                                        c.attr, "%s", c.text.c_str());
+                    break;
+                case HudCmd::Fill: {
+                    const std::string run(static_cast<size_t>(c.w), c.glyph);
+                    for (int r = 0; r < c.h; ++r)
+                        bgfx::dbgTextPrintf(static_cast<uint16_t>(c.col),
+                                            static_cast<uint16_t>(c.row + r),
+                                            c.attr, "%s", run.c_str());
+                    break;
+                }
+                case HudCmd::Cells:
+                    bgfx::dbgTextImage(static_cast<uint16_t>(c.col),
+                                       static_cast<uint16_t>(c.row),
+                                       static_cast<uint16_t>(c.w),
+                                       static_cast<uint16_t>(c.h),
+                                       c.cells.data(),
+                                       static_cast<uint16_t>(c.w * 2));
+                    break;
+            }
+        }
     }
+    hudCmds.clear();
 
     pendingVoxels.clear();
     pendingChunks.clear();
@@ -371,6 +401,34 @@ void BgfxRenderer::render() {
 
 void BgfxRenderer::drawVoxel(const WorldCoord& position, uint32_t abgr) {
     pendingVoxels.push_back({position, abgr});
+}
+
+void BgfxRenderer::hudText(int col, int row, uint8_t attr, const std::string& text) {
+    HudCmd c;
+    c.kind = HudCmd::Text;
+    c.col = col; c.row = row; c.w = 0; c.h = 0;
+    c.attr = attr; c.glyph = 0;
+    c.text = text;
+    hudCmds.push_back(std::move(c));
+}
+
+void BgfxRenderer::hudFill(int col, int row, int w, int h, uint8_t attr, char glyph) {
+    if (w <= 0 || h <= 0) return;
+    HudCmd c;
+    c.kind = HudCmd::Fill;
+    c.col = col; c.row = row; c.w = w; c.h = h;
+    c.attr = attr; c.glyph = glyph;
+    hudCmds.push_back(std::move(c));
+}
+
+void BgfxRenderer::hudCells(int col, int row, int w, int h, const uint8_t* cells) {
+    if (w <= 0 || h <= 0 || !cells) return;
+    HudCmd c;
+    c.kind = HudCmd::Cells;
+    c.col = col; c.row = row; c.w = w; c.h = h;
+    c.attr = 0; c.glyph = 0;
+    c.cells.assign(cells, cells + static_cast<size_t>(w) * h * 2);
+    hudCmds.push_back(std::move(c));
 }
 
 void BgfxRenderer::renderWorld(const World& world) {

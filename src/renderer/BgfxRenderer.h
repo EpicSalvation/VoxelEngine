@@ -10,6 +10,24 @@
 
 class ChunkMesh;
 
+// Cell-grid HUD overlay helpers (M17 C2). bgfx's built-in debug text draws an
+// 8x16 grid of character cells, each with a one-byte color attribute: the top
+// 4 bits select a background color and the bottom 4 a foreground color, both
+// indices into bgfx's 16-color VGA/ANSI palette. attr() packs a (fg, bg) pair
+// into that byte so HUD call sites read clearly; the named constants cover the
+// palette a demo HUD actually reaches for.
+namespace hud {
+enum Color : uint8_t {
+    Black = 0,  Blue = 1,       Green = 2,      Cyan = 3,
+    Red = 4,    Magenta = 5,    Brown = 6,      LightGray = 7,
+    DarkGray = 8, LightBlue = 9, LightGreen = 10, LightCyan = 11,
+    LightRed = 12, LightMagenta = 13, Yellow = 14, White = 15,
+};
+inline uint8_t attr(uint8_t fg, uint8_t bg = Black) {
+    return static_cast<uint8_t>((bg << 4) | (fg & 0x0f));
+}
+}  // namespace hud
+
 // GPU vertex for the voxel program. Memory layout MUST match ChunkMeshData's
 // MeshVertex (position + packed ABGR color + tile-local atlas UV + the bound
 // tile's atlas sub-rect): ChunkMesh uploads MeshVertex memory through this layout,
@@ -84,6 +102,32 @@ public:
     // text. Pass an empty vector to clear it. Persists across frames until changed.
     void setHudText(std::vector<std::string> lines) { hudLines = std::move(lines); }
 
+    // ── Cell-grid HUD overlay (M17 C2) ──────────────────────────────────────
+    // An immediate-mode 2D overlay for composing a real game HUD (health bars,
+    // inventory slots, a minimap) over the scene. It shares the same bgfx 8x16
+    // debug-text cells as setHudText()/the crosshair, but exposes them as a
+    // general draw list a game rebuilds every frame. Coordinates are in CELLS
+    // (col, row), origin top-left; the live grid is hudCols()xhudRows(). Colors
+    // are 4-bit indices into bgfx's debug palette — pack a cell attribute with
+    // hud::attr(fg, bg).
+    //
+    // Usage: hudClear() once at the top of the frame, then the draw calls, then
+    // render() rasterizes the list into the shared debug-text pass and clears it.
+    // Independent of setHudText() (whose persistent lines still draw).
+    void hudClear() { hudCmds.clear(); }
+    // Draw a string starting at (col, row) with one color attribute.
+    void hudText(int col, int row, uint8_t attr, const std::string& text);
+    // Fill a col x row block of w x h cells with a single glyph + attribute
+    // (default a colored space) — the building block for bars and panels.
+    void hudFill(int col, int row, int w, int h, uint8_t attr, char glyph = ' ');
+    // Blit a w x h block of pre-built cells (2 bytes each: glyph, attribute),
+    // row-major — used for the minimap. `cells` is copied; the caller's buffer
+    // need not outlive the call.
+    void hudCells(int col, int row, int w, int h, const uint8_t* cells);
+    // Current overlay grid size in cells, for positioning bottom/right elements.
+    int hudCols() const { return static_cast<int>(viewWidth  / 8); }
+    int hudRows() const { return static_cast<int>(viewHeight / 16); }
+
 private:
     struct PendingVoxel {
         WorldCoord pos;
@@ -116,6 +160,18 @@ private:
     bgfx::TextureHandle       whiteTex;      // built-in 1×1 white tile (default atlas; engine-owned)
     bgfx::TextureHandle       atlasTex;      // currently bound atlas; defaults to whiteTex (not owned)
     std::vector<std::string>  hudLines;  // top-left debug-text overlay
+
+    // Immediate-mode cell-grid overlay commands (M17 C2), rasterized and cleared
+    // each frame in render(). See the hud* public methods above.
+    struct HudCmd {
+        enum Kind { Text, Fill, Cells } kind;
+        int     col, row, w, h;
+        uint8_t attr;
+        char    glyph;
+        std::string          text;   // Text
+        std::vector<uint8_t> cells;  // Cells (2 bytes per cell: glyph, attr)
+    };
+    std::vector<HudCmd>       hudCmds;
     WorldCoord                cameraPos;
     bx::Vec3                  cameraRot; // {pitch, yaw, roll} in radians
     uint32_t                  viewWidth;

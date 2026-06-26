@@ -439,6 +439,24 @@ foreach(_demo ${_voxel_demo_dirs})
       target_include_directories(${_demo} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body)
     endif()
+    # The HUD-and-controls demo (M17 C2) field-tests all three reference plugins
+    # together, so it COMPILES them into the binary (with each plugin's
+    # *_COMPILED_IN guard) — their inline-static api() singletons must resolve in
+    # one address space, the same wiring the plugins' own tests use. The defines
+    # are target-wide; main.cpp ignores them, each plugin source checks only its
+    # own. (material-showcase still loads from disk via VOXEL_SHOWCASE_PLUGIN_PATH.)
+    if(_demo STREQUAL "18-hud-and-controls")
+      target_sources(${_demo} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body/plugin.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse/plugin.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad/plugin.cpp)
+      target_compile_definitions(${_demo} PRIVATE
+        KINBODY_COMPILED_IN KBINPUT_COMPILED_IN GPINPUT_COMPILED_IN)
+      target_include_directories(${_demo} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad)
+    endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)
     if(EXISTS ${_demo_assets})
