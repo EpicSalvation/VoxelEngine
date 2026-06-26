@@ -213,7 +213,10 @@ void tick(double dt, void* /*user_data*/) {
 // Plugin entry point
 // ---------------------------------------------------------------------------
 
-VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
+// Unique entry point used when the plugin is compiled directly into a binary
+// that already contains another voxel_plugin_init (e.g. the test binary links
+// ExamplePlugin's voxel_plugin_init via the engine library).
+VOXEL_PLUGIN_EXPORT int kinematic_body_plugin_init(PluginContext* ctx) {
     g_ctx = ctx;
 
     // Fill the shared API table so the host can interact with the body registry.
@@ -229,4 +232,9 @@ VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
     ctx->register_on_tick(ctx, tick, nullptr);
 
     return 0;
+}
+
+// Standard plugin entry point for .so/.dll loading via PluginManager::loadPlugin.
+VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
+    return kinematic_body_plugin_init(ctx);
 }

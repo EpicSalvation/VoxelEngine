@@ -13,9 +13,10 @@
 #include <gtest/gtest.h>
 
 // The kinematic-body plugin.cpp is compiled into this test binary (see
-// CMakeLists.txt), so its voxel_plugin_init and the kinbody::api() singleton
-// are in the same address space. Forward-declare the init function.
-extern "C" int voxel_plugin_init(PluginContext* ctx);
+// CMakeLists.txt), so kinbody::api() resolves in one address space.
+// We use the unique init name to avoid clashing with ExamplePlugin's
+// voxel_plugin_init that is linked through the engine library.
+extern "C" int kinematic_body_plugin_init(PluginContext* ctx);
 
 namespace {
 
@@ -163,7 +164,7 @@ TEST(KinematicBody, CreateAndDestroy) {
     World w = makeFlooredWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc desc;
     desc.center = WorldCoord(5.0, 5.0, 5.0);
@@ -180,7 +181,7 @@ TEST(KinematicBody, GetStateReturnsInitialPosition) {
     World w = makeFlooredWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc desc;
     desc.center = WorldCoord(5.0, 10.0, 5.0);
@@ -200,7 +201,7 @@ TEST(KinematicBody, GetStateInvalidIdReturnsNull) {
     World w = makeFlooredWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     EXPECT_EQ(kinbody::api().get_state(999), nullptr);
     kinbody::api().destroy_body(kinbody::kInvalidBody);  // idempotent
@@ -215,7 +216,7 @@ TEST(KinematicBody, FallsAndLandsOnFloor) {
     World w = makeFlooredWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc desc;
     desc.center = WorldCoord(5.0, 5.0, 5.0);
@@ -238,7 +239,7 @@ TEST(KinematicBody, FreeFallInEmptyWorld) {
     World w = makeEmptyWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc desc;
     desc.center = WorldCoord(5.0, 10.0, 5.0);
@@ -264,7 +265,7 @@ TEST(KinematicBody, JumpFromGround) {
     World w = makeFlooredWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc desc;
     desc.center = WorldCoord(5.0, 1.9, 5.0);
@@ -292,7 +293,7 @@ TEST(KinematicBody, JumpDoesNothingInAir) {
     World w = makeEmptyWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc desc;
     desc.center = WorldCoord(5.0, 10.0, 5.0);
@@ -319,7 +320,7 @@ TEST(KinematicBody, WishDirectionMovesHorizontally) {
     World w = makeFlooredWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc desc;
     desc.center = WorldCoord(5.0, 1.9, 5.0);
@@ -351,7 +352,7 @@ TEST(KinematicBody, MultipleBodiesStepIndependently) {
     World w = makeFlooredWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc d1;
     d1.center = WorldCoord(3.0, 5.0, 3.0);
@@ -388,7 +389,7 @@ TEST(KinematicBody, SetGravityChangesDirection) {
     World w = makeEmptyWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc desc;
     desc.center = WorldCoord(5.0, 5.0, 5.0);
@@ -416,7 +417,7 @@ TEST(KinematicBody, SetPositionTeleports) {
     World w = makeEmptyWorld();
     Engine engine;
     engine.init(pm, w);
-    pm.wireInPlugin(voxel_plugin_init);
+    pm.wireInPlugin(kinematic_body_plugin_init);
 
     kinbody::BodyDesc desc;
     desc.center = WorldCoord(1.0, 1.0, 1.0);
