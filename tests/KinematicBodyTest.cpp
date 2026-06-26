@@ -8,7 +8,7 @@
 #include "world/ChunkCoordMath.h"
 #include "core/LayerConfig.h"
 #include "core/Engine.h"
-#include "PluginManager.h"
+#include "core/PluginManager.h"
 
 #include <gtest/gtest.h>
 
