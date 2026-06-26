@@ -1,6 +1,7 @@
 // Tests for the LODManager chunk-budget math (src/renderer/LODManager.{h,cpp}).
 // Headless: pure set/distance math built from a LayerConfig string.
 
+#include "core/EngineConfig.h"
 #include "core/LayerConfig.h"
 #include "renderer/LODManager.h"
 
@@ -28,7 +29,7 @@ TEST(LODManager, ReadsPerLayerViewDistance) {
     LayerConfig cfg = makeConfig(5);
     LODManager lod(cfg);
     EXPECT_EQ(lod.viewDistanceChunks("terrain"), 5);
-    EXPECT_EQ(lod.evictDistanceChunks("terrain"), 5 + LODManager::kHysteresisChunks);
+    EXPECT_EQ(lod.evictDistanceChunks("terrain"), 5 + engineConfig().streamingHysteresisChunks);
     EXPECT_EQ(lod.viewDistanceChunks("nonexistent"), 0);
 }
 

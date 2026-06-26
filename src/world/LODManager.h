@@ -4,7 +4,6 @@
 #include <vector>
 
 #include "core/LayerConfig.h"
-#include "core/Tuning.h"
 #include "world/Chunk.h"
 #include "world/StreamingVolume.h"
 
@@ -61,11 +60,6 @@ public:
     // the layer's StreamingVolume grown by the hysteresis margin.
     bool shouldEvict(ChunkCoord center, ChunkCoord coord,
                      const std::string& layerName) const;
-
-    // Compile-time DEFAULT eviction hysteresis margin. The value actually applied
-    // is runtime-settable via engineConfig().streamingHysteresisChunks (M17 D3b);
-    // this alias is the documented baseline tests and call sites reference.
-    static constexpr int kHysteresisChunks = tuning::streaming::kHysteresisChunks;
 
 private:
     const LayerDef* layer(const std::string& name) const;

@@ -74,7 +74,7 @@ TEST_F(EngineConfigTest, LODManagerHonorsRuntimeHysteresis) {
     LODManager lod(cfg);
 
     // Default margin reproduces the documented baseline.
-    EXPECT_EQ(lod.evictDistanceChunks("terrain"), 5 + LODManager::kHysteresisChunks);
+    EXPECT_EQ(lod.evictDistanceChunks("terrain"), 5 + tuning::streaming::kHysteresisChunks);
 
     // Crank the margin up; the eviction radius follows immediately.
     engineConfig().streamingHysteresisChunks = 10;
