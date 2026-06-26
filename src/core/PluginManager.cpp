@@ -4,6 +4,8 @@
 #include "renderer/MaterialFaces.h"
 #include "renderer/TextureManager.h"
 #include "world/Noise.h"
+#include "world/VoxelCollision.h"
+#include "world/World.h"
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
@@ -134,6 +136,7 @@ PluginId PluginManager::loadPlugin(const std::string& path) {
         eraseOwned(sounds_,             id);
         eraseOwned(materialSounds_,     id);
         eraseOwned(textures_,           id);
+        eraseOwned(tickHooks_,         id);
         platformDlClose(handle);
         return kInvalidPluginId;
     }
@@ -200,6 +203,7 @@ PluginId PluginManager::wireInPlugin(VoxelPluginInitFn* initFn) {
         eraseOwned(sounds_,             id);
         eraseOwned(materialSounds_,     id);
         eraseOwned(textures_,           id);
+        eraseOwned(tickHooks_,         id);
         return kInvalidPluginId;
     }
     loaded_.push_back({id, nullptr});
@@ -240,6 +244,7 @@ bool PluginManager::unloadPlugin(PluginId id) {
     eraseOwned(sounds_,               id);
     eraseOwned(materialSounds_,       id);
     eraseOwned(textures_,             id);
+    eraseOwned(tickHooks_,           id);
 
     // Stop any live emitters the plugin created before its code is unloaded
     // (ARCHITECTURE §16 — no emitter must dangle past its owning library handle).
@@ -688,6 +693,38 @@ PluginContext PluginManager::buildContext() {
         auto* mgr = static_cast<PluginManager*>(c->engine_data);
         const RegisteredNoise* n = mgr->resolveNoise(id);
         return n ? n->fn : nullptr;
+    };
+
+    // -----------------------------------------------------------------------
+    // Per-frame tick + collision primitive (M17 B1, ARCHITECTURE §8)
+    // -----------------------------------------------------------------------
+
+    ctx.register_on_tick = [](PluginContext* c, OnTickFn fn, void* ud) {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        mgr->tickHooks_.push_back({fn, ud, mgr->currentOwner_});
+    };
+
+    ctx.move_aabb = [](PluginContext* c,
+                       WorldCoord center,
+                       double hx, double hy, double hz,
+                       double dx, double dy, double dz,
+                       double gx, double gy, double gz) -> BodyMoveResult {
+        auto* mgr = static_cast<PluginManager*>(c->engine_data);
+        BodyMoveResult result{};
+        if (!mgr->world_) {
+            result.position = center;
+            return result;
+        }
+        voxelcollide::AABB box{center, glm::dvec3(hx, hy, hz)};
+        glm::dvec3 delta(dx, dy, dz);
+        glm::dvec3 gravDir(gx, gy, gz);
+        auto mr = voxelcollide::moveAABB(*mgr->world_, box, delta, gravDir);
+        result.position = mr.position;
+        result.grounded = mr.grounded;
+        result.hitX     = mr.hitX;
+        result.hitY     = mr.hitY;
+        result.hitZ     = mr.hitZ;
+        return result;
     };
 
     return ctx;

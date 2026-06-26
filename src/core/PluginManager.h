@@ -10,6 +10,7 @@
 // Forward declarations: PluginManager.h must not include audio/ headers because
 // AudioManager.h includes PluginManager.h — circular at the .h level.
 // PluginManager.cpp includes audio/AudioManager.h for the lambda bodies.
+class World;
 namespace audio   { class AudioManager;   }
 namespace texture { class TextureManager; }
 
@@ -230,6 +231,16 @@ struct RegisteredTexture {
                                  // a Blockbench .bbmodel's embedded base64 texture
 };
 
+// ---------------------------------------------------------------------------
+// Per-frame tick registry (M17 B1, ARCHITECTURE §8)
+// ---------------------------------------------------------------------------
+
+struct RegisteredTickHook {
+    OnTickFn fn;
+    void*    user_data;
+    PluginId owner;
+};
+
 // Loads plugins from disk and maintains the callback registries that engine
 // subsystems query to invoke registered behavior.
 //
@@ -312,6 +323,10 @@ public:
     void setTextureManager(texture::TextureManager* tm) { textureManager_ = tm; }
     texture::TextureManager* textureManager() const     { return textureManager_; }
 
+    // World reference for the move_aabb plugin-ABI primitive (M17 B1).
+    void   setWorld(World* w)    { world_ = w; }
+    World* world() const         { return world_; }
+
     // Wire in a plugin that is compiled directly into the executable rather than loaded
     // as a .so. Useful for the example plugin and for testing without a .so build step.
     // Returns the new plugin's id (no library handle is associated), or kInvalidPluginId
@@ -350,6 +365,7 @@ public:
     const std::vector<RegisteredSound>&               sounds()               const { return sounds_; }
     const std::vector<RegisteredMaterialSound>&       materialSounds()       const { return materialSounds_; }
     const std::vector<RegisteredTexture>&             textures()             const { return textures_; }
+    const std::vector<RegisteredTickHook>&            tickHooks()            const { return tickHooks_; }
 
     // Keyed material-property lookup. These centralize the registry search that
     // importers, the build menu, and other tooling previously hand-rolled. They
@@ -421,6 +437,9 @@ private:
     std::vector<RegisteredSound>               sounds_;
     std::vector<RegisteredMaterialSound>       materialSounds_;
     std::vector<RegisteredTexture>             textures_;
+    std::vector<RegisteredTickHook>            tickHooks_;
+
+    World* world_ = nullptr;
 
     // A plugin that has been loaded and whose registrations are live.
     struct LoadedPlugin {

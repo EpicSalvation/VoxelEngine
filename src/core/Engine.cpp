@@ -33,6 +33,7 @@ void Engine::init(PluginManager& pm, World& world)
 {
     pm_    = &pm;
     world_ = &world;
+    pm.setWorld(&world);
     pm.registerBuiltinHandlers();
     pm.registerBuiltinNoise();  // value/fbm/ridged/worley floor (architecture.md §6)
 }
@@ -207,6 +208,13 @@ void Engine::stop()
 void Engine::update(double dt)
 {
     deltaTime = dt;
+    // Per-frame tick hooks — kinematic-body stepping and any other per-frame
+    // plugin simulation (M17 B1). Fires before network sync so body positions
+    // are current when position replication runs.
+    if (pm_) {
+        for (const auto& hook : pm_->tickHooks())
+            hook.fn(dt, hook.user_data);
+    }
     // Network update runs after world update and before render (ARCHITECTURE §15).
     if (nm_ && nm_->isActive()) {
         nm_->update(dt);

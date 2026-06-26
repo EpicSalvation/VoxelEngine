@@ -431,6 +431,14 @@ foreach(_demo ${_voxel_demo_dirs})
       target_include_directories(${_demo} PRIVATE
         include ${CMAKE_CURRENT_SOURCE_DIR}/plugins/asteroid-field)
     endif()
+    if(TARGET kinematic-body)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_KINEMATIC_BODY_PLUGIN_PATH="$<TARGET_FILE:kinematic-body>")
+      # The kinematic-body plugin shares its API header (kinematic_body.h) with
+      # demos that use it, mirroring the asteroid-field pattern.
+      target_include_directories(${_demo} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body)
+    endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)
     if(EXISTS ${_demo_assets})
@@ -470,13 +478,23 @@ endforeach()
 file(GLOB_RECURSE TEST_SOURCES tests/*.cpp)
 list(FILTER TEST_SOURCES EXCLUDE REGEX "/fixtures/")
 if(TEST_SOURCES)
-  add_executable(voxel-engine-tests ${TEST_SOURCES})
+  # KinematicBodyTest.cpp wires in the kinematic-body plugin directly (via
+  # wireInPlugin), so its source is compiled into the test binary so the
+  # kinbody::api() inline static resolves in one address space.
+  set(_kb_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body/plugin.cpp)
+  add_executable(voxel-engine-tests ${TEST_SOURCES} ${_kb_plugin_src})
+  # Suppress the generic voxel_plugin_init wrapper in kinematic-body/plugin.cpp
+  # so it doesn't clash with ExamplePlugin's voxel_plugin_init in the engine lib.
+  set_source_files_properties(${_kb_plugin_src} PROPERTIES
+    COMPILE_DEFINITIONS KINBODY_COMPILED_IN)
   target_link_libraries(voxel-engine-tests PRIVATE voxel-engine gtest gtest_main)
   target_include_directories(voxel-engine-tests PRIVATE src)
   # AsteroidFieldTest.cpp checks the body lattice the asteroid-field plugin and
   # the demo share (plugins/asteroid-field/asteroid_field.h, header-only).
+  # KinematicBodyTest.cpp uses the kinematic-body plugin's shared header.
   target_include_directories(voxel-engine-tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/asteroid-field)
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/asteroid-field
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body)
   voxel_set_warnings(voxel-engine-tests)
   if(VOXEL_TEST_PLUGINS)
     add_dependencies(voxel-engine-tests ${VOXEL_TEST_PLUGINS})
