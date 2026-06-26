@@ -482,19 +482,31 @@ if(TEST_SOURCES)
   # wireInPlugin), so its source is compiled into the test binary so the
   # kinbody::api() inline static resolves in one address space.
   set(_kb_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body/plugin.cpp)
-  add_executable(voxel-engine-tests ${TEST_SOURCES} ${_kb_plugin_src})
-  # Suppress the generic voxel_plugin_init wrapper in kinematic-body/plugin.cpp
-  # so it doesn't clash with ExamplePlugin's voxel_plugin_init in the engine lib.
+  # The reference input plugins (M17 C1) are likewise compiled in so their
+  # kbinput::api() / gpinput::api() inline statics resolve in one address space.
+  set(_km_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse/plugin.cpp)
+  set(_gp_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad/plugin.cpp)
+  add_executable(voxel-engine-tests ${TEST_SOURCES}
+    ${_kb_plugin_src} ${_km_plugin_src} ${_gp_plugin_src})
+  # Suppress each plugin's generic voxel_plugin_init wrapper so they don't clash
+  # with each other or with ExamplePlugin's voxel_plugin_init in the engine lib.
   set_source_files_properties(${_kb_plugin_src} PROPERTIES
     COMPILE_DEFINITIONS KINBODY_COMPILED_IN)
+  set_source_files_properties(${_km_plugin_src} PROPERTIES
+    COMPILE_DEFINITIONS KBINPUT_COMPILED_IN)
+  set_source_files_properties(${_gp_plugin_src} PROPERTIES
+    COMPILE_DEFINITIONS GPINPUT_COMPILED_IN)
   target_link_libraries(voxel-engine-tests PRIVATE voxel-engine gtest gtest_main)
   target_include_directories(voxel-engine-tests PRIVATE src)
   # AsteroidFieldTest.cpp checks the body lattice the asteroid-field plugin and
   # the demo share (plugins/asteroid-field/asteroid_field.h, header-only).
   # KinematicBodyTest.cpp uses the kinematic-body plugin's shared header.
+  # InputPluginsTest.cpp uses the keyboard-mouse / gamepad shared headers.
   target_include_directories(voxel-engine-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/asteroid-field
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body)
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad)
   voxel_set_warnings(voxel-engine-tests)
   if(VOXEL_TEST_PLUGINS)
     add_dependencies(voxel-engine-tests ${VOXEL_TEST_PLUGINS})
