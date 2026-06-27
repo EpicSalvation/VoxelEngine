@@ -100,6 +100,7 @@ BgfxRenderer::BgfxRenderer()
       atlasTex(BGFX_INVALID_HANDLE),
       cameraRot{0.0f, 0.0f, 0.0f},
       cameraUp{0.0f, 1.0f, 0.0f},
+      clearColor(0x303030ffu),
       viewWidth(800),
       viewHeight(600),
       farClip(1000.0f),
@@ -139,7 +140,7 @@ void BgfxRenderer::initialize(const platform::NativeWindowHandles& handles,
         return;
     }
 
-    bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x303030ff, 1.0f, 0);
+    bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, clearColor, 1.0f, 0);
     bgfx::setViewRect(0, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
 
     VoxelVertex::initLayout();
@@ -222,6 +223,10 @@ void BgfxRenderer::render() {
     //   view 1 — translucent geometry, alpha-blended, depth test on / write off,
     //            no cull, drawn after view 0 so water composites over the terrain.
     // View 1 deliberately has no clear, so it keeps view 0's color and depth.
+    // Re-assert the clear color each frame so setClearColor() takes effect at
+    // runtime (e.g. matching the fog color to the background); view 1 still does
+    // not clear, so it keeps view 0's color + depth.
+    bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, clearColor, 1.0f, 0);
     bgfx::setViewTransform(0, view, proj);
     bgfx::setViewRect(0, 0, 0, static_cast<uint16_t>(viewWidth), static_cast<uint16_t>(viewHeight));
     bgfx::setViewTransform(1, view, proj);
@@ -527,6 +532,15 @@ void BgfxRenderer::setCameraUp(const glm::vec3& worldUp) {
 
 void BgfxRenderer::setFog(const FogParams& f) {
     fog = f;
+}
+
+void BgfxRenderer::setClearColor(const glm::vec3& rgb) {
+    // Pack to bgfx's 0xRRGGBBAA clear format (R in the high byte), opaque alpha.
+    auto u8 = [](float c) -> uint32_t {
+        const float clamped = c < 0.0f ? 0.0f : (c > 1.0f ? 1.0f : c);
+        return static_cast<uint32_t>(clamped * 255.0f + 0.5f);
+    };
+    clearColor = (u8(rgb.r) << 24) | (u8(rgb.g) << 16) | (u8(rgb.b) << 8) | 0xffu;
 }
 
 void BgfxRenderer::cleanup() {

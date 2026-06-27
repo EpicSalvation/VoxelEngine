@@ -46,6 +46,14 @@ public:
     // scene renders byte-identically; an implementation may leave this a no-op.
     virtual void setFog(const FogParams& fog) { (void)fog; }
 
+    // Set the background (clear) color the framebuffer is cleared to each frame.
+    // Distance fog should fade geometry toward this same color so far geometry
+    // dissolves seamlessly into the background instead of leaving a halo at the
+    // far plane — i.e. a game pairs setClearColor(c) with a fog color of c. The
+    // default (0x303030 dark gray) reproduces the historical clear byte-for-byte;
+    // an implementation may leave this a no-op.
+    virtual void setClearColor(const glm::vec3& rgb) { (void)rgb; }
+
     virtual void cleanup() = 0;
     virtual void shutdown() = 0;
 };

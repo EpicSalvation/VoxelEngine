@@ -133,13 +133,21 @@ constexpr float  kFarClipM = 2000.0f;
 // Distance obscurance (M17). A dust haze tuned to the macro→micro decompose
 // distance (280 m, see the LayerConfig): geometry is already deep in murk by the
 // time its coarse 4 m silhouette appears, so the LOD pop and the chunk-load edge
-// resolve out of the dust instead of snapping in. The haze color matches the
-// 0x303030 clear color so the far plane is invisible — geometry fades into the
-// background, not into a visible wall. Driven by the atmospheric-mist plugin,
-// which breathes the density over time.
-constexpr float  kFogNearM    = 120.0f;
-constexpr float  kFogFarM     = 280.0f;  // == the macro decompose_distance_m
-constexpr float  kFogDensity  = 0.9f;
+// resolve out of the dust instead of snapping in. Bodies are spaced ~160 m apart
+// (asteroid_field.h kCellM), so the band fully hazes out the second ring while the
+// nearest bodies stay clear. Driven by the atmospheric-mist plugin (it breathes
+// the density over time). Toggle with M to see the LOD pop with/without the haze.
+//
+// Crucially the dust color and the background (clear) color are the SAME, so far
+// geometry dissolves seamlessly into the background instead of leaving a halo at
+// the far plane (Renderer::setClearColor pairs with the fog color). It is a touch
+// lighter/warmer than the historical 0x303030 void so the dust actually reads as
+// dust rather than darkness — flying through a lit haze, not into black.
+constexpr float  kFogNearM    = 80.0f;
+constexpr float  kFogFarM     = 260.0f;
+constexpr float  kFogDensity  = 1.0f;
+const glm::vec3  kDustColor(0.30f, 0.27f, 0.24f);          // haze + background tint
+const glm::vec3  kVoidColor(0.188f, 0.188f, 0.188f);       // 0x303030, the no-fog background
 
 using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
 
@@ -322,12 +330,13 @@ layers:
     atmospheric_mist_plugin_init(nullptr);
     if (mist::api().configure) {
         mist::Config fogCfg;
-        fogCfg.base.color   = glm::vec3(0.188f, 0.188f, 0.188f);  // == clear color
+        fogCfg.base.color   = kDustColor;   // fog fades geometry toward the background tint
         fogCfg.base.near_m  = kFogNearM;
         fogCfg.base.far_m   = kFogFarM;
         fogCfg.base.density = kFogDensity;
         mist::api().configure(&fogCfg);
     }
+    renderer.setClearColor(kDustColor);  // background matches the haze (no far-plane halo)
 
     std::unordered_map<std::string, MeshStore> meshStores;
 
@@ -357,7 +366,8 @@ layers:
     WorldCoord camPos(40.0, 40.0, 150.0);
     double     lastMX = 0, lastMY = 0;
     bool       firstMouse = true, cursorCaptured = true;
-    bool       prevF = false, prevG = false;
+    bool       prevF = false, prevG = false, prevM = false;
+    bool       mistOn = true;                     // distance-obscurance dust haze (M toggles)
     bool       suitMode = false;                 // false = jet (free 6-DOF flight)
     WorldCoord playerCenter = camPos;            // AABB center in suit mode
     glm::dvec3 vel(0.0);                          // suit velocity (gravity + jump)
@@ -368,8 +378,10 @@ layers:
     glfwSetInputMode(glfwWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     Log::info(kLogCat, "Controls: WASD move, Space/Shift up-down, G jet/suit, LMB mine, "
-                       "F cursor, ESC quit. Jet toward the gray blobs to decompose them; "
-                       "press G near a body to drop onto it under its own gravity.");
+                       "M toggle dust haze, F cursor, ESC quit. Jet toward the gray blobs to "
+                       "decompose them; press G near a body to drop onto it under its own "
+                       "gravity. Toggle M while flying to see distant bodies snap in vs. "
+                       "fade out of the haze.");
 
     auto prevTime = std::chrono::high_resolution_clock::now();
     const auto startTime = prevTime;
@@ -413,6 +425,17 @@ layers:
             if (suitMode) { playerCenter = camPos; vel = glm::dvec3(0.0); grounded = false; }
         }
         prevG = curG;
+
+        // ── M: toggle the distance-obscurance dust haze (M17) ───────────────────
+        // Off snaps the background back to the stark void and disables fog (density
+        // 0), so the coarse→fine LOD pop and the chunk-load edge are baldly visible
+        // again — the A/B that shows what the haze is concealing.
+        const bool curM = (glfwGetKey(glfwWin, GLFW_KEY_M) == GLFW_PRESS);
+        if (curM && !prevM) {
+            mistOn = !mistOn;
+            renderer.setClearColor(mistOn ? kDustColor : kVoidColor);
+        }
+        prevM = curM;
 
         // ── Gravity policy (L7): radial well at the NEAREST asteroid center ──────
         // Rebuilt every frame from the shared body lattice as the player moves
@@ -565,13 +588,14 @@ layers:
             const int gridChunks = static_cast<int>(grid->chunks().size());
             const int inFlight = static_cast<int>(decompMgr.inFlight());
 
-            char hud[288];
+            char hud[320];
             std::snprintf(hud, sizeof(hud),
-                "%s | %s | %s | decomp macro=%d micro=%d | grid=%d | in-flight=%d | minerals=%d | LMB mine",
+                "%s | %s | %s | decomp macro=%d micro=%d | grid=%d | in-flight=%d | minerals=%d | mist=%s (M) | LMB mine",
                 suitMode ? "SUIT" : "JET",
                 downStr,
                 suitMode ? (grounded ? "grounded" : "airborne") : "free-flight",
-                macroD, microD, gridChunks, inFlight, mineralsMined);
+                macroD, microD, gridChunks, inFlight, mineralsMined,
+                mistOn ? "ON" : "OFF");
             renderer.setHudText({std::string(hud)});
         }
 
@@ -582,7 +606,8 @@ layers:
         renderer.setCameraPosition(camPos);
         renderer.setCameraRotation(pitch, yaw, 0.0f);
         renderer.setCameraUp(glm::vec3(camUp));  // surface-normal up in the suit; +Y in jet/zero-g
-        renderer.setFog(mist::api().sample(elapsed));  // breathing dust haze (M17)
+        renderer.setFog(mistOn ? mist::api().sample(elapsed)  // breathing dust haze (M17)
+                               : FogParams{});                // density 0 → fog off
 
         // Coarsest first so finer voxels occlude coarser ones via the depth test.
         for (const auto& layerName : std::vector<std::string>{"macro", "micro", "grid"}) {

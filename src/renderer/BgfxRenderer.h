@@ -57,6 +57,7 @@ public:
     void setCameraRotation(float pitch, float yaw, float roll) override;
     void setCameraUp(const glm::vec3& worldUp) override;
     void setFog(const FogParams& fog) override;
+    void setClearColor(const glm::vec3& rgb) override;
     void cleanup() override;
     void shutdown() override;
 
@@ -180,6 +181,7 @@ private:
     bx::Vec3                  cameraRot; // {pitch, yaw, roll} in radians
     bx::Vec3                  cameraUp;  // world-space up the camera aligns to (default +Y)
     FogParams                 fog;       // distance-obscurance policy (default density 0 = off)
+    uint32_t                  clearColor;// framebuffer clear color, packed RGBA (default 0x303030ff)
     uint32_t                  viewWidth;
     uint32_t                  viewHeight;
     float                     farClip;

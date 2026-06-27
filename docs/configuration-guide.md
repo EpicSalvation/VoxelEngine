@@ -239,6 +239,7 @@ listener; `playSound(id, pos, overrides)` for one-shots; `createEmitter` /
 | `setCameraUp(vec3 worldUp)` | Each frame on a many-bodied/off-axis world to align the horizon to a surface normal (pass `-gravityDir`). Default `(0,1,0)` is the historical Y-up view, byte-identical (M17). |
 | `setFarClip(metres)` | Once (or when view distance changes); default 1000 m. Raise for multi-layer worlds whose coarsest layer spans kilometres. |
 | `setFog(FogParams)` | Each frame to drive distance-obscurance fog — color + near/far band + density — hiding the LOD pop and chunk-load edge (M17). Default `density 0` disables fog (byte-identical). Typically fed from a supplier plugin (`atmospheric-mist`, `range-attenuation`); see `include/renderer/Fog.h`. |
+| `setClearColor(vec3)` | Once (or when the fog color changes) to set the background color. Pair it with the fog color so far geometry dissolves into the background with no far-plane halo (M17). Default `0x303030` is byte-identical. |
 
 ### Networking (`src/net/NetworkManager.h`)
 
