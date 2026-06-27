@@ -439,6 +439,21 @@ foreach(_demo ${_voxel_demo_dirs})
       target_include_directories(${_demo} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body)
     endif()
+    # The asteroid-belt-miner demo (M17 distance obscurance) compiles in the
+    # atmospheric-mist supplier plugin so its mist::api() inline static resolves in
+    # the demo's address space — the same compile-in wiring demo 18 uses for the
+    # reference plugins. MIST_COMPILED_IN drops the plugin's generic
+    # voxel_plugin_init; VOXEL_PLUGIN_NO_ABI_STAMP drops its (here-unused) ABI stamp.
+    # (asteroid-field is still loaded from disk via VOXEL_ASTEROID_FIELD_PLUGIN_PATH,
+    # so it keeps its stamp as a separate MODULE target.)
+    if(_demo STREQUAL "17-asteroid-belt-miner")
+      target_sources(${_demo} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/atmospheric-mist/plugin.cpp)
+      target_compile_definitions(${_demo} PRIVATE
+        MIST_COMPILED_IN VOXEL_PLUGIN_NO_ABI_STAMP)
+      target_include_directories(${_demo} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/atmospheric-mist)
+    endif()
     # The HUD-and-controls demo (M17 C2) field-tests all three reference plugins
     # together, so it COMPILES them into the binary (with each plugin's
     # *_COMPILED_IN guard) — their inline-static api() singletons must resolve in
@@ -512,8 +527,13 @@ if(TEST_SOURCES)
   # registers every otherwise-unexampled hook; compiled in so example_hooks::
   # observed() resolves in one address space.
   set(_eh_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/example-hooks/plugin.cpp)
+  # FogTest.cpp wires in the two distance-obscurance supplier plugins (M17) so
+  # their mist::api() / rangefog::api() inline statics resolve in one address space.
+  set(_mist_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/atmospheric-mist/plugin.cpp)
+  set(_ra_plugin_src   ${CMAKE_CURRENT_SOURCE_DIR}/plugins/range-attenuation/plugin.cpp)
   add_executable(voxel-engine-tests ${TEST_SOURCES}
-    ${_kb_plugin_src} ${_km_plugin_src} ${_gp_plugin_src} ${_eh_plugin_src})
+    ${_kb_plugin_src} ${_km_plugin_src} ${_gp_plugin_src} ${_eh_plugin_src}
+    ${_mist_plugin_src} ${_ra_plugin_src})
   # The compiled-in plugins are wired in (wireInPlugin) and never ABI-checked, so
   # drop their stamps target-wide — several stamps of the one exported symbol would
   # collide at link. The disk-loaded fixture plugins (test-plugin-*) are separate
@@ -530,6 +550,10 @@ if(TEST_SOURCES)
     COMPILE_DEFINITIONS GPINPUT_COMPILED_IN)
   set_source_files_properties(${_eh_plugin_src} PROPERTIES
     COMPILE_DEFINITIONS EXAMPLE_HOOKS_COMPILED_IN)
+  set_source_files_properties(${_mist_plugin_src} PROPERTIES
+    COMPILE_DEFINITIONS MIST_COMPILED_IN)
+  set_source_files_properties(${_ra_plugin_src} PROPERTIES
+    COMPILE_DEFINITIONS RANGEFOG_COMPILED_IN)
   target_link_libraries(voxel-engine-tests PRIVATE voxel-engine gtest gtest_main)
   target_include_directories(voxel-engine-tests PRIVATE src)
   # AsteroidFieldTest.cpp checks the body lattice the asteroid-field plugin and
@@ -541,7 +565,9 @@ if(TEST_SOURCES)
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/example-hooks)
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/example-hooks
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/atmospheric-mist
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/range-attenuation)
   voxel_set_warnings(voxel-engine-tests)
   if(VOXEL_TEST_PLUGINS)
     add_dependencies(voxel-engine-tests ${VOXEL_TEST_PLUGINS})

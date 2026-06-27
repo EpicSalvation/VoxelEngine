@@ -56,6 +56,7 @@ public:
     void setCameraPosition(const WorldCoord& pos) override;
     void setCameraRotation(float pitch, float yaw, float roll) override;
     void setCameraUp(const glm::vec3& worldUp) override;
+    void setFog(const FogParams& fog) override;
     void cleanup() override;
     void shutdown() override;
 
@@ -158,6 +159,8 @@ private:
     bgfx::IndexBufferHandle   ibo;       // shared cube indices; vertices are per-voxel transient
     bgfx::IndexBufferHandle   lineIbo;   // shared cube edge indices (12 edges) for highlights
     bgfx::UniformHandle       atlasSampler;  // s_atlas: the fragment shader's texture sampler
+    bgfx::UniformHandle       fogColorU;     // u_fogColor: rgb of the distance-obscurance fog
+    bgfx::UniformHandle       fogParamsU;    // u_fogParams: (near, far, density, 0)
     bgfx::TextureHandle       whiteTex;      // built-in 1×1 white tile (default atlas; engine-owned)
     bgfx::TextureHandle       atlasTex;      // currently bound atlas; defaults to whiteTex (not owned)
     std::vector<std::string>  hudLines;  // top-left debug-text overlay
@@ -176,6 +179,7 @@ private:
     WorldCoord                cameraPos;
     bx::Vec3                  cameraRot; // {pitch, yaw, roll} in radians
     bx::Vec3                  cameraUp;  // world-space up the camera aligns to (default +Y)
+    FogParams                 fog;       // distance-obscurance policy (default density 0 = off)
     uint32_t                  viewWidth;
     uint32_t                  viewHeight;
     float                     farClip;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WorldCoord.h"
+#include "renderer/Fog.h"
 #include "platform/NativeWindowHandles.h"
 
 #include <cstdint>
@@ -35,6 +36,15 @@ public:
     // basis byte-for-byte; an implementation that does not support reorientation
     // may leave this a no-op (and stay Y-up).
     virtual void setCameraUp(const glm::vec3& worldUp) { (void)worldUp; }
+
+    // Set the distance-obscurance (atmospheric fog) parameters applied per pixel
+    // by the chunk shader — the depth cue that lets streamed geometry emerge out
+    // of murk as it refines, hiding the coarse→fine LOD pop and the view-distance
+    // chunk-load boundary (M17; docs/ARCHITECTURE.md §9/§18). This is a POLICY the
+    // game drives each frame (typically from a content plugin), not a baked engine
+    // force — see FogParams. The default (density 0) disables fog so every existing
+    // scene renders byte-identically; an implementation may leave this a no-op.
+    virtual void setFog(const FogParams& fog) { (void)fog; }
 
     virtual void cleanup() = 0;
     virtual void shutdown() = 0;

@@ -235,7 +235,10 @@ listener; `playSound(id, pos, overrides)` for one-shots; `createEmitter` /
 |-----|--------------------|
 | `setViewport(width, height)` | On window resize. |
 | `setCameraPosition(WorldCoord)` | Each frame to move the view. |
-| `setCameraRotation(pitch, yaw, roll)` | Each frame to aim the view. (Camera up is currently hard Y-up; surface-normal orientation is a tracked M17 renderer follow-up.) |
+| `setCameraRotation(pitch, yaw, roll)` | Each frame to aim the view. |
+| `setCameraUp(vec3 worldUp)` | Each frame on a many-bodied/off-axis world to align the horizon to a surface normal (pass `-gravityDir`). Default `(0,1,0)` is the historical Y-up view, byte-identical (M17). |
+| `setFarClip(metres)` | Once (or when view distance changes); default 1000 m. Raise for multi-layer worlds whose coarsest layer spans kilometres. |
+| `setFog(FogParams)` | Each frame to drive distance-obscurance fog — color + near/far band + density — hiding the LOD pop and chunk-load edge (M17). Default `density 0` disables fog (byte-identical). Typically fed from a supplier plugin (`atmospheric-mist`, `range-attenuation`); see `include/renderer/Fog.h`. |
 
 ### Networking (`src/net/NetworkManager.h`)
 

@@ -44,7 +44,8 @@
 // Controls: WASD move, mouse look, Space/Shift up/down (jet) or jump/down (suit),
 //           G toggle jet/suit, LMB mine, F cursor, ESC quits.
 
-#include "asteroid_field.h"  // shared body lattice → radial gravity targets
+#include "asteroid_field.h"     // shared body lattice → radial gravity targets
+#include "atmospheric_mist.h"   // dust-haze fog supplier (M17 distance obscurance)
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
@@ -78,6 +79,11 @@
 #ifndef VOXEL_ASTEROID_FIELD_PLUGIN_PATH
 #  define VOXEL_ASTEROID_FIELD_PLUGIN_PATH ""
 #endif
+
+// The atmospheric-mist plugin (M17) is compiled into this demo (see CMakeLists),
+// so its mist::api() inline static resolves in this address space; we call its
+// unique init directly. It registers no engine hooks — pure fog policy.
+extern "C" int atmospheric_mist_plugin_init(PluginContext* ctx);
 
 namespace {
 
@@ -123,6 +129,17 @@ constexpr uint8_t kOrePaletteIdx = 31;
 // The asteroid cascade is dense in 3D, so far clip and FOV match the renderer's
 // 60° vertical FOV. 2 km comfortably frames the resident box.
 constexpr float  kFarClipM = 2000.0f;
+
+// Distance obscurance (M17). A dust haze tuned to the macro→micro decompose
+// distance (280 m, see the LayerConfig): geometry is already deep in murk by the
+// time its coarse 4 m silhouette appears, so the LOD pop and the chunk-load edge
+// resolve out of the dust instead of snapping in. The haze color matches the
+// 0x303030 clear color so the far plane is invisible — geometry fades into the
+// background, not into a visible wall. Driven by the atmospheric-mist plugin,
+// which breathes the density over time.
+constexpr float  kFogNearM    = 120.0f;
+constexpr float  kFogFarM     = 280.0f;  // == the macro decompose_distance_m
+constexpr float  kFogDensity  = 0.9f;
 
 using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
 
@@ -297,6 +314,21 @@ layers:
     renderer.setFarClip(kFarClipM);
     renderer.setCrosshair(true);
 
+    // ── Distance obscurance (M17) ──────────────────────────────────────────────
+    // Bring up the dust-haze fog supplier and tune its band to the macro decompose
+    // distance so the coarse→fine pop is hidden in murk (see kFog* above). The
+    // plugin animates the density each frame; the demo just forwards sample() to
+    // the renderer. (Pure policy — the engine owns only the shader mechanism.)
+    atmospheric_mist_plugin_init(nullptr);
+    if (mist::api().configure) {
+        mist::Config fogCfg;
+        fogCfg.base.color   = glm::vec3(0.188f, 0.188f, 0.188f);  // == clear color
+        fogCfg.base.near_m  = kFogNearM;
+        fogCfg.base.far_m   = kFogFarM;
+        fogCfg.base.density = kFogDensity;
+        mist::api().configure(&fogCfg);
+    }
+
     std::unordered_map<std::string, MeshStore> meshStores;
 
     // Remesh a grid chunk after a voxel edit (mining).
@@ -340,11 +372,13 @@ layers:
                        "press G near a body to drop onto it under its own gravity.");
 
     auto prevTime = std::chrono::high_resolution_clock::now();
+    const auto startTime = prevTime;
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     while (!window.shouldClose()) {
         auto now = std::chrono::high_resolution_clock::now();
         float dt = std::chrono::duration<float>(now - prevTime).count();
+        const double elapsed = std::chrono::duration<double>(now - startTime).count();
         prevTime = now;
         if (dt > 0.1f) dt = 0.1f;  // clamp cascade hitches (and suit gravity)
 
@@ -548,6 +582,7 @@ layers:
         renderer.setCameraPosition(camPos);
         renderer.setCameraRotation(pitch, yaw, 0.0f);
         renderer.setCameraUp(glm::vec3(camUp));  // surface-normal up in the suit; +Y in jet/zero-g
+        renderer.setFog(mist::api().sample(elapsed));  // breathing dust haze (M17)
 
         // Coarsest first so finer voxels occlude coarser ones via the depth test.
         for (const auto& layerName : std::vector<std::string>{"macro", "micro", "grid"}) {

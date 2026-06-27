@@ -94,6 +94,8 @@ BgfxRenderer::BgfxRenderer()
       ibo(BGFX_INVALID_HANDLE),
       lineIbo(BGFX_INVALID_HANDLE),
       atlasSampler(BGFX_INVALID_HANDLE),
+      fogColorU(BGFX_INVALID_HANDLE),
+      fogParamsU(BGFX_INVALID_HANDLE),
       whiteTex(BGFX_INVALID_HANDLE),
       atlasTex(BGFX_INVALID_HANDLE),
       cameraRot{0.0f, 0.0f, 0.0f},
@@ -150,6 +152,13 @@ void BgfxRenderer::initialize(const platform::NativeWindowHandles& handles,
     // (M15 T2/T3/T4). The texture pipeline installs a content atlas via setAtlas();
     // a reverted/absent atlas falls back here.
     atlasSampler = bgfx::createUniform("s_atlas", bgfx::UniformType::Sampler);
+
+    // Distance-obscurance fog uniforms (M17). Default to 0 (the fog factor is 0,
+    // so the fragment shader's mix() returns the un-fogged fragment), keeping
+    // every scene byte-identical until a game calls setFog(). They are pushed
+    // each frame in render() from the `fog` policy member.
+    fogColorU  = bgfx::createUniform("u_fogColor",  bgfx::UniformType::Vec4);
+    fogParamsU = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
     const uint32_t kWhitePixel = 0xffffffff;
     whiteTex = bgfx::createTexture2D(
         1, 1, false, 1, bgfx::TextureFormat::RGBA8, 0,
@@ -237,6 +246,19 @@ void BgfxRenderer::render() {
     // Falls back to the 1×1 white tile when no content atlas is installed.
     const bgfx::TextureHandle atlas =
         bgfx::isValid(atlasTex) ? atlasTex : whiteTex;
+
+    // Distance-obscurance fog (M17). Uniform values are sticky across submits
+    // within a frame, so set them once here; every chunk/voxel draw below reads
+    // them. density 0 (the default) makes the shader's fog mix a no-op, so an
+    // un-fogged scene is byte-identical (see shaders/fs_voxel.sc, FogParams).
+    if (bgfx::isValid(fogColorU)) {
+        const float fc[4] = {fog.color.r, fog.color.g, fog.color.b, 0.0f};
+        bgfx::setUniform(fogColorU, fc);
+    }
+    if (bgfx::isValid(fogParamsU)) {
+        const float fp[4] = {fog.near_m, fog.far_m, fog.density, 0.0f};
+        bgfx::setUniform(fogParamsU, fp);
+    }
 
     bgfx::touch(0);
 
@@ -503,6 +525,10 @@ void BgfxRenderer::setCameraUp(const glm::vec3& worldUp) {
     cameraUp = {worldUp.x, worldUp.y, worldUp.z};
 }
 
+void BgfxRenderer::setFog(const FogParams& f) {
+    fog = f;
+}
+
 void BgfxRenderer::cleanup() {
     if (bgfx::isValid(ibo))     { bgfx::destroy(ibo);     ibo     = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(lineIbo)) { bgfx::destroy(lineIbo); lineIbo = BGFX_INVALID_HANDLE; }
@@ -510,6 +536,8 @@ void BgfxRenderer::cleanup() {
     // The engine owns only the sampler uniform and the 1×1 white tile; a content
     // atlas installed via setAtlas() is owned and freed by the texture pipeline.
     if (bgfx::isValid(atlasSampler)) { bgfx::destroy(atlasSampler); atlasSampler = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(fogColorU))    { bgfx::destroy(fogColorU);    fogColorU    = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(fogParamsU))   { bgfx::destroy(fogParamsU);   fogParamsU   = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(whiteTex))     { bgfx::destroy(whiteTex);     whiteTex     = BGFX_INVALID_HANDLE; }
     atlasTex = BGFX_INVALID_HANDLE;
 }
