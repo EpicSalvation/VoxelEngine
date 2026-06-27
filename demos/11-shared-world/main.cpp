@@ -48,6 +48,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "io/ChunkPersistence.h"
 #include "net/NetworkManager.h"
@@ -65,12 +66,12 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -87,6 +88,8 @@
 #endif
 
 namespace {
+
+constexpr char kLogCat[] = "demo11";
 
 constexpr uint16_t kDefaultPort       = 27777;
 constexpr uint64_t kWorldSeed         = 1337;   // shared via the join handshake
@@ -222,8 +225,8 @@ int main(int argc, char** argv) {
         }
     }
     if (!isHost && joinAddress.empty()) {
-        std::cerr << "Usage: 11-shared-world --host [port]\n"
-                     "       11-shared-world --join <host-address> [port]\n";
+        Log::error(kLogCat, "Usage: 11-shared-world --host [port] | "
+                            "--join <host-address> [port]");
         return 1;
     }
 
@@ -242,6 +245,7 @@ layers:
     mode: immutable
     chunk_size_voxels: 8
     view_distance_chunks: 6
+    resident_chunk_budget: 512
   - name: terrain
     voxel_size_m: 1.0
     mode: terminal
@@ -249,7 +253,7 @@ layers:
     view_distance_chunks: 6
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -260,7 +264,7 @@ layers:
                              VOXEL_CHAT_PLUGIN_PATH}) {
         if (std::strlen(path) == 0 ||
             pluginManager.loadPlugin(path) == kInvalidPluginId) {
-            std::cerr << "[main] Fatal: could not load plugin '" << path << "'\n";
+            Log::error(kLogCat, (std::string("Fatal: could not load plugin '") + path + "'").c_str());
             return 1;
         }
     }
@@ -275,8 +279,8 @@ layers:
     const RegisteredLayerGenerator backdropGen = findGenerator("backdrop");
     const RegisteredLayerGenerator terrainGen  = findGenerator("terrain");
     if (!blocksGen.fn || !backdropGen.fn || !terrainGen.fn) {
-        std::cerr << "[main] Fatal: layered-world plugin did not register all three "
-                     "layer generators (blocks, backdrop, terrain).\n";
+        Log::error(kLogCat, "Fatal: layered-world plugin did not register all three "
+                            "layer generators (blocks, backdrop, terrain).");
         return 1;
     }
 
@@ -284,7 +288,7 @@ layers:
     for (size_t i = 0; i < pluginManager.materials().size() && i < 9; ++i)
         buildMaterials.push_back(pluginManager.materials()[i].material_id);
     if (buildMaterials.empty()) {
-        std::cerr << "[main] Fatal: no materials registered by the plugin.\n";
+        Log::error(kLogCat, "Fatal: no materials registered by the plugin.");
         return 1;
     }
     size_t selectedMaterial = 0;
@@ -295,7 +299,7 @@ layers:
     Layer* backdrop = world.layer("backdrop");
     Layer* terrain  = world.layer("terrain");
     if (!blocks || !backdrop || !terrain) {
-        std::cerr << "[main] Fatal: expected blocks/backdrop/terrain layers.\n";
+        Log::error(kLogCat, "Fatal: expected blocks/backdrop/terrain layers.");
         return 1;
     }
 
@@ -337,6 +341,22 @@ layers:
     LODManager lod(layerConfig);
     lod.setVerticalBand(-1, 0);
 
+    // The immutable backdrop's per-layer chunk cap (M16 L5): shed farthest-first
+    // when the resident set exceeds it. Immutable chunks regenerate from seed, so
+    // shedding is free.
+    const int backdropBudget = layerConfig.findLayer("backdrop")->resident_chunk_budget;
+
+    // NOTE: unlike demos 05/09/10, this demo deliberately keeps its composite
+    // decomposition FRONT-END-OWNED (DecompositionWorker below) rather than handing
+    // it to the engine's DecompositionManager. The manager's decompose-apply inserts
+    // freshly generated child chunks, overwriting any already-resident terrain — but
+    // here a terrain chunk may already hold replicated player edits (from the join
+    // handshake, the live edit stream into a not-yet-decomposed region, or the host's
+    // save) that determinism cannot re-derive. Preserving those resident edits across
+    // decomposition is exactly what this networking demo teaches, so the drain loop
+    // below keeps resident/saved chunks and only inserts generated terrain where none
+    // exists. (A manager substitution hook could close this gap — see the demo-pass
+    // notes — but that is engine surface beyond this teaching refactor.)
     DecompositionState  decomp;
     DecompositionWorker worker;
 
@@ -397,26 +417,27 @@ layers:
     // Go live on the network now that the frame loop is about to service it.
     if (isHost) {
         if (!nm.startHostPeer(port)) {
-            std::cerr << "[main] Fatal: could not bind port " << port << "\n";
+            Log::error(kLogCat, (std::string("Fatal: could not bind port ")
+                                 + std::to_string(port)).c_str());
             return 1;
         }
-        std::cout << "[main] Hosting on port " << port
-                  << " (host-as-authority P2P). Save: " << save.directory() << "\n";
+        Log::info(kLogCat, (std::string("Hosting on port ") + std::to_string(port)
+                            + " (host-as-authority P2P). Save: " + save.directory()).c_str());
     } else {
         if (!nm.startClient(joinAddress, port)) {
-            std::cerr << "[main] Fatal: could not connect to " << joinAddress
-                      << ":" << port << "\n";
+            Log::error(kLogCat, (std::string("Fatal: could not connect to ") + joinAddress
+                                 + ":" + std::to_string(port)).c_str());
             return 1;
         }
-        std::cout << "[main] Joining " << joinAddress << ":" << port << " ...\n";
+        Log::info(kLogCat, (std::string("Joining ") + joinAddress + ":"
+                            + std::to_string(port) + " ...").c_str());
     }
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] WASD + mouse, Space/Shift up/down, G walk, left/right mouse "
-                 "break/place,\n"
-                 "[main] 1-9 material, T chat, I interest mode (host), F cursor, "
-                 "ESC quits.\n";
+    Log::info(kLogCat, "WASD + mouse, Space/Shift up/down, G walk, left/right mouse "
+                       "break/place, 1-9 material, T chat, I interest mode (host), "
+                       "F cursor, ESC quits.");
 
     bool quit = false;
     while (!window.shouldClose() && !quit) {
@@ -649,6 +670,32 @@ layers:
         stream(blocks,   "blocks",   blocksMeshes,   blocksGen);
         stream(backdrop, "backdrop", backdropMeshes, backdropGen);
 
+        // Enforce the immutable backdrop's resident_chunk_budget (M16 L5): if the
+        // resident set still exceeds the cap, shed farthest-first. Immutable chunks
+        // regenerate from seed, so this is free (no dirty/persist path).
+        if (backdropBudget > 0 &&
+            static_cast<int>(backdropMeshes.size()) > backdropBudget) {
+            const ChunkCoord bc = chunkmath::worldToChunk(
+                camPos, backdrop->voxelSizeM(), backdrop->chunkSizeVoxels());
+            std::vector<ChunkCoord> resident;
+            resident.reserve(backdropMeshes.size());
+            for (const auto& kv : backdropMeshes) resident.push_back(kv.first);
+            std::sort(resident.begin(), resident.end(),
+                      [&](const ChunkCoord& a, const ChunkCoord& b) {
+                          auto cheb = [&](const ChunkCoord& c) {
+                              return std::max({std::abs(c.x - bc.x), std::abs(c.y - bc.y),
+                                               std::abs(c.z - bc.z)});
+                          };
+                          return cheb(a) > cheb(b);
+                      });
+            for (const ChunkCoord& c : resident) {
+                if (static_cast<int>(backdropMeshes.size()) <= backdropBudget) break;
+                backdropMeshes[c].destroy();
+                backdropMeshes.erase(c);
+                backdrop->unloadChunk(c);
+            }
+        }
+
         // ── Trigger decomposition for nearby composite macro voxels ────────
         // Purely local: each side decomposes on its own approach from the shared
         // deterministic generators. Nothing crosses the wire here — the HUD
@@ -875,8 +922,8 @@ layers:
 
     if (isHost) {
         int saved = save.saveDirtyChunks(world);
-        std::cout << "[main] Saved " << saved << " edited chunk(s) to "
-                  << save.directory() << "\n";
+        Log::info(kLogCat, (std::string("Saved ") + std::to_string(saved)
+                            + " edited chunk(s) to " + save.directory()).c_str());
     }
     nm.stop();  // graceful disconnect — fires on_player_left on the remote side
     g_net = nullptr;

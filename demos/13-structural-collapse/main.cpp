@@ -35,6 +35,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "net/NetworkManager.h"
 #include "platform/Window.h"
@@ -53,7 +54,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <iostream>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -69,6 +69,8 @@
 using chunkmath::VoxelCoord;
 
 namespace {
+
+constexpr char kLogCat[] = "demo13";
 
 constexpr float  kFlySpeed  = 14.0f;
 constexpr float  kMouseSens = 0.002f;
@@ -144,7 +146,7 @@ int main() {
         try {
             return LayerConfig::loadFromString(kLayerYaml);
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -154,7 +156,7 @@ int main() {
     Layer* terrain = world.layer("terrain");
     Layer* bedrock_l = world.layer("bedrock");
     if (!blocks || !terrain || !bedrock_l) {
-        std::cerr << "[main] Fatal: expected blocks/terrain/bedrock layers.\n";
+        Log::error(kLogCat, "Fatal: expected blocks/terrain/bedrock layers.");
         return 1;
     }
 
@@ -271,13 +273,13 @@ int main() {
         if (mode != 0) {
             if (std::string(path).empty() ||
                 (responsePlugin = pm.loadPlugin(path)) == kInvalidPluginId) {
-                std::cerr << "[main] Warning: could not load " << responseName(mode)
-                          << " plugin from '" << path << "' — staying cave-in-free.\n";
+                Log::warn(kLogCat, (std::string("Could not load ") + responseName(mode)
+                          + " plugin from '" + path + "' — staying cave-in-free.").c_str());
                 mode = 0;
             }
         }
         responseMode = mode;
-        std::cout << "[main] Structural response: " << responseName(responseMode) << "\n";
+        Log::info(kLogCat, (std::string("Structural response: ") + responseName(responseMode)).c_str());
     };
     setResponse(1);  // start with crumble loaded
 
@@ -329,11 +331,11 @@ int main() {
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout <<
-        "[main] Structural collapse — fly up to the stone bridge and LEFT-CLICK to\n"
-        "[main] mine a deck voxel near a tower; the unsupported run caves in and the\n"
-        "[main] cascade stops at the bedrock. Keys: 1 crumble, 2 falling-debris,\n"
-        "[main] 0 no plugin (cave-in-free), R rebuild, F cursor, ESC quit.\n";
+    Log::info(kLogCat,
+        "Structural collapse — fly up to the stone bridge and LEFT-CLICK to mine a "
+        "deck voxel near a tower; the unsupported run caves in and the cascade stops "
+        "at the bedrock. Keys: 1 crumble, 2 falling-debris, 0 no plugin (cave-in-free), "
+        "R rebuild, F cursor, ESC quit.");
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -372,7 +374,7 @@ int main() {
             physics.reset();                                   // drop old cascade bookkeeping
             physics = std::make_unique<sim::PhysicsSystem>(world, pm);
             rebuildAllTerrain();
-            std::cout << "[main] Bridge rebuilt.\n";
+            Log::info(kLogCat, "Bridge rebuilt.");
         }
         prevR = curR;
 
