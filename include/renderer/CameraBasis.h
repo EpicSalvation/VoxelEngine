@@ -76,3 +76,40 @@ inline CameraBasis cameraBasis(double pitch, double yaw, double roll,
 
     return {forward, right, up};
 }
+
+// Rotate the unit vector `current` toward the unit vector `target` by at most
+// `maxRadians`, returning a unit vector. Pure and stateless — the *rate* and the
+// per-frame state are the game's to own (this is the slerp step a game runs each
+// frame to ANIMATE a camera-up change instead of snapping it, e.g. when a player
+// lands on a surface or crosses between gravity bodies). When the remaining angle
+// is within the step it returns `target` exactly, so the animation settles
+// cleanly; the ~180° case (no unique rotation axis) falls back to a deterministic
+// perpendicular axis. A non-positive step leaves `current` unchanged.
+//
+// Typical use (mirrors cameraBasis's caller): feed the result to BOTH cameraBasis
+// (for the look/raycast direction) and Renderer::setCameraUp, so the rendered view
+// and the host's picking stay locked together through the animation.
+inline glm::dvec3 rotateUpToward(const glm::dvec3& current, const glm::dvec3& target,
+                                 double maxRadians) {
+    const glm::dvec3 c = glm::normalize(current);
+    const glm::dvec3 t = glm::normalize(target);
+    if (maxRadians <= 0.0) return c;
+
+    const double d   = glm::clamp(glm::dot(c, t), -1.0, 1.0);
+    const double ang = std::acos(d);
+    if (ang <= maxRadians || ang < 1e-9) return t;  // arrived (or already aligned)
+
+    glm::dvec3 axis = glm::cross(c, t);
+    if (glm::length(axis) < 1e-9) {
+        // Antipodal: any axis perpendicular to c works; pick one deterministically.
+        axis = glm::cross(c, glm::dvec3(1.0, 0.0, 0.0));
+        if (glm::length(axis) < 1e-9) axis = glm::cross(c, glm::dvec3(0.0, 0.0, 1.0));
+    }
+    axis = glm::normalize(axis);
+
+    // Rodrigues rotation of c about axis by maxRadians.
+    const double cs = std::cos(maxRadians), sn = std::sin(maxRadians);
+    const glm::dvec3 r = c * cs + glm::cross(axis, c) * sn
+                       + axis * (glm::dot(axis, c) * (1.0 - cs));
+    return glm::normalize(r);
+}

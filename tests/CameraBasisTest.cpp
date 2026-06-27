@@ -11,6 +11,8 @@
 
 #include <gtest/gtest.h>
 
+#include <glm/gtc/constants.hpp>
+
 #include <cmath>
 
 namespace {
@@ -120,4 +122,58 @@ TEST(CameraBasis, RollRotatesAboutForward) {
     expectVecNear(br.forward, b0.forward);   // forward unchanged by roll
     EXPECT_GT(glm::length(br.up - b0.up), 1e-3);  // up actually moved
     expectOrthonormal(br);
+}
+
+// ── rotateUpToward — the animation step ─────────────────────────────────────
+
+namespace {
+double angleBetween(const glm::dvec3& a, const glm::dvec3& b) {
+    return std::acos(glm::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.0, 1.0));
+}
+}  // namespace
+
+// A step at least as large as the remaining angle snaps exactly to the target,
+// so the animation settles cleanly with no overshoot or jitter.
+TEST(RotateUpToward, LargeStepArrivesAtTarget) {
+    const glm::dvec3 r = rotateUpToward(glm::dvec3(0, 1, 0), glm::dvec3(1, 0, 0), 10.0);
+    expectVecNear(r, glm::dvec3(1, 0, 0));
+}
+
+// A partial step advances by exactly the cap and shortens the remaining angle —
+// the per-frame increment of the tilt.
+TEST(RotateUpToward, PartialStepAdvancesByCap) {
+    const glm::dvec3 from(0, 1, 0), to(1, 0, 0);
+    const glm::dvec3 r = rotateUpToward(from, to, 0.3);
+    EXPECT_NEAR(glm::length(r), 1.0, 1e-12);
+    EXPECT_NEAR(angleBetween(from, r), 0.3, 1e-9);                       // moved by the cap
+    EXPECT_NEAR(angleBetween(r, to), glm::half_pi<double>() - 0.3, 1e-9);  // closer to target
+}
+
+// Repeated small steps converge onto the target (the loop a game runs each frame).
+TEST(RotateUpToward, ConvergesOverManySteps) {
+    glm::dvec3 up(0, 1, 0);
+    const glm::dvec3 target = glm::normalize(glm::dvec3(1, 0, 1));
+    for (int i = 0; i < 200; ++i) up = rotateUpToward(up, target, 0.05);
+    expectVecNear(up, target, 1e-9);
+}
+
+// The antipodal target (no unique axis) still rotates by the cap without NaNs.
+TEST(RotateUpToward, AntipodalTargetStepsCleanly) {
+    const glm::dvec3 from(0, 1, 0);
+    const glm::dvec3 r = rotateUpToward(from, glm::dvec3(0, -1, 0), 0.2);
+    EXPECT_NEAR(glm::length(r), 1.0, 1e-12);
+    EXPECT_NEAR(angleBetween(from, r), 0.2, 1e-9);
+    EXPECT_FALSE(std::isnan(r.x) || std::isnan(r.y) || std::isnan(r.z));
+}
+
+// A non-positive step (e.g. dt == 0) leaves the up unchanged.
+TEST(RotateUpToward, NonPositiveStepHolds) {
+    const glm::dvec3 from = glm::normalize(glm::dvec3(2, 1, 0));
+    expectVecNear(rotateUpToward(from, glm::dvec3(1, 0, 0), 0.0), from);
+}
+
+// Already aligned: returns the target (normalized) without spurious motion.
+TEST(RotateUpToward, AlreadyAlignedIsStable) {
+    const glm::dvec3 r = rotateUpToward(glm::dvec3(0, 1, 0), glm::dvec3(0, 1, 0), 0.1);
+    expectVecNear(r, glm::dvec3(0, 1, 0));
 }

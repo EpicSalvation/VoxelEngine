@@ -32,7 +32,8 @@
 //
 // Surface-normal camera (M17): in the suit the camera up-axis is aligned to the
 // local surface normal (-gDir) via Renderer::setCameraUp, so the horizon reads
-// level on whatever face you land on instead of tilted. The mining raycast and
+// level on whatever face you land on instead of tilted — eased over with
+// rotateUpToward (a few tenths of a second) rather than snapped. The mining raycast and
 // movement derive look/right from the SAME basis (cameraBasis), so the crosshair
 // stays locked to what is mineable. The jet (and zero-g, where there is no "down")
 // keeps the plain Y-up basis. The HUD still reads out the live "down" vector and
@@ -107,6 +108,7 @@ constexpr double kWalkSpeed = 7.0;
 constexpr double kGravAccel = 22.0;  // m/s² toward the nearest body
 constexpr double kJumpSpeed = 8.0;   // m/s away from the body on jump
 constexpr double kEyeOffset = 0.6;   // camera sits this far up-axis from center
+constexpr double kUpTurnRate = 5.0;  // rad/s the camera up tilts toward the surface (~0.3s for 90°)
 const glm::dvec3 kPlayerHalf(0.4, 0.4, 0.4);  // isotropic suit — no canonical up
 
 constexpr uint64_t kWorldSeed = 0xA57E401DF1E1Dull;  // matches the field seed
@@ -328,6 +330,7 @@ layers:
     WorldCoord playerCenter = camPos;            // AABB center in suit mode
     glm::dvec3 vel(0.0);                          // suit velocity (gravity + jump)
     bool       grounded = false;
+    glm::dvec3 smoothedUp(0.0, 1.0, 0.0);         // animated camera up (tilts toward the surface)
 
     GLFWwindow* glfwWin = window.glfwHandle();
     glfwSetInputMode(glfwWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -395,11 +398,18 @@ layers:
         // ── Camera basis (M17, surface-normal up) ───────────────────────────────
         // In the suit on a body, align the camera up-axis to the surface normal
         // (-gDir) so the horizon reads level instead of tilted; in the jet (or
-        // zero-g, where there is no "down") keep the plain Y-up basis. Look/right
-        // are derived from the SAME basis the renderer uses (cameraBasis), so the
-        // mining raycast and movement stay locked to screen-center on any face.
-        const glm::dvec3 camUp =
+        // zero-g, where there is no "down") keep the plain Y-up basis. The target
+        // up is ANIMATED rather than snapped: smoothedUp tilts toward it by at most
+        // kUpTurnRate·dt each frame (rotateUpToward), so landing or crossing
+        // between bodies eases the horizon over instead of jumping. The turn rate
+        // is the demo's policy; the engine only supplies the pure rotation step.
+        // Look/right are derived from the SAME (smoothed) basis the renderer uses,
+        // so the mining raycast and movement stay locked to screen-center on any
+        // face throughout the animation.
+        const glm::dvec3 targetUp =
             (suitMode && gLen > 1e-9) ? -gDir : glm::dvec3(0.0, 1.0, 0.0);
+        smoothedUp = rotateUpToward(smoothedUp, targetUp, kUpTurnRate * static_cast<double>(dt));
+        const glm::dvec3 camUp = smoothedUp;
         const CameraBasis basis = cameraBasis(pitch, yaw, 0.0, camUp);
         const glm::dvec3 look  = basis.forward;
         const glm::dvec3 right = basis.right;
