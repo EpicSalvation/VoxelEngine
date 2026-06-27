@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdlib>
 
+#include "core/Profiler.h"
+
 namespace {
 
 // Squared Euclidean chunk-distance between two chunk coords.
@@ -47,6 +49,7 @@ bool StreamingVolume::contains(ChunkCoord center, ChunkCoord c) const {
 }
 
 std::vector<ChunkCoord> StreamingVolume::desired(ChunkCoord center) const {
+    VOXEL_PROFILE_SCOPE("stream.desired");
     std::vector<ChunkCoord> result;
     const int r = radiusChunks;
     if (r < 0) return result;

@@ -490,6 +490,20 @@ foreach(_demo ${_voxel_demo_dirs})
   endif()
 endforeach()
 
+# ─── Benchmarks ──────────────────────────────────────────────────────
+# Headless performance harness for the M17 profiling pass (docs/m17-performance-
+# profiling.md). Links the engine library and drives decomposition, chunk
+# management, and the CPU mesher with the Profiler enabled — no window, no GPU.
+# Like the demos it links bgfx/bx/glfw (the engine pulls them in PRIVATE) and may
+# reach engine internals under src/.
+set(_bench_main ${CMAKE_CURRENT_SOURCE_DIR}/bench/profile_pass.cpp)
+if(EXISTS ${_bench_main})
+  add_executable(profile-pass ${_bench_main})
+  target_link_libraries(profile-pass PRIVATE voxel-engine bgfx bx glfw)
+  target_include_directories(profile-pass PRIVATE src)
+  voxel_set_warnings(profile-pass)
+endif()
+
 # ─── Tests ───────────────────────────────────────────────────────────
 enable_testing()
 

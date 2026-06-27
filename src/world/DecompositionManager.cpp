@@ -12,6 +12,7 @@
 #include "World.h"
 #include "core/LayerConfig.h"
 #include "core/PluginManager.h"
+#include "core/Profiler.h"
 
 namespace {
 
@@ -470,6 +471,7 @@ void DecompositionManager::enforceLayerBudget(size_t ci, ChunkCoord camChunkComp
 void DecompositionManager::streamImmutableLayers(const WorldCoord& cameraPos,
                                                  int loadPerFrame,
                                                  std::vector<LayerTickDiff>& diffs) {
+    VOXEL_PROFILE_SCOPE("decomp.immutable");
     for (ImmutableLayerInfo& info : immutables_) {
         Layer& layer = *info.layer;
         const ChunkCoord camChunk = chunkmath::worldToChunk(
@@ -544,6 +546,7 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
                                                        int loadPerFrame,
                                                        int decompPerFrame,
                                                        int applyPerFrame) {
+    VOXEL_PROFILE_SCOPE("decomp.tick");
     // One diff per composite layer, indexed in composites_ order.
     std::vector<LayerTickDiff> diffs(composites_.size());
     for (size_t i = 0; i < composites_.size(); ++i) {
@@ -612,6 +615,7 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
     //    within its LOD budget; eviction is done after loading so the newly
     //    resident chunks are not immediately evicted.
     for (size_t ci = 0; ci < composites_.size(); ++ci) {
+        VOXEL_PROFILE_SCOPE("decomp.stream");  // per-layer load + evict + budget
         CompositeLayerInfo& info = composites_[ci];
         Layer& layer = *info.layer;
         LayerTickDiff& diff = diffs[ci];
@@ -720,6 +724,7 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
     //    behind peripheral work. A fine layer's macro is only eligible once its
     //    parent macro is decomposed (the chain requirement).
     if (decompPerFrame > 0) {
+        VOXEL_PROFILE_SCOPE("decomp.approach");  // per-voxel candidate scan + enqueue
         struct Candidate { double distSq; size_t ci; chunkmath::VoxelCoord macro; };
         std::vector<Candidate> candidates;
 

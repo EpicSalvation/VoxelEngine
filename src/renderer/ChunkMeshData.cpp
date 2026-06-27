@@ -1,6 +1,7 @@
 #include "ChunkMeshData.h"
 #include "Palette.h"
 #include "MaterialFaces.h"
+#include "core/Profiler.h"
 #include "core/Tuning.h"
 #include "world/AxisRole.h"
 
@@ -143,11 +144,18 @@ void buildChunkMeshData(const Chunk& chunk,
                         const glm::dvec3&        gravity_dir,
                         const LightQueryFn&      light_query,
                         ChunkCoord               chunk_coord) {
+    VOXEL_PROFILE_SCOPE("mesh.build");
     out_vertices.clear();
     out_opaque_indices.clear();
     out_translucent_indices.clear();
 
     const int n = chunk.size();
+    // No speculative reserve here: the output-vector growth cost is borne by the
+    // CALLER's buffer lifetime, not this function. The profiling pass measured a
+    // fixed reserve to be a wash (and a net loss when it under-estimates a dense
+    // chunk, adding a wasted allocation). The real win is the caller reusing its
+    // buffers across chunks — see ChunkMesh::build, which keeps thread-local
+    // scratch so .clear() retains capacity and steady-state builds never realloc.
     for (int z = 0; z < n; ++z) {
         for (int y = 0; y < n; ++y) {
             for (int x = 0; x < n; ++x) {

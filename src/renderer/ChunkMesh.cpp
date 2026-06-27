@@ -5,9 +5,16 @@
 #include <vector>
 
 ChunkMesh ChunkMesh::build(const Chunk& chunk, double voxelSizeM) {
-    std::vector<MeshVertex> verts;
-    std::vector<uint32_t>   opaqueIdx;
-    std::vector<uint32_t>   translucentIdx;
+    // Reuse thread-local scratch across calls instead of allocating fresh vectors
+    // for every chunk. buildChunkMeshData clears them at entry, so .clear() keeps
+    // the capacity grown by earlier builds and steady-state meshing never
+    // reallocates — the M17 profiling pass measured this allocation churn at ~30%
+    // of light-chunk and ~45% of dense-chunk CPU mesh-build time. thread_local
+    // keeps it safe if meshing is ever driven off more than one thread; the bgfx
+    // upload below copies out of the scratch, so reusing it is sound.
+    thread_local std::vector<MeshVertex> verts;
+    thread_local std::vector<uint32_t>   opaqueIdx;
+    thread_local std::vector<uint32_t>   translucentIdx;
     buildChunkMeshData(chunk, verts, opaqueIdx, translucentIdx, voxelSizeM);
 
     ChunkMesh mesh;
