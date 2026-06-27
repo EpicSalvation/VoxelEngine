@@ -252,18 +252,18 @@ void BgfxRenderer::render() {
     const bgfx::TextureHandle atlas =
         bgfx::isValid(atlasTex) ? atlasTex : whiteTex;
 
-    // Distance-obscurance fog (M17). Uniform values are sticky across submits
-    // within a frame, so set them once here; every chunk/voxel draw below reads
-    // them. density 0 (the default) makes the shader's fog mix a no-op, so an
+    // Distance-obscurance fog (M17). bgfx attaches each setUniform to the NEXT
+    // submit and resets the range after it (renderer_d3d11 only re-commits user
+    // constants when that range is non-empty), so the values must be (re)set
+    // before EVERY draw — exactly like the atlas texture above. bindFog() does
+    // that; density 0 (the default) makes the shader's fog mix a no-op, so an
     // un-fogged scene is byte-identical (see shaders/fs_voxel.sc, FogParams).
-    if (bgfx::isValid(fogColorU)) {
-        const float fc[4] = {fog.color.r, fog.color.g, fog.color.b, 0.0f};
-        bgfx::setUniform(fogColorU, fc);
-    }
-    if (bgfx::isValid(fogParamsU)) {
-        const float fp[4] = {fog.near_m, fog.far_m, fog.density, 0.0f};
-        bgfx::setUniform(fogParamsU, fp);
-    }
+    const float fogColorVec[4]  = {fog.color.r, fog.color.g, fog.color.b, 0.0f};
+    const float fogParamsVec[4] = {fog.near_m, fog.far_m, fog.density, 0.0f};
+    auto bindFog = [&]() {
+        if (bgfx::isValid(fogColorU))  bgfx::setUniform(fogColorU,  fogColorVec);
+        if (bgfx::isValid(fogParamsU)) bgfx::setUniform(fogParamsU, fogParamsVec);
+    };
 
     bgfx::touch(0);
 
@@ -288,6 +288,7 @@ void BgfxRenderer::render() {
         bgfx::setIndexBuffer(ibo);
         if (bgfx::isValid(atlasSampler))
             bgfx::setTexture(0, atlasSampler, atlas);
+        bindFog();
         if (bgfx::isValid(program))
             bgfx::submit(0, program);
     }
@@ -337,6 +338,7 @@ void BgfxRenderer::render() {
             bgfx::setIndexBuffer(pc.opaqueIbh);
             if (bgfx::isValid(atlasSampler))
                 bgfx::setTexture(0, atlasSampler, atlas);
+            bindFog();
             bgfx::submit(0, program);
         }
 
@@ -347,6 +349,7 @@ void BgfxRenderer::render() {
             bgfx::setIndexBuffer(pc.translucentIbh);
             if (bgfx::isValid(atlasSampler))
                 bgfx::setTexture(0, atlasSampler, atlas);
+            bindFog();
             bgfx::submit(1, program);
         }
     }
@@ -394,6 +397,7 @@ void BgfxRenderer::render() {
             bgfx::setIndexBuffer(lineIbo);
             if (bgfx::isValid(atlasSampler))
                 bgfx::setTexture(0, atlasSampler, atlas);
+            bindFog();
             bgfx::submit(0, program);
         }
     }
