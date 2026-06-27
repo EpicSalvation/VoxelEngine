@@ -42,6 +42,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "io/ChunkPersistence.h"
 #include "io/VoxExporter.h"
@@ -60,11 +61,11 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -81,6 +82,8 @@
 #endif
 
 namespace {
+
+constexpr char kLogCat[] = "demo07";
 
 // ── Streaming / decomposition budgets ───────────────────────────────────────
 constexpr int    kStreamPerFrame     =  2;     // coarse/immutable chunks meshed per frame
@@ -264,11 +267,13 @@ layers:
     mode: immutable
     chunk_size_voxels: 4
     view_distance_chunks: 1
+    resident_chunk_budget: 64
   - name: ramparts
     voxel_size_m: 20.0
     mode: immutable
     chunk_size_voxels: 8
     view_distance_chunks: 4
+    resident_chunk_budget: 256
   - name: terraces
     voxel_size_m: 10.0
     mode: composite
@@ -280,6 +285,7 @@ layers:
     mode: immutable
     chunk_size_voxels: 8
     view_distance_chunks: 8
+    resident_chunk_budget: 256
   - name: detail
     voxel_size_m: 1.0
     mode: terminal
@@ -287,7 +293,7 @@ layers:
     view_distance_chunks: 12
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -295,12 +301,12 @@ layers:
     // ── Arena plugin ─────────────────────────────────────────────────────────
     PluginManager pluginManager;
     if (std::string(VOXEL_ARENA_PLUGIN_PATH).empty()) {
-        std::cerr << "[main] Fatal: arena plugin path not configured at build time.\n";
+        Log::error(kLogCat, "Fatal: arena plugin path not configured at build time.");
         return 1;
     }
     if (pluginManager.loadPlugin(VOXEL_ARENA_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load arena plugin from "
-                  << VOXEL_ARENA_PLUGIN_PATH << "\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load arena plugin from ")
+                             + VOXEL_ARENA_PLUGIN_PATH).c_str());
         return 1;
     }
 
@@ -318,8 +324,7 @@ layers:
 
     if (!foundationGen.fn || !rampartsGen.fn || !terracesGen.fn ||
         !propsGen.fn      || !detailGen.fn) {
-        std::cerr << "[main] Fatal: arena plugin did not register all five "
-                     "layer generators.\n";
+        Log::error(kLogCat, "Fatal: arena plugin did not register all five layer generators.");
         return 1;
     }
 
@@ -332,13 +337,16 @@ layers:
     for (size_t i = 0; i < pluginManager.materials().size() && i < 9; ++i)
         buildMaterials.push_back(pluginManager.materials()[i].material_id);
     if (buildMaterials.empty()) {
-        std::cerr << "[main] Fatal: no materials registered by the arena plugin.\n";
+        Log::error(kLogCat, "Fatal: no materials registered by the arena plugin.");
         return 1;
     }
     size_t selectedMaterial = 0;
-    std::cout << "[main] Build materials (press the number to select):\n";
-    for (size_t i = 0; i < buildMaterials.size(); ++i)
-        std::cout << "       " << (i + 1) << " - " << buildMaterials[i] << "\n";
+    {
+        std::string mats = "Build materials (press the number to select):";
+        for (size_t i = 0; i < buildMaterials.size(); ++i)
+            mats += " " + std::to_string(i + 1) + "=" + buildMaterials[i];
+        Log::info(kLogCat, mats.c_str());
+    }
 
     // ── Engine + window + renderer ────────────────────────────────────────────
     Engine engine;
@@ -351,7 +359,7 @@ layers:
     Layer* props      = world.layer("props");
     Layer* detail     = world.layer("detail");
     if (!foundation || !ramparts || !terraces || !props || !detail) {
-        std::cerr << "[main] Fatal: expected all five arena layers.\n";
+        Log::error(kLogCat, "Fatal: expected all five arena layers.");
         return 1;
     }
 
@@ -368,14 +376,14 @@ layers:
     const std::string goalVoxPath = assetDir + "/goal_totem.vox";
 
     if (!std::filesystem::exists(keyVoxPath)) {
-        std::cout << "[main] Generating key asset: " << keyVoxPath << "\n";
+        Log::info(kLogCat, (std::string("Generating key asset: ") + keyVoxPath).c_str());
         if (!generateKeyAsset(keyVoxPath))
-            std::cerr << "[main] Warning: could not generate " << keyVoxPath << "\n";
+            Log::warn(kLogCat, (std::string("Could not generate ") + keyVoxPath).c_str());
     }
     if (!std::filesystem::exists(goalVoxPath)) {
-        std::cout << "[main] Generating goal totem asset: " << goalVoxPath << "\n";
+        Log::info(kLogCat, (std::string("Generating goal totem asset: ") + goalVoxPath).c_str());
         if (!generateGoalAsset(goalVoxPath))
-            std::cerr << "[main] Warning: could not generate " << goalVoxPath << "\n";
+            Log::warn(kLogCat, (std::string("Could not generate ") + goalVoxPath).c_str());
     }
 
     // ── Phase 4: Import key and goal totem models into the detail layer ───────
@@ -401,7 +409,7 @@ layers:
     persistence::WorldSave detailSave(
         "arena-save",
         persistence::WorldIdentity{detailDef->voxel_size_m, detailDef->chunk_size_voxels});
-    std::cout << "[main] Save directory: " << detailSave.directory() << "\n";
+    Log::info(kLogCat, (std::string("Save directory: ") + detailSave.directory()).c_str());
 
     // ── LOD + decomposition ───────────────────────────────────────────────────
     LODManager lod(layerConfig);
@@ -409,7 +417,8 @@ layers:
 
     DecompositionState  decomp;
     DecompositionWorker worker;
-    std::cout << "[main] Decomposition worker threads: " << worker.threadCount() << "\n";
+    Log::info(kLogCat, (std::string("Decomposition worker threads: ")
+                        + std::to_string(worker.threadCount())).c_str());
 
     // Mesh stores: one per layer that this demo renders directly.
     MeshStore foundationMeshes;
@@ -524,20 +533,19 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] Arena platformer. Five-layer world: foundation (500m) + "
-                 "ramparts (20m) + terraces (10m) + props (2m) + detail (1m).\n"
-                 "[main] WASD + mouse to fly, Space/Shift up/down, G = walk "
-                 "(cross-layer collision), F = cursor, ESC quits.\n"
-                 "[main] Left mouse = break detail voxel, right mouse = place, "
-                 "1-9 = select material.\n"
-                 "[main] Fly toward platforms to decompose them; build bridges to "
-                 "cross gaps. Edits save to arena-save/ and survive relaunch.\n"
-                 "[main] In walk mode (G), head north from spawn to the stone "
-                 "staircase and jump up its steps onto the start pad.\n"
-                 "[main] Collect the four gold key stakes (walk into them), then "
-                 "reach the goal totem to win.\n"
-                 "[main] P = toggle lava hazards on platforms, E = export detail "
-                 "layer to arena-export.vox.\n";
+    Log::info(kLogCat,
+        "Arena platformer. Five-layer world: foundation (500m) + ramparts (20m) + "
+        "terraces (10m) + props (2m) + detail (1m). WASD + mouse to fly, Space/Shift "
+        "up/down, G = walk (cross-layer collision), F = cursor, ESC quits.");
+    Log::info(kLogCat,
+        "Left mouse = break detail voxel, right mouse = place, 1-9 = select material. "
+        "Fly toward platforms to decompose them; build bridges to cross gaps. Edits "
+        "save to arena-save/ and survive relaunch.");
+    Log::info(kLogCat,
+        "In walk mode (G), head north from spawn to the stone staircase and jump up "
+        "its steps onto the start pad. Collect the four gold key stakes (walk into "
+        "them), then reach the goal totem to win. P = toggle lava hazards, E = export "
+        "detail layer to arena-export.vox.");
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -567,9 +575,8 @@ layers:
                 playerCenter = WorldCoord(camPos.value - glm::dvec3(0.0, kEyeOffset, 0.0));
                 vy = 0.0; grounded = false;
             }
-            std::cout << "[main] Mode: "
-                      << (walkMode ? "WALK (gravity + cross-layer collision)" : "FLY")
-                      << "\n";
+            Log::info(kLogCat, walkMode ? "Mode: WALK (gravity + cross-layer collision)"
+                                        : "Mode: FLY");
         }
         prevKeyG = curKeyG;
 
@@ -579,15 +586,15 @@ layers:
             if (hazardsPluginId != kInvalidPluginId) {
                 pluginManager.unloadPlugin(hazardsPluginId);
                 hazardsPluginId = kInvalidPluginId;
-                std::cout << "[main] Hazards unloaded — arena regenerating clean.\n";
+                Log::info(kLogCat, "Hazards unloaded — arena regenerating clean.");
             } else if (std::string(VOXEL_HAZARDS_PLUGIN_PATH)[0] != '\0') {
                 hazardsPluginId = pluginManager.loadPlugin(VOXEL_HAZARDS_PLUGIN_PATH);
                 if (hazardsPluginId != kInvalidPluginId)
-                    std::cout << "[main] Hazards loaded — lava pools on platforms on approach.\n";
+                    Log::info(kLogCat, "Hazards loaded — lava pools on platforms on approach.");
                 else
-                    std::cerr << "[main] Warning: could not load hazards plugin.\n";
+                    Log::warn(kLogCat, "Could not load hazards plugin.");
             } else {
-                std::cerr << "[main] Warning: hazards plugin path not configured at build time.\n";
+                Log::warn(kLogCat, "Hazards plugin path not configured at build time.");
             }
             // Evict all non-persistent detail chunks so they regenerate fresh with
             // or without the hazard feature, reverting the arena exactly (M4 pattern).
@@ -637,12 +644,13 @@ layers:
         bool curKeyE = (glfwGetKey(glfwWin, GLFW_KEY_E) == GLFW_PRESS);
         if (curKeyE && !prevKeyE) {
             const std::string exportPath = "arena-export.vox";
-            std::cout << "[main] Exporting detail layer to " << exportPath << " …\n";
+            Log::info(kLogCat, (std::string("Exporting detail layer to ") + exportPath
+                                + " …").c_str());
             engine.exportVox("detail",
                              WorldCoord(0.0, 0.0, 0.0), WorldCoord(500.0, 80.0, 500.0),
                              exportPath);
-            std::cout << "[main] Export done. (500×80×500 → auto-chunked; "
-                         "extended properties → lossy-property warning logged)\n";
+            Log::info(kLogCat, "Export done. (500x80x500 -> auto-chunked; "
+                               "extended properties -> lossy-property warning logged)");
         }
         prevKeyE = curKeyE;
 
@@ -651,8 +659,8 @@ layers:
             if (glfwGetKey(glfwWin, GLFW_KEY_1 + i) == GLFW_PRESS &&
                 selectedMaterial != static_cast<size_t>(i)) {
                 selectedMaterial = static_cast<size_t>(i);
-                std::cout << "[main] Selected material: "
-                          << buildMaterials[selectedMaterial] << "\n";
+                Log::info(kLogCat, (std::string("Selected material: ")
+                                    + buildMaterials[selectedMaterial]).c_str());
             }
         }
 
@@ -736,8 +744,9 @@ layers:
                         detail->voxelSizeM(), detail->chunkSizeVoxels());
                     remeshDetailChunk(kc);
                     const int remaining = 4 - collectedCount;
-                    std::cout << "[main] Key " << (i + 1)
-                              << " collected! " << remaining << " remaining.\n";
+                    Log::info(kLogCat, (std::string("Key ") + std::to_string(i + 1)
+                                        + " collected! " + std::to_string(remaining)
+                                        + " remaining.").c_str());
                     updateHud();
                 }
             }
@@ -751,8 +760,8 @@ layers:
                 const glm::dvec3 d = playerCenter.value - goalCenter;
                 if (std::abs(d.x) < 3.0 && std::abs(d.y) < 4.0 && std::abs(d.z) < 3.0) {
                     gameWon = true;
-                    std::cout << "[main] *** VICTORY!  All keys collected and "
-                                 "goal totem reached! ***\n";
+                    Log::info(kLogCat, "*** VICTORY!  All keys collected and goal "
+                                       "totem reached! ***");
                     updateHud();
                 }
             }
@@ -762,7 +771,7 @@ layers:
                 playerCenter = WorldCoord(kSpawnPos);
                 camPos = WorldCoord(kSpawnPos + glm::dvec3(0.0, kEyeOffset, 0.0));
                 vy = 0.0; grounded = false;
-                std::cout << "[main] Respawned! (fell off the arena)\n";
+                Log::info(kLogCat, "Respawned! (fell off the arena)");
             }
 
             // Respawn: touch a lava voxel (sampled just below the player's feet).
@@ -774,7 +783,7 @@ layers:
                     playerCenter = WorldCoord(kSpawnPos);
                     camPos = WorldCoord(kSpawnPos + glm::dvec3(0.0, kEyeOffset, 0.0));
                     vy = 0.0; grounded = false;
-                    std::cout << "[main] Respawned! (touched lava)\n";
+                    Log::info(kLogCat, "Respawned! (touched lava)");
                 }
             }
         }
@@ -835,6 +844,34 @@ layers:
                 meshes[c].destroy();
                 meshes.erase(c);
                 layer->unloadChunk(c);
+            }
+
+            // Enforce the layer's resident_chunk_budget (M16 L5). Composite terraces
+            // leave it unset (0 → skipped; their fine children are bounded by the
+            // keep-radius below); the immutable foundation/ramparts/props shed
+            // farthest-first when over budget. Immutable chunks regenerate from seed,
+            // so shedding is free.
+            const int budget =
+                isTerraces ? 0 : layerConfig.findLayer(name)->resident_chunk_budget;
+            if (budget > 0 && static_cast<int>(meshes.size()) > budget) {
+                std::vector<ChunkCoord> resident;
+                resident.reserve(meshes.size());
+                for (const auto& kv : meshes) resident.push_back(kv.first);
+                std::sort(resident.begin(), resident.end(),
+                          [&](const ChunkCoord& a, const ChunkCoord& b) {
+                              auto cheb = [&](const ChunkCoord& c) {
+                                  return std::max({std::abs(c.x - center.x),
+                                                   std::abs(c.y - center.y),
+                                                   std::abs(c.z - center.z)});
+                              };
+                              return cheb(a) > cheb(b);
+                          });
+                for (const ChunkCoord& c : resident) {
+                    if (static_cast<int>(meshes.size()) <= budget) break;
+                    meshes[c].destroy();
+                    meshes.erase(c);
+                    layer->unloadChunk(c);
+                }
             }
         };
 
@@ -1044,14 +1081,14 @@ layers:
         renderer.render();
     }
 
-    std::cout << "[main] Decomposed terrace macro voxels this session: "
-              << decomp.decomposedCount() << "\n";
+    Log::info(kLogCat, (std::string("Decomposed terrace macro voxels this session: ")
+                        + std::to_string(decomp.decomposedCount())).c_str());
 
     // Persist any edited detail chunks still in memory.
     int savedOnQuit = detailSave.saveDirtyChunks(world);
     if (savedOnQuit > 0)
-        std::cout << "[main] Saved " << savedOnQuit << " edited detail chunk(s) to "
-                  << detailSave.directory() << "\n";
+        Log::info(kLogCat, (std::string("Saved ") + std::to_string(savedOnQuit)
+                            + " edited detail chunk(s) to " + detailSave.directory()).c_str());
 
     for (auto& kv : foundationMeshes) kv.second.destroy();
     for (auto& kv : rampartsMeshes)   kv.second.destroy();
