@@ -87,7 +87,8 @@ TEST(ProfilerTest, RecordIsThreadSafe) {
     for (auto& th : threads) th.join();
     profiler().setEnabled(false);
 
-    const ProfileZoneStat* z = find(profiler().snapshot(), "mt.zone");
+    const auto snap = profiler().snapshot();
+    const ProfileZoneStat* z = find(snap, "mt.zone");
     ASSERT_NE(z, nullptr);
     EXPECT_EQ(z->calls, static_cast<uint64_t>(kThreads) * kPer);
     EXPECT_EQ(z->totalNs, static_cast<uint64_t>(kThreads) * kPer);  // 1 ns each
