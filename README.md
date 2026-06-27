@@ -1183,6 +1183,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 
 *Demo*
 - [ ] **Demo — Mega Demo:** A large demo that demonstrates as many major features of the engine as possible. The concept doesn't necessarily need to be fresh, but it would be nice.  However, if a mini-Minecraft clone is the best way to do it, then that's what we should do.
+  - [ ] **Custom world seed at launch:** let the user pass a world seed on the command line (with a deterministic default when omitted) so they can see how the seed drives world generation — and that the *same* seed regenerates the *same* world (the §4 determinism guarantee). The engine already threads a `worldSeed` through `DecompositionManager` and the recipe/generator stack; this just surfaces it as a launch knob. Good teaching home for "what a seed is and why it matters." Consider also a HUD readout of the active seed.
 
 **M19 — Release**
 - [ ] Verify docs are all correct
