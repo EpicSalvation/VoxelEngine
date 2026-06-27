@@ -429,6 +429,14 @@ The renderer maintains the camera's current position as a `WorldCoord`. Before a
 
 **Do not submit `WorldCoord` values directly to the GPU.** Always go through `toLocalFloat`.
 
+### Camera Orientation (M17, surface-normal up)
+
+The view matrix is built from the camera's `pitch`/`yaw`/`roll` interpreted in a frame whose **up axis is a settable world-space vector** (`Renderer::setCameraUp`, default `(0,1,0)`). This is the visual counterpart to M16's gravity-relative grounding (L2/L7): once "down" can point any direction, the camera can align its up-axis to the local surface normal (the local `-gravityAt` up), so a player standing on the +X face of an asteroid sees a **level horizon** instead of a tilted one.
+
+The shared `cameraBasis()` (`include/renderer/CameraBasis.h`) builds the canonical +Y-up forward/right/up from pitch/yaw (and roll about the forward axis), then rotates that whole frame by the rotation mapping +Y onto the supplied up. **With the default up and zero roll the rotation is the identity, returning the canonical formulas unchanged** — so every existing scene's view matrix is byte-for-byte the pre-M17 one (`BgfxRenderer::render` keeps the historical float path verbatim for that case). The same basis feeds view-frustum culling (`Frustum::update` takes the up vector and roll) so the culling planes rotate with the view rather than staying Y-up. A game on a many-bodied world calls `setCameraUp(-gravityDir)` each frame; in zero-g it forwards the previous up (a zero vector is ignored) so the basis never degenerates.
+
+The directional **shade ramp** in the mesher is a third consumer of the up vector. `buildChunkMeshData`'s fake-lighting ramp (top brightest, bottom darkest, sides between) resolves each face's role through `axisrole::roleOf` against the same gravity vector that drives the textured face roles (M16 G1) and recipe boundaries (G2), so the lit relief follows local "up" on an off-axis body instead of always lighting +Y (M16 G3). Under the default −Y gravity `roleOf` is the identity, so the ramp is byte-identical to the historical +Y-up shading.
+
 ### Opaque and Translucent Passes
 
 A material is translucent when its **palette entry's alpha byte is below `0xff`** (`palette::isTranslucent`); water is the first such entry. This single bit of data drives the whole transparency path without any per-material renderer code:
@@ -1022,13 +1030,17 @@ The seam is `GravityProvider::gravityAt(WorldCoord) → dvec3` — a per-positio
 
 Gravity may vary **per position** (radial) and **per frame** (a moving body), so consumers query it each step rather than caching a global axis. Nothing on `MaterialProperties` / `Voxel` changes — gravity is never stored on world data.
 
-### The Three Consumers — Reading the Same "Down"
+### The Consumers — Reading the Same "Down"
 
 **Collision grounding (L2, `VoxelCollision`).** The swept-AABB resolution is already per-axis symmetric; only the *interpretation* of `grounded` read the axis. It is now derived from "blocked **along** the gravity vector": when a sub-step is blocked on an axis, `grounded` is set iff the movement direction has a positive component along the supplied `gravity_dir` (`sign(d[axis]) * gravity_dir[axis] > 0`). Under the default −Y this is exactly "blocked while moving down"; an alternate fixed axis lets a player stand on a wall; a per-position radial vector lets one walk the +X face of an asteroid; zero gravity makes the product zero, so there is **no grounded concept**. The per-axis `hitX/hitY/hitZ` blocking is untouched — only `grounded` reads gravity.
 
 **Fluid flow (L3, `FluidSystem`).** The Phase-A drain / Phase-B lateral-equalize split is parameterized by the per-cell gravity vector instead of a fixed −Y. A neighbor is a **drain** target when its direction has a positive component along gravity (`dot > 0`); the **lateral** equalization runs across neighbors perpendicular to gravity (`dot == 0`). Under constant −Y exactly one drain neighbor (−Y) and four lateral ones (±X/±Z) qualify — identical to M14. A radial well drains toward the center from several sides at once; under zero-g no neighbor is downhill, so the pass degenerates to pure 6-neighbor pressure equalization. (A downhill cascade can hand fluid forward several hops in one pass, so the commit set is every cell that received a delta, not just the frontier work set — under −Y that set equals the work set, preserving the byte-identical M14 result.)
 
 **Face roles (G1/G2, `axisrole::roleOf`).** The appearance and decomposition tiers author faces by **role** — `up` (top skin), `down` (bottom), `lateral` (side) — and resolve the role of each geometric face against gravity at query time. The mesh builder (`materialfaces::faceTile`) shows a material's `top` tile on whichever geometric face most opposes gravity, so grass renders side-out on an asteroid's +X face; the recipe boundary distribution (`RecipeDesc::BoundaryDesc` via `fillChildChunk`) lands the `top`/`bottom`/`side` distributions on the gravity-relative macro faces, so a decomposed crust is radial rather than a flat +Y slab. Both default to constant −Y (up = +Y), reproducing the M15 Y-up mapping byte-for-byte.
+
+**Shade ramp (G3, `ChunkMeshData`).** The mesher's fixed fake-lighting ramp resolves each face's role through the same `axisrole::roleOf` so the up-facing face is brightest and the down-facing darkest *relative to gravity*, not always +Y — the lit relief now agrees with the gravity-defined surface instead of contradicting it on an off-axis body. Default −Y is the historical ramp byte-for-byte.
+
+**Camera up (M17, `Renderer::setCameraUp`).** The view basis and frustum align the camera's up-axis to the supplied up (typically `-gravityDir`), so the rendered horizon is level on whatever surface the player stands on — the appearance counterpart to L2's grounding. Default +Y is the historical view byte-for-byte (see §9, *Camera Orientation*). Unlike the other consumers this one is supplied to the renderer once per frame rather than per cell/face, but it reads the same "down".
 
 ### Dependency Boundaries
 

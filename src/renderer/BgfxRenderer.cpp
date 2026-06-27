@@ -1,6 +1,7 @@
 #include "BgfxRenderer.h"
 #include "ChunkMesh.h"
 #include "Palette.h"
+#include "renderer/CameraBasis.h"
 #include <bgfx/platform.h>
 #include <iostream>
 #include <algorithm>
@@ -96,6 +97,7 @@ BgfxRenderer::BgfxRenderer()
       whiteTex(BGFX_INVALID_HANDLE),
       atlasTex(BGFX_INVALID_HANDLE),
       cameraRot{0.0f, 0.0f, 0.0f},
+      cameraUp{0.0f, 1.0f, 0.0f},
       viewWidth(800),
       viewHeight(600),
       farClip(1000.0f),
@@ -170,13 +172,35 @@ void BgfxRenderer::render() {
     // Per-frame view matrix: camera sits at the floating-origin (local 0,0,0).
     // All voxel positions are already translated into camera-local space via
     // toLocalFloat(cameraPos) below, so only orientation enters the view matrix.
-    float sp = bx::sin(cameraRot.x), cp = bx::cos(cameraRot.x);
-    float sy = bx::sin(cameraRot.y), cy = bx::cos(cameraRot.y);
-    bx::Vec3 eye     = {0.0f, 0.0f, 0.0f};
-    bx::Vec3 forward = {cp * sy, sp, cp * cy};
-    bx::Vec3 at      = bx::add(eye, forward);
+    //
+    // Two paths share one result. The default (camera up == +Y, no roll) keeps the
+    // historical float math verbatim, so every existing scene's view matrix is
+    // byte-for-byte unchanged. When the game aligns the camera to a surface normal
+    // (setCameraUp, M17), pitch/yaw/roll are reinterpreted in that up-frame via the
+    // shared cameraBasis() so a player on the +X face of a body sees a level
+    // horizon (docs/ARCHITECTURE.md §9/§18).
+    bx::Vec3 eye = {0.0f, 0.0f, 0.0f};
     float view[16];
-    bx::mtxLookAt(view, eye, at);
+    const bool defaultUp =
+        (cameraUp.x == 0.0f && cameraUp.y == 1.0f && cameraUp.z == 0.0f);
+    if (defaultUp && cameraRot.z == 0.0f) {
+        float sp = bx::sin(cameraRot.x), cp = bx::cos(cameraRot.x);
+        float sy = bx::sin(cameraRot.y), cy = bx::cos(cameraRot.y);
+        bx::Vec3 forward = {cp * sy, sp, cp * cy};
+        bx::Vec3 at      = bx::add(eye, forward);
+        bx::mtxLookAt(view, eye, at);
+    } else {
+        const CameraBasis b = cameraBasis(cameraRot.x, cameraRot.y, cameraRot.z,
+                                          glm::dvec3(cameraUp.x, cameraUp.y, cameraUp.z));
+        bx::Vec3 forward = {static_cast<float>(b.forward.x),
+                            static_cast<float>(b.forward.y),
+                            static_cast<float>(b.forward.z)};
+        bx::Vec3 up      = {static_cast<float>(b.up.x),
+                            static_cast<float>(b.up.y),
+                            static_cast<float>(b.up.z)};
+        bx::Vec3 at      = bx::add(eye, forward);
+        bx::mtxLookAt(view, eye, at, up);
+    }
 
     float proj[16];
     bx::mtxProj(proj, 60.0f,
@@ -246,7 +270,9 @@ void BgfxRenderer::render() {
     Frustum frustum;
     frustum.update(cameraPos, cameraRot.x, cameraRot.y,
                    static_cast<double>(viewWidth) / static_cast<double>(viewHeight),
-                   60.0, static_cast<double>(farClip));
+                   60.0, static_cast<double>(farClip),
+                   glm::dvec3(cameraUp.x, cameraUp.y, cameraUp.z),
+                   static_cast<double>(cameraRot.z));
     pendingChunks.erase(
         std::remove_if(pendingChunks.begin(), pendingChunks.end(),
                        [&frustum](const PendingChunk& pc) {
@@ -468,6 +494,13 @@ void BgfxRenderer::setCameraPosition(const WorldCoord& pos) {
 
 void BgfxRenderer::setCameraRotation(float pitch, float yaw, float roll) {
     cameraRot = {pitch, yaw, roll};
+}
+
+void BgfxRenderer::setCameraUp(const glm::vec3& worldUp) {
+    // A zero vector would degenerate the basis (e.g. a game forwarding -gravity in
+    // zero-g): keep the last good up rather than collapsing the view.
+    if (worldUp.x == 0.0f && worldUp.y == 0.0f && worldUp.z == 0.0f) return;
+    cameraUp = {worldUp.x, worldUp.y, worldUp.z};
 }
 
 void BgfxRenderer::cleanup() {

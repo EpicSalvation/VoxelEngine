@@ -55,6 +55,7 @@ public:
     void setViewport(int width, int height) override;
     void setCameraPosition(const WorldCoord& pos) override;
     void setCameraRotation(float pitch, float yaw, float roll) override;
+    void setCameraUp(const glm::vec3& worldUp) override;
     void cleanup() override;
     void shutdown() override;
 
@@ -174,6 +175,7 @@ private:
     std::vector<HudCmd>       hudCmds;
     WorldCoord                cameraPos;
     bx::Vec3                  cameraRot; // {pitch, yaw, roll} in radians
+    bx::Vec3                  cameraUp;  // world-space up the camera aligns to (default +Y)
     uint32_t                  viewWidth;
     uint32_t                  viewHeight;
     float                     farClip;

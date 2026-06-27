@@ -30,11 +30,15 @@
 // lattice (plugins/asteroid-field/asteroid_field.h) so the gravity wells point at
 // exactly the centers the rock is built around.
 //
-// Camera caveat: the renderer's view is hard Y-up (no roll), so on a sideways
-// body the horizon looks tilted even though the PHYSICS is correct — the HUD
-// reads out the live "down" vector and grounded state so the mechanic is legible.
-// Aligning the camera to the surface normal would need a renderer change, which
-// M16 deliberately keeps out of scope (the G3 shade-ramp note is doc-only).
+// Surface-normal camera (M17): in the suit the camera up-axis is aligned to the
+// local surface normal (-gDir) via Renderer::setCameraUp, so the horizon reads
+// level on whatever face you land on instead of tilted. The mining raycast and
+// movement derive look/right from the SAME basis (cameraBasis), so the crosshair
+// stays locked to what is mineable. The jet (and zero-g, where there is no "down")
+// keeps the plain Y-up basis. The HUD still reads out the live "down" vector and
+// grounded state. (The renderer's gravity-relative shade ramp — the G3 fix that
+// landed with this — is available too; this flat-colored demo leaves its meshes on
+// the default ramp.)
 //
 // Controls: WASD move, mouse look, Space/Shift up/down (jet) or jump/down (suit),
 //           G toggle jet/suit, LMB mine, F cursor, ESC quits.
@@ -48,6 +52,7 @@
 #include "core/RecipeValidation.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
+#include "renderer/CameraBasis.h"
 #include "renderer/ChunkMesh.h"
 #include "world/ChunkCoordMath.h"
 #include "world/DecompositionManager.h"
@@ -354,11 +359,6 @@ layers:
             lastMX = mx; lastMY = my;
         }
 
-        const float cp = std::cos(pitch), sp = std::sin(pitch);
-        const float cy = std::cos(yaw),   sy = std::sin(yaw);
-        const glm::dvec3 look(cp * sy, sp, cp * cy);
-        const glm::dvec3 right(cy, 0, -sy);
-
         // ── F: toggle cursor capture ────────────────────────────────────────────
         const bool curF = (glfwGetKey(glfwWin, GLFW_KEY_F) == GLFW_PRESS);
         if (curF && !prevF) {
@@ -391,6 +391,18 @@ layers:
         const glm::dvec3 gRaw = gravity.gravityAt(WorldCoord(refPos));
         const double     gLen = glm::length(gRaw);
         const glm::dvec3 gDir = (gLen > 1e-9) ? gRaw / gLen : glm::dvec3(0.0);  // unit "down"
+
+        // ── Camera basis (M17, surface-normal up) ───────────────────────────────
+        // In the suit on a body, align the camera up-axis to the surface normal
+        // (-gDir) so the horizon reads level instead of tilted; in the jet (or
+        // zero-g, where there is no "down") keep the plain Y-up basis. Look/right
+        // are derived from the SAME basis the renderer uses (cameraBasis), so the
+        // mining raycast and movement stay locked to screen-center on any face.
+        const glm::dvec3 camUp =
+            (suitMode && gLen > 1e-9) ? -gDir : glm::dvec3(0.0, 1.0, 0.0);
+        const CameraBasis basis = cameraBasis(pitch, yaw, 0.0, camUp);
+        const glm::dvec3 look  = basis.forward;
+        const glm::dvec3 right = basis.right;
 
         // ── Movement ────────────────────────────────────────────────────────────
         if (!suitMode) {
@@ -525,6 +537,7 @@ layers:
         if (w != fbW || h != fbH) { fbW = w; fbH = h; renderer.setViewport(w, h); }
         renderer.setCameraPosition(camPos);
         renderer.setCameraRotation(pitch, yaw, 0.0f);
+        renderer.setCameraUp(glm::vec3(camUp));  // surface-normal up in the suit; +Y in jet/zero-g
 
         // Coarsest first so finer voxels occlude coarser ones via the depth test.
         for (const auto& layerName : std::vector<std::string>{"macro", "micro", "grid"}) {

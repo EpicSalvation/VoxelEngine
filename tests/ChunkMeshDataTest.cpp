@@ -241,3 +241,58 @@ TEST(ChunkMeshData, AmbientOcclusionRaisedNeighborDarkensSharedCorner) {
     EXPECT_TRUE(sawDark);
     EXPECT_TRUE(sawBright);
 }
+
+// ── Gravity-relative directional shade (M16 G3) ─────────────────────────────
+//
+// The fixed fake-lighting ramp (top brightest, bottom darkest, sides between)
+// resolves against the gravity ("down") vector so it follows local "up" on an
+// off-axis body instead of always lighting +Y. A lone voxel has AO level 3 on
+// every face (factor 1.0), so the red channel is the pure shade ramp: stone
+// R = 0xaa = 170, ramp values top 1.0, sides 0.8 (Z) / 0.6 (X), bottom 0.5.
+
+namespace {
+
+// Red channel of the first vertex of face `fi` (0:+Z 1:-Z 2:-Y 3:+Y 4:-X 5:+X);
+// all four corners of a lone voxel's face share one shade (AO is uniform).
+uint32_t faceRed(const std::vector<MeshVertex>& v, int fi) {
+    return redOf(v[fi * kVertsPerFace]);
+}
+
+}  // namespace
+
+TEST(ChunkMeshData, DirectionalShadeDefaultIsYUp) {
+    // Default -Y gravity: +Y is brightest, -Y darkest, Z-sides brighter than
+    // X-sides — byte-identical to the historical ramp.
+    palette::resetToDefault();
+    materialfaces::clearBindings();
+    Chunk chunk(ChunkCoord{0, 0, 0}, 4, WorldCoord());
+    chunk.at(2, 2, 2) = solid();
+    std::vector<MeshVertex> verts;
+    std::vector<uint32_t> opaque, translucent;
+    buildChunkMeshData(chunk, verts, opaque, translucent);
+
+    EXPECT_EQ(faceRed(verts, materialfaces::Face::PosY), 170u);  // top, 1.0
+    EXPECT_EQ(faceRed(verts, materialfaces::Face::NegY),  85u);  // bottom, 0.5
+    EXPECT_EQ(faceRed(verts, materialfaces::Face::PosZ), 136u);  // side, 0.8
+    EXPECT_EQ(faceRed(verts, materialfaces::Face::PosX), 102u);  // side, 0.6
+}
+
+TEST(ChunkMeshData, DirectionalShadeFollowsGravity) {
+    // Gravity points -X (e.g. a radial well to the -X): the +X face becomes "up"
+    // (brightest) and -X "down" (darkest); the former vertical faces are now
+    // lateral. The ramp rotates with gravity just like the textured face roles.
+    palette::resetToDefault();
+    materialfaces::clearBindings();
+    Chunk chunk(ChunkCoord{0, 0, 0}, 4, WorldCoord());
+    chunk.at(2, 2, 2) = solid();
+    std::vector<MeshVertex> verts;
+    std::vector<uint32_t> opaque, translucent;
+    buildChunkMeshData(chunk, verts, opaque, translucent, 1.0,
+                       glm::dvec3(-1.0, 0.0, 0.0));
+
+    EXPECT_EQ(faceRed(verts, materialfaces::Face::PosX), 170u);  // up now, 1.0
+    EXPECT_EQ(faceRed(verts, materialfaces::Face::NegX),  85u);  // down now, 0.5
+    // +Y/-Y rotated sideways → canonical lateral (+Z slot, 0.8).
+    EXPECT_EQ(faceRed(verts, materialfaces::Face::PosY), 136u);
+    EXPECT_EQ(faceRed(verts, materialfaces::Face::NegY), 136u);
+}

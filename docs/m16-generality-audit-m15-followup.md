@@ -163,6 +163,12 @@ it is purely in how a material names *which face* gets *which* tile.
   vector, not just grounding and fluid. A constant-−Y default keeps every current
   scene byte-identical. Low priority; record, don't necessarily fix in M16.
 - **Severity:** **Low** (cosmetic; pre-existing; fold into L7's consumer list).
+- **Resolved (M17):** `buildChunkMeshData` now resolves the per-face shade ramp
+  through `axisrole::roleOf` against the same gravity vector the textured face
+  roles (G1) use, so the fixed fake-lighting follows local "up" instead of always
+  lighting +Y. Default −Y is byte-identical to the historical ramp. Landed with
+  the M17 surface-normal camera task (ARCHITECTURE §9/§18); tests in
+  `tests/ChunkMeshDataTest.cpp` (`DirectionalShadeFollowsGravity`).
 
 ---
 

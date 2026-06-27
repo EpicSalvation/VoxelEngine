@@ -2,6 +2,7 @@
 #include "Palette.h"
 #include "MaterialFaces.h"
 #include "core/Tuning.h"
+#include "world/AxisRole.h"
 
 namespace {
 
@@ -49,6 +50,30 @@ constexpr Face kFaces[6] = {
     { -1,  0,  0, {0, 3, 7, 4}, 0.6f, 2, 1 },  // -X   (in-plane z,y)
     {  1,  0,  0, {1, 5, 6, 2}, 0.6f, 2, 1 },  // +X   (in-plane z,y)
 };
+
+// Outward unit normal of each face, in kFaces order (0:+Z 1:-Z 2:-Y 3:+Y 4:-X
+// 5:+X) — must match materialfaces::kFaceNormals so the textured face role (G1)
+// and the flat directional shade (G3) agree about which way is "up".
+constexpr glm::dvec3 kFaceNormal[6] = {
+    {0.0, 0.0, 1.0}, {0.0, 0.0, -1.0}, {0.0, -1.0, 0.0},
+    {0.0, 1.0, 0.0}, {-1.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+};
+
+// Directional shade for a geometric face resolved against the gravity ("down")
+// vector (M16 G3). The up-facing face takes the brightest ramp value, the
+// down-facing face the darkest, and laterals keep the side ramp — so the fixed
+// fake-lighting follows local "up" instead of always lighting +Y. This mirrors
+// materialfaces::canonicalSlot: an Up/Down role reads the +Y/-Y ramp slot, a true
+// lateral keeps its own slot's value, and a +Y/-Y face rotated sideways falls back
+// to a canonical lateral (+Z) value. Under the default -Y gravity roleOf is the
+// identity, so the ramp is byte-identical to the historical +Y-up shading.
+float faceShade(int faceIndex, const glm::dvec3& gravityDir) {
+    const axisrole::Role r = axisrole::roleOf(kFaceNormal[faceIndex], gravityDir);
+    if (r == axisrole::Role::Up)   return kFaces[3].shade;  // +Y slot (brightest)
+    if (r == axisrole::Role::Down) return kFaces[2].shade;  // -Y slot (darkest)
+    if (faceIndex == 3 || faceIndex == 2) return kFaces[0].shade;  // rotated vert → +Z lateral
+    return kFaces[faceIndex].shade;                          // true lateral keeps its own
+}
 
 // Triangle vertex order (indices into Face::quad) for each diagonal choice. Both
 // wind CCW-outward; AO picks between them per face to avoid an asymmetric shading
@@ -163,10 +188,12 @@ void buildChunkMeshData(const Chunk& chunk,
                     }
 
                     // Compute per-face brightness. Start with the fixed directional
-                    // shade (top brightest, sides/bottom darker). When a lighting
-                    // overlay is attached, multiply by the light level at the air
-                    // voxel the face is exposed to (or the voxel itself for borders).
-                    float shade = translucent ? 1.0f : f.shade;
+                    // shade resolved against gravity (up-facing brightest, down
+                    // darkest; M16 G3) — under the default -Y this is the historical
+                    // +Y-up ramp. When a lighting overlay is attached, multiply by
+                    // the light level at the air voxel the face is exposed to (or the
+                    // voxel itself for borders).
+                    float shade = translucent ? 1.0f : faceShade(fi, gravity_dir);
                     if (light_query) {
                         const int cs = chunk.size();
                         chunkmath::VoxelCoord lightVc;
