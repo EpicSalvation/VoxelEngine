@@ -33,6 +33,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
@@ -57,7 +58,6 @@
 #include <filesystem>
 #include <cstdio>
 #include <fstream>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -70,6 +70,7 @@
 #endif
 
 namespace {
+constexpr char   kLogCat[] = "demo12";
 constexpr int    kLoadsPerFrame = 2;      // budget generated/meshed chunks per frame
 constexpr float  kFlySpeed      = 18.0f;  // free-fly camera speed
 constexpr float  kMouseSens     = 0.002f;
@@ -180,12 +181,12 @@ int main() {
         std::error_code ec;
         std::filesystem::current_path(VOXEL_REPO_ROOT, ec);
         if (ec)
-            std::cerr << "[main] Warning: 'assets/audio' not in the working directory "
-                         "and could not switch to " VOXEL_REPO_ROOT " — material sounds "
-                         "may be silent. Run from a directory containing assets/audio/.\n";
+            Log::warn(kLogCat, "'assets/audio' not in the working directory and could not "
+                               "switch to " VOXEL_REPO_ROOT " — material sounds may be silent. "
+                               "Run from a directory containing assets/audio/.");
         else
-            std::cout << "[main] Working directory set to " VOXEL_REPO_ROOT
-                         " so assets/audio/ resolves.\n";
+            Log::info(kLogCat, "Working directory set to " VOXEL_REPO_ROOT
+                               " so assets/audio/ resolves.");
     }
 #endif
 
@@ -200,7 +201,7 @@ layers:
     view_distance_chunks: 5
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -212,8 +213,8 @@ layers:
     PluginManager pluginManager;
     if (std::string(VOXEL_SHOWCASE_PLUGIN_PATH).empty() ||
         pluginManager.loadPlugin(VOXEL_SHOWCASE_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load material-showcase plugin from '"
-                  << VOXEL_SHOWCASE_PLUGIN_PATH << "'\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load material-showcase plugin from '")
+                             + VOXEL_SHOWCASE_PLUGIN_PATH + "'").c_str());
         return 1;
     }
     // material-audio is the removable default break/place audio (off on_voxel_modified)
@@ -221,9 +222,9 @@ layers:
     // still runs (silently for edits) if it is missing.
     if (std::string(VOXEL_MATERIAL_AUDIO_PLUGIN_PATH).empty() ||
         pluginManager.loadPlugin(VOXEL_MATERIAL_AUDIO_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Warning: material-audio plugin not loaded from '"
-                  << VOXEL_MATERIAL_AUDIO_PLUGIN_PATH
-                  << "' — break/place/footstep audio will be silent.\n";
+        Log::warn(kLogCat, (std::string("material-audio plugin not loaded from '")
+                            + VOXEL_MATERIAL_AUDIO_PLUGIN_PATH
+                            + "' — break/place/footstep audio will be silent.").c_str());
     }
 
     LayerGeneratorFn generator = nullptr;
@@ -235,7 +236,7 @@ layers:
         }
     }
     if (!generator) {
-        std::cerr << "[main] Fatal: no 'terrain' layer generator registered.\n";
+        Log::error(kLogCat, "Fatal: no 'terrain' layer generator registered.");
         return 1;
     }
 
@@ -249,7 +250,7 @@ layers:
         if (buildMaterials.size() < 9) buildMaterials.push_back(m.material_id);
     }
     if (buildMaterials.empty()) {
-        std::cerr << "[main] Fatal: no materials registered by the plugin.\n";
+        Log::error(kLogCat, "Fatal: no materials registered by the plugin.");
         return 1;
     }
     size_t selectedMaterial = 0;
@@ -271,7 +272,7 @@ layers:
         // (not Error) so a missing optional sound never refuses to run the demo.
         audio::validateAudio(pluginManager, &backend, audio::AudioStrictPolicy::Warn);
     } else {
-        std::cerr << "[main] Warning: audio backend unavailable — running silently.\n";
+        Log::warn(kLogCat, "Audio backend unavailable — running silently.");
     }
 
     // Ambient bed: synthesise the loop, load it straight into the backend (a
@@ -293,7 +294,7 @@ layers:
             }
         }
         if (ambientEmitter == kInvalidEmitterId)
-            std::cerr << "[main] Warning: ambient bed could not start.\n";
+            Log::warn(kLogCat, "Ambient bed could not start.");
     }
 
     Engine engine;
@@ -368,10 +369,11 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] Soundscape — walk (G) and build to hear material-appropriate\n"
-                 "[main] positional sounds over a panning ambient bed. Left mouse breaks,\n"
-                 "[main] right mouse places, 1-" << buildMaterials.size()
-              << " selects, F = cursor, ESC quits.\n";
+    Log::info(kLogCat, (std::string("Soundscape — walk (G) and build to hear "
+                        "material-appropriate positional sounds over a panning ambient bed. "
+                        "Left mouse breaks, right mouse places, 1-")
+                        + std::to_string(buildMaterials.size())
+                        + " selects, F = cursor, ESC quits.").c_str());
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -401,8 +403,7 @@ layers:
                 grounded = false;
                 strideTimer = 0.0;
             }
-            std::cout << "[main] Mode: " << (walkMode ? "WALK (footsteps on)"
-                                                      : "FLY") << "\n";
+            Log::info(kLogCat, walkMode ? "Mode: WALK (footsteps on)" : "Mode: FLY");
         }
         prevKeyG = curKeyG;
 
@@ -410,8 +411,8 @@ layers:
             if (glfwGetKey(glfwWin, GLFW_KEY_1 + i) == GLFW_PRESS &&
                 selectedMaterial != static_cast<size_t>(i)) {
                 selectedMaterial = static_cast<size_t>(i);
-                std::cout << "[main] Selected material: "
-                          << buildMaterials[selectedMaterial] << "\n";
+                Log::info(kLogCat, (std::string("Selected material: ")
+                                    + buildMaterials[selectedMaterial]).c_str());
             }
         }
 

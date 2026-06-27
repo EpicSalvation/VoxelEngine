@@ -38,6 +38,7 @@
 //           T toggles the texture atlas, ESC quits.
 
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
@@ -55,7 +56,6 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
-#include <iostream>
 #include <iterator>
 #include <string>
 #include <vector>
@@ -69,6 +69,7 @@
 
 namespace {
 
+constexpr char  kLogCat[] = "demo15";
 constexpr float kFlySpeed  = 10.0f;
 constexpr float kMouseSens = 0.002f;
 constexpr int   kGrid      = 16;  // .bbmodel authoring cube maps to a 16^3 grid
@@ -97,7 +98,8 @@ int main() {
 
     std::vector<uint8_t> bbBytes;
     if (!readFile(bbmodelPath, bbBytes)) {
-        std::cerr << "[main] Fatal: cannot read sample model at " << bbmodelPath << "\n";
+        Log::error(kLogCat, (std::string("Fatal: cannot read sample model at ")
+                             + bbmodelPath).c_str());
         return 1;
     }
 
@@ -105,13 +107,13 @@ int main() {
     PluginManager pluginManager;
     if (std::string(VOXEL_BLOCKBENCH_PLUGIN_PATH).empty() ||
         pluginManager.loadPlugin(VOXEL_BLOCKBENCH_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load blockbench plugin from '"
-                  << VOXEL_BLOCKBENCH_PLUGIN_PATH << "'.\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load blockbench plugin from '")
+                             + VOXEL_BLOCKBENCH_PLUGIN_PATH + "'.").c_str());
         return 1;
     }
     const RegisteredImporter* importer = bbImporter(pluginManager);
     if (!importer) {
-        std::cerr << "[main] Fatal: blockbench plugin registered no .bbmodel importer.\n";
+        Log::error(kLogCat, "Fatal: blockbench plugin registered no .bbmodel importer.");
         return 1;
     }
 
@@ -127,7 +129,7 @@ layers:
     view_distance_chunks: 4
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -135,7 +137,7 @@ layers:
     World  world(layerConfig);
     Layer* editor = world.layer("editor");
     if (!editor) {
-        std::cerr << "[main] Fatal: editor layer missing.\n";
+        Log::error(kLogCat, "Fatal: editor layer missing.");
         return 1;
     }
     editor->loadChunk({0, 0, 0}, nullptr);
@@ -159,7 +161,8 @@ layers:
                                 WorldCoord(0, 0, 0), kGrid, grid.data(),
                                 importer->user_data);
     if (rc != 0) {
-        std::cerr << "[main] Fatal: .bbmodel import failed (code " << rc << ").\n";
+        Log::error(kLogCat, (std::string("Fatal: .bbmodel import failed (code ")
+                             + std::to_string(rc) + ").").c_str());
         return 1;
     }
 
@@ -177,18 +180,19 @@ layers:
         editor->setVoxel(WorldCoord(x + 0.5, y + 0.5, z + 0.5), v);
         ++placed;
     }
-    std::cout << "[main] Imported " << bbmodelPath << " — " << placed
-              << " voxels placed." << std::endl;
+    Log::info(kLogCat, (std::string("Imported ") + bbmodelPath + " — "
+                        + std::to_string(placed) + " voxels placed.").c_str());
 
     // Build the atlas now that the importer has registered every texture: decode,
     // pack, upload, and publish the per-tile UV sub-rects the face bindings (T4)
     // resolve against. After this the mesh builder can emit textured UVs.
-    std::cout << "[main] Registered " << pluginManager.textures().size()
-              << " textures from the model." << std::endl;
+    Log::info(kLogCat, (std::string("Registered ")
+                        + std::to_string(pluginManager.textures().size())
+                        + " textures from the model.").c_str());
 
     textureManager.rebuild();
-    std::cout << "[main] Atlas built — " << textureManager.tileCount() << " tiles."
-              << std::endl;
+    Log::info(kLogCat, (std::string("Atlas built — ")
+                        + std::to_string(textureManager.tileCount()) + " tiles.").c_str());
 
     // ── Mesh the resident chunk(s) ─────────────────────────────────────────────
     std::vector<std::pair<ChunkCoord, ChunkMesh>> meshes;

@@ -38,6 +38,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
@@ -62,7 +63,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -81,6 +81,7 @@ extern "C" int gamepad_plugin_init(PluginContext* ctx);
 
 namespace {
 
+constexpr char   kLogCat[] = "demo18";
 constexpr int    kLoadsPerFrame = 4;      // meshed chunks per frame after spawn
 constexpr double kReachM        = 6.0;    // voxel-pick reach in metres
 constexpr float  kToolPower     = 1.0f;   // removal work-units/s (M8 RemovalModel)
@@ -128,7 +129,7 @@ layers:
     view_distance_chunks: 5
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -145,12 +146,12 @@ layers:
     engine.init(pm, world);
 
     if (std::string(VOXEL_SHOWCASE_PLUGIN_PATH).empty()) {
-        std::cerr << "[main] Fatal: material-showcase plugin path not configured.\n";
+        Log::error(kLogCat, "Fatal: material-showcase plugin path not configured.");
         return 1;
     }
     if (pm.loadPlugin(VOXEL_SHOWCASE_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load material-showcase plugin from "
-                  << VOXEL_SHOWCASE_PLUGIN_PATH << "\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load material-showcase plugin from ")
+                             + VOXEL_SHOWCASE_PLUGIN_PATH).c_str());
         return 1;
     }
 
@@ -166,7 +167,7 @@ layers:
     for (const auto& g : pm.layerGenerators())
         if (g.layer_name == "terrain") { generator = g.fn; generatorUserData = g.user_data; }
     if (!generator) {
-        std::cerr << "[main] Fatal: no 'terrain' layer generator registered.\n";
+        Log::error(kLogCat, "Fatal: no 'terrain' layer generator registered.");
         return 1;
     }
 
@@ -181,7 +182,7 @@ layers:
                          hudColorForPalette(props.palette_index), 0});
         if (slots.size() >= 8) break;
     }
-    if (slots.empty()) { std::cerr << "[main] Fatal: no materials registered.\n"; return 1; }
+    if (slots.empty()) { Log::error(kLogCat, "Fatal: no materials registered."); return 1; }
     // A starter stack of the topsoil so placing works before you've mined anything.
     slots.front().count = 32;
     size_t selectedSlot = 0;
@@ -269,7 +270,7 @@ layers:
     desc.eye_offset = kEyeOffset;
     const kinbody::BodyId player = kinbody::api().create_body(&desc);
     if (player == kinbody::kInvalidBody) {
-        std::cerr << "[main] Fatal: could not create player body.\n";
+        Log::error(kLogCat, "Fatal: could not create player body.");
         return 1;
     }
     const WorldCoord spawn = desc.center;
@@ -298,8 +299,8 @@ layers:
     std::vector<uint8_t> minimap(static_cast<size_t>(kMinimapW) * kMinimapH * 2, 0);
     double minimapTimer = 0.0;
 
-    std::cout << "[main] WASD/stick move, mouse/stick look, Space/A jump, LMB/RT mine,\n"
-                 "[main] RMB/LT place, 1-5 or bumpers select slot, F cursor, ESC quit.\n";
+    Log::info(kLogCat, "WASD/stick move, mouse/stick look, Space/A jump, LMB/RT mine, "
+                       "RMB/LT place, 1-5 or bumpers select slot, F cursor, ESC quit.");
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 

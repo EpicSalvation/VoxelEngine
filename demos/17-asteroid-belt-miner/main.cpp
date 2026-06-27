@@ -43,6 +43,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "core/RecipeValidation.h"
 #include "platform/Window.h"
@@ -63,7 +64,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -74,6 +74,8 @@
 #endif
 
 namespace {
+
+constexpr char kLogCat[] = "demo17";
 
 // Fallback decompose radius for any composite layer that does NOT set its own
 // decompose_distance_m. Both composite layers below specify one (macro = 280 m,
@@ -242,14 +244,14 @@ layers:
       shape: box
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
 
     // ── Plugin loading ──────────────────────────────────────────────────────────
     if (std::string(VOXEL_ASTEROID_FIELD_PLUGIN_PATH).empty()) {
-        std::cerr << "[main] Fatal: asteroid-field plugin not configured at build time.\n";
+        Log::error(kLogCat, "Fatal: asteroid-field plugin not configured at build time.");
         return 1;
     }
 
@@ -259,14 +261,14 @@ layers:
     engine.init(pm, world);
 
     if (pm.loadPlugin(VOXEL_ASTEROID_FIELD_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load asteroid-field plugin from "
-                  << VOXEL_ASTEROID_FIELD_PLUGIN_PATH << "\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load asteroid-field plugin from ")
+                             + VOXEL_ASTEROID_FIELD_PLUGIN_PATH).c_str());
         return 1;
     }
     try {
         validateRecipes(cfg, pm);
     } catch (const std::exception& e) {
-        std::cerr << "[main] Fatal: recipe validation: " << e.what() << "\n";
+        Log::error(kLogCat, (std::string("Fatal: recipe validation: ") + e.what()).c_str());
         return 1;
     }
 
@@ -276,7 +278,7 @@ layers:
     DecompositionManager decompMgr(world, pm, cfg, kWorldSeed);
 
     Layer* grid = world.layer("grid");
-    if (!grid) { std::cerr << "[main] Fatal: 'grid' layer not found.\n"; return 1; }
+    if (!grid) { Log::error(kLogCat, "Fatal: 'grid' layer not found."); return 1; }
 
     // ── Renderer ──────────────────────────────────────────────────────────────
     platform::Window window(1280, 720, "VoxelEngine — M16 Asteroid Belt Miner");
@@ -325,10 +327,9 @@ layers:
     GLFWwindow* glfwWin = window.glfwHandle();
     glfwSetInputMode(glfwWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
-    std::cout << "[main] Controls: WASD move, Space/Shift up-down, G jet/suit, "
-                 "LMB mine, F cursor, ESC quit.\n"
-              << "[main] Jet toward the gray blobs to decompose them; press G near a "
-                 "body to drop onto it under its own gravity.\n";
+    Log::info(kLogCat, "Controls: WASD move, Space/Shift up-down, G jet/suit, LMB mine, "
+                       "F cursor, ESC quit. Jet toward the gray blobs to decompose them; "
+                       "press G near a body to drop onto it under its own gravity.");
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 

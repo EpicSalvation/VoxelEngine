@@ -42,6 +42,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "core/Tuning.h"
 #include "net/NetworkManager.h"
@@ -64,7 +65,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <iostream>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -81,6 +81,7 @@ using chunkmath::VoxelCoord;
 
 namespace {
 
+constexpr char   kLogCat[] = "demo14";
 constexpr float  kFlySpeed  = 12.0f;
 constexpr float  kMouseSens = 0.002f;
 constexpr double kReachM    = 40.0;
@@ -184,7 +185,7 @@ int main() {
         try {
             return LayerConfig::loadFromString(kLayerYaml);
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -192,7 +193,7 @@ int main() {
     World world(cfg);
     Layer* terrain = world.layer("terrain");
     if (!terrain) {
-        std::cerr << "[main] Fatal: expected a 'terrain' layer.\n";
+        Log::error(kLogCat, "Fatal: expected a 'terrain' layer.");
         return 1;
     }
     const double cvs = terrain->voxelSizeM();
@@ -266,8 +267,8 @@ int main() {
     // keep simulating even when the flow responder is dropped.
     if (std::strlen(VOXEL_FIELD_SOURCES_PLUGIN_PATH) == 0 ||
         pm.loadPlugin(VOXEL_FIELD_SOURCES_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load field-sources plugin from '"
-                  << VOXEL_FIELD_SOURCES_PLUGIN_PATH << "'.\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load field-sources plugin from '")
+                             + VOXEL_FIELD_SOURCES_PLUGIN_PATH + "'.").c_str());
         return 1;
     }
 
@@ -306,15 +307,14 @@ int main() {
         if (load) {
             if (std::strlen(VOXEL_FLOW_PLUGIN_PATH) == 0 ||
                 (flowPlugin = pm.loadPlugin(VOXEL_FLOW_PLUGIN_PATH)) == kInvalidPluginId) {
-                std::cerr << "[main] Warning: could not load flow plugin from '"
-                          << VOXEL_FLOW_PLUGIN_PATH << "' — staying field-only.\n";
+                Log::warn(kLogCat, (std::string("Could not load flow plugin from '")
+                                    + VOXEL_FLOW_PLUGIN_PATH + "' — staying field-only.").c_str());
                 load = false;
             }
         }
         flowLoaded = load;
-        std::cout << "[main] Fluid response: "
-                  << (flowLoaded ? "flow (realizes water voxels)"
-                                 : "NONE (field-only, no geometry)") << "\n";
+        Log::info(kLogCat, flowLoaded ? "Fluid response: flow (realizes water voxels)"
+                                      : "Fluid response: NONE (field-only, no geometry)");
     };
     setFlow(true);   // start with the responder loaded
 
@@ -350,12 +350,11 @@ int main() {
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout <<
-        "[main] Flow and heat — water fills the left chamber and SEEPS through the\n"
-        "[main] porous sand dam into the right; heat races across the iron floor and\n"
-        "[main] barely warms the rock. Blue tint = fluid field, orange = heat field.\n"
-        "[main] Keys: 1 load flow (realizes water), 0 unload (field-only), F cursor,\n"
-        "[main] ESC quit.\n";
+    Log::info(kLogCat,
+        "Flow and heat — water fills the left chamber and SEEPS through the porous sand "
+        "dam into the right; heat races across the iron floor and barely warms the rock. "
+        "Blue tint = fluid field, orange = heat field. Keys: 1 load flow (realizes water), "
+        "0 unload (field-only), F cursor, ESC quit.");
 
     while (!window.shouldClose()) {
         window.pollEvents();

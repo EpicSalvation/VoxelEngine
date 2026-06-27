@@ -34,6 +34,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
@@ -50,7 +51,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -61,6 +61,7 @@
 
 namespace {
 
+constexpr char   kLogCat[] = "demo16";
 constexpr float  kFlySpeed  = 60.0f;
 constexpr float  kMouseSens = 0.002f;
 constexpr int    kLoadsPerFrame = 16;  // chunks generated+meshed per layer per frame
@@ -202,14 +203,14 @@ layers:
       shape: box
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
 
     // ── Plugin loading ──────────────────────────────────────────────────────────
     if (std::string(VOXEL_FLOATING_PLAYSPACE_PLUGIN_PATH).empty()) {
-        std::cerr << "[main] Fatal: floating-playspace plugin not configured at build time.\n";
+        Log::error(kLogCat, "Fatal: floating-playspace plugin not configured at build time.");
         return 1;
     }
 
@@ -219,8 +220,8 @@ layers:
     engine.init(pm, world);
 
     if (pm.loadPlugin(VOXEL_FLOATING_PLAYSPACE_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load floating-playspace plugin from "
-                  << VOXEL_FLOATING_PLAYSPACE_PLUGIN_PATH << "\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load floating-playspace plugin from ")
+                             + VOXEL_FLOATING_PLAYSPACE_PLUGIN_PATH).c_str());
         return 1;
     }
 
@@ -229,14 +230,15 @@ layers:
         StreamedLayer s;
         s.layer = world.layer(name);
         if (!s.layer) {
-            std::cerr << "[main] Fatal: layer '" << name << "' not found.\n";
+            Log::error(kLogCat, (std::string("Fatal: layer '") + name + "' not found.").c_str());
             std::exit(1);
         }
         s.voxelSizeM = s.layer->voxelSizeM();
         for (const auto& g : pm.layerGenerators())
             if (g.layer_name == name) { s.genFn = g.fn; break; }
         if (!s.genFn) {
-            std::cerr << "[main] Fatal: no generator registered for layer '" << name << "'.\n";
+            Log::error(kLogCat, (std::string("Fatal: no generator registered for layer '")
+                                 + name + "'.").c_str());
             std::exit(1);
         }
         return s;
@@ -273,8 +275,8 @@ layers:
     GLFWwindow* glfwWin = window.glfwHandle();
     glfwSetInputMode(glfwWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
-    std::cout << "[main] Controls: WASD fly, Space/Shift up/down, F cursor, ESC quit.\n"
-              << "[main] Zero-g flythrough: the island streams as a BOX, the backdrop as a SHELL.\n";
+    Log::info(kLogCat, "Controls: WASD fly, Space/Shift up/down, F cursor, ESC quit. "
+                       "Zero-g flythrough: the island streams as a BOX, the backdrop as a SHELL.");
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
