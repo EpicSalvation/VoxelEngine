@@ -1,5 +1,6 @@
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "platform/Window.h"
 #include "plugins/ExamplePlugin.h"
@@ -11,7 +12,9 @@
 
 #include <chrono>
 #include <cmath>
-#include <iostream>
+#include <string>
+
+namespace { constexpr char kLogCat[] = "demo01"; }
 
 int main() {
     // M1: validate layer configuration at startup — bad config is a hard error.
@@ -22,10 +25,11 @@ layers:
     voxel_size_m: 1.0
     mode: terminal
 )");
-        std::cout << "[main] Layer config OK. "
-                  << layerConfig.layers().size() << " layer(s) defined.\n";
+        Log::info(kLogCat, (std::string("Layer config OK. ")
+                            + std::to_string(layerConfig.layers().size())
+                            + " layer(s) defined.").c_str());
     } catch (const std::exception& e) {
-        std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+        Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
         return 1;
     }
 
@@ -33,10 +37,10 @@ layers:
     PluginManager pluginManager;
     pluginManager.loadPluginsFromDirectory("plugins");
     pluginManager.wireInPlugin(voxel_plugin_init);
-    std::cout << "[main] Registered materials: "
-              << pluginManager.materials().size() << "\n";
-    std::cout << "[main] Registered layer generators: "
-              << pluginManager.layerGenerators().size() << "\n";
+    Log::info(kLogCat, (std::string("Registered materials: ")
+                        + std::to_string(pluginManager.materials().size())).c_str());
+    Log::info(kLogCat, (std::string("Registered layer generators: ")
+                        + std::to_string(pluginManager.layerGenerators().size())).c_str());
 
     Engine engine;
     engine.start();
@@ -82,8 +86,8 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] Rendering. Press F to toggle free-camera / auto-orbit.\n";
-    std::cout << "[main] Free-cam controls: WASD to move, Space/Shift for up/down, mouse to look.\n";
+    Log::info(kLogCat, "Rendering. Press F to toggle free-camera / auto-orbit.");
+    Log::info(kLogCat, "Free-cam controls: WASD to move, Space/Shift for up/down, mouse to look.");
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -100,7 +104,7 @@ layers:
             glfwSetInputMode(glfwWin, GLFW_CURSOR,
                              freeCam ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
             firstMouse = true;
-            std::cout << "[main] " << (freeCam ? "Free-camera" : "Auto-orbit") << " mode.\n";
+            Log::info(kLogCat, freeCam ? "Free-camera mode." : "Auto-orbit mode.");
         }
         prevKeyF = curKeyF;
 

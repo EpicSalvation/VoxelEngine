@@ -11,6 +11,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "platform/Window.h"
 #include "plugins/ExamplePlugin.h"
@@ -25,11 +26,12 @@
 
 #include <chrono>
 #include <cmath>
-#include <iostream>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace {
+constexpr char   kLogCat[] = "demo02";
 constexpr int    kLoadsPerFrame = 2;     // budget generated/meshed chunks per frame
 constexpr float  kMoveSpeed     = 24.0f;
 constexpr float  kMouseSens     = 0.002f;
@@ -48,7 +50,7 @@ layers:
     view_distance_chunks: 5
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -67,7 +69,7 @@ layers:
         }
     }
     if (!generator) {
-        std::cerr << "[main] Fatal: no 'terrain' layer generator registered.\n";
+        Log::error(kLogCat, "Fatal: no 'terrain' layer generator registered.");
         return 1;
     }
 
@@ -114,8 +116,8 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] Streaming terrain. WASD + mouse to fly, Space/Shift up/down, "
-                 "F toggles cursor, ESC quits.\n";
+    Log::info(kLogCat, "Streaming terrain. WASD + mouse to fly, Space/Shift up/down, "
+                       "F toggles cursor, ESC quits.");
 
     while (!window.shouldClose()) {
         window.pollEvents();

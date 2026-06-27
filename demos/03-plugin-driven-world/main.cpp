@@ -18,6 +18,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
@@ -31,7 +32,7 @@
 
 #include <chrono>
 #include <cmath>
-#include <iostream>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -43,6 +44,7 @@
 #endif
 
 namespace {
+constexpr char   kLogCat[] = "demo03";
 constexpr int    kLoadsPerFrame = 2;     // budget generated/meshed chunks per frame
 constexpr float  kMoveSpeed     = 24.0f;
 constexpr float  kMouseSens     = 0.002f;
@@ -61,7 +63,7 @@ layers:
     view_distance_chunks: 5
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -71,12 +73,12 @@ layers:
     // from it). The water plugin is loaded on demand via the P key.
     PluginManager pluginManager;
     if (std::string(VOXEL_BASE_PLUGIN_PATH).empty()) {
-        std::cerr << "[main] Fatal: base plugin path not configured at build time.\n";
+        Log::error(kLogCat, "Fatal: base plugin path not configured at build time.");
         return 1;
     }
     if (pluginManager.loadPlugin(VOXEL_BASE_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load base-terrain plugin from "
-                  << VOXEL_BASE_PLUGIN_PATH << "\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load base-terrain plugin from ")
+                             + VOXEL_BASE_PLUGIN_PATH).c_str());
         return 1;
     }
 
@@ -89,7 +91,7 @@ layers:
         }
     }
     if (!generator) {
-        std::cerr << "[main] Fatal: no 'terrain' layer generator registered.\n";
+        Log::error(kLogCat, "Fatal: no 'terrain' layer generator registered.");
         return 1;
     }
 
@@ -150,9 +152,9 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] Plugin-driven world. WASD + mouse to fly, Space/Shift up/down, "
-                 "F toggles cursor, P toggles the water plugin, ESC quits.\n"
-                 "[main] Water plugin is OFF - press P to load it.\n";
+    Log::info(kLogCat, "Plugin-driven world. WASD + mouse to fly, Space/Shift up/down, "
+                       "F toggles cursor, P toggles the water plugin, ESC quits. "
+                       "Water plugin is OFF - press P to load it.");
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -178,20 +180,21 @@ layers:
         if (curKeyP && !prevKeyP) {
             if (waterPluginId == kInvalidPluginId) {
                 if (waterPath.empty()) {
-                    std::cerr << "[main] Water plugin path not configured at build time.\n";
+                    Log::warn(kLogCat, "Water plugin path not configured at build time.");
                 } else {
                     waterPluginId = pluginManager.loadPlugin(waterPath);
                     if (waterPluginId == kInvalidPluginId)
-                        std::cerr << "[main] Failed to load water plugin from " << waterPath << "\n";
+                        Log::warn(kLogCat, (std::string("Failed to load water plugin from ")
+                                            + waterPath).c_str());
                     else {
-                        std::cout << "[main] Water plugin ON.\n";
+                        Log::info(kLogCat, "Water plugin ON.");
                         regenerateWorld();
                     }
                 }
             } else {
                 pluginManager.unloadPlugin(waterPluginId);
                 waterPluginId = kInvalidPluginId;
-                std::cout << "[main] Water plugin OFF.\n";
+                Log::info(kLogCat, "Water plugin OFF.");
                 regenerateWorld();
             }
         }

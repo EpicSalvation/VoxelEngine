@@ -22,6 +22,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "io/ChunkPersistence.h"
 #include "platform/Window.h"
@@ -40,7 +41,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -50,6 +50,7 @@
 #endif
 
 namespace {
+constexpr char   kLogCat[] = "demo04";
 constexpr int    kLoadsPerFrame = 2;      // budget generated/meshed chunks per frame
 constexpr float  kFlySpeed      = 24.0f;  // free-fly camera speed
 constexpr float  kMouseSens     = 0.002f;
@@ -76,7 +77,7 @@ layers:
     view_distance_chunks: 5
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -85,12 +86,12 @@ layers:
     // The world's materials and terrain come entirely from the base-terrain plugin.
     PluginManager pluginManager;
     if (std::string(VOXEL_BASE_PLUGIN_PATH).empty()) {
-        std::cerr << "[main] Fatal: base plugin path not configured at build time.\n";
+        Log::error(kLogCat, "Fatal: base plugin path not configured at build time.");
         return 1;
     }
     if (pluginManager.loadPlugin(VOXEL_BASE_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load base-terrain plugin from "
-                  << VOXEL_BASE_PLUGIN_PATH << "\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load base-terrain plugin from ")
+                             + VOXEL_BASE_PLUGIN_PATH).c_str());
         return 1;
     }
 
@@ -103,7 +104,7 @@ layers:
         }
     }
     if (!generator) {
-        std::cerr << "[main] Fatal: no 'terrain' layer generator registered.\n";
+        Log::error(kLogCat, "Fatal: no 'terrain' layer generator registered.");
         return 1;
     }
 
@@ -115,13 +116,16 @@ layers:
     for (size_t i = 0; i < pluginManager.materials().size() && i < 9; ++i)
         buildMaterials.push_back(pluginManager.materials()[i].material_id);
     if (buildMaterials.empty()) {
-        std::cerr << "[main] Fatal: no materials registered by the plugin.\n";
+        Log::error(kLogCat, "Fatal: no materials registered by the plugin.");
         return 1;
     }
     size_t selectedMaterial = 0;
-    std::cout << "[main] Build materials (press the number to select):\n";
-    for (size_t i = 0; i < buildMaterials.size(); ++i)
-        std::cout << "       " << (i + 1) << " - " << buildMaterials[i] << "\n";
+    {
+        std::string mats = "Build materials (press the number to select):";
+        for (size_t i = 0; i < buildMaterials.size(); ++i)
+            mats += " " + std::to_string(i + 1) + "=" + buildMaterials[i];
+        Log::info(kLogCat, mats.c_str());
+    }
 
     Engine engine;
     engine.start();
@@ -143,7 +147,7 @@ layers:
     // identity ties a save to this layer's voxel/chunk size.
     persistence::WorldSave save("voxelsave",
         persistence::WorldIdentity{terrain.voxel_size_m, terrain.chunk_size_voxels});
-    std::cout << "[main] Save directory: " << save.directory() << "\n";
+    Log::info(kLogCat, (std::string("Save directory: ") + save.directory()).c_str());
 
     std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash> meshes;
 
@@ -202,9 +206,9 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] Build/break the world. WASD + mouse to fly, Space/Shift up/down,\n"
-                 "[main] hold left mouse = break (harder voxels take longer), right mouse = place,\n"
-                 "[main] 1-9 = material, F = cursor, ESC quits.\n";
+    Log::info(kLogCat, "Build/break the world. WASD + mouse to fly, Space/Shift up/down, "
+                       "hold left mouse = break (harder voxels take longer), right mouse = "
+                       "place, 1-9 = material, F = cursor, ESC quits.");
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -234,8 +238,7 @@ layers:
                 vy = 0.0;
                 grounded = false;
             }
-            std::cout << "[main] Mode: " << (walkMode ? "WALK (gravity + collision)"
-                                                      : "FLY") << "\n";
+            Log::info(kLogCat, walkMode ? "Mode: WALK (gravity + collision)" : "Mode: FLY");
         }
         prevKeyG = curKeyG;
 
@@ -244,8 +247,8 @@ layers:
             if (glfwGetKey(glfwWin, GLFW_KEY_1 + i) == GLFW_PRESS &&
                 selectedMaterial != static_cast<size_t>(i)) {
                 selectedMaterial = static_cast<size_t>(i);
-                std::cout << "[main] Selected material: "
-                          << buildMaterials[selectedMaterial] << "\n";
+                Log::info(kLogCat, (std::string("Selected material: ")
+                                    + buildMaterials[selectedMaterial]).c_str());
             }
         }
 
@@ -440,8 +443,8 @@ layers:
 
     // Persist any edits still resident so they survive the next launch.
     int savedOnQuit = save.saveDirtyChunks(world);
-    std::cout << "[main] Saved " << savedOnQuit << " edited chunk(s) to "
-              << save.directory() << "\n";
+    Log::info(kLogCat, (std::string("Saved ") + std::to_string(savedOnQuit)
+                        + " edited chunk(s) to " + save.directory()).c_str());
 
     for (auto& kv : meshes) kv.second.destroy();
     renderer.shutdown();
