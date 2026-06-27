@@ -1,18 +1,25 @@
-// recipe-world plugin — the M9 composition-recipe showcase, driving demo 09.
+// recipe-world plugin — the composition-recipe showcase, driving demo 09.
 //
 // Where layered-world (demo 05) decomposed a macro voxel by simply re-running a
 // child generator over its subvolume, recipe-world attaches a real composition
-// RECIPE to its composite "blocks" layer:
+// RECIPE to its composite "blocks" layer — a DECLARATIVE description of how a
+// coarse macro voxel fills itself when it decomposes:
 //
 //   - interior material distribution — granite-dominant with basalt, arranged
 //     by the built-in "value" noise field
 //   - top boundary override — a two-voxel SOIL cap on the macro voxel's upper
-//     face, distinct from the stony interior
+//     (gravity-opposing) face, distinct from the stony interior
 //   - feature overlays, in order — a CAVE-network generator that carves connected
 //     voids, then an ORE-vein generator that replaces granite pockets with iron
-//   - a seed parameter — "cave_density" — biasing the layer below; demo 09
-//     toggles it to visibly change cave density while each value regenerates
-//     identically (determinism)
+//
+// Depth-driven caves (demo 09's seed-parameter lesson): the cave feature does NOT
+// carve at a constant density. It reads the engine-cascaded "__altitude" param —
+// the decomposing macro voxel's center height, which DecompositionManager injects
+// into every recipe's effective params (ARCHITECTURE §6/§10 cross-step cascade) —
+// and blends it with the recipe's static knobs so caves thicken with depth. That
+// is how a cascaded parameter shapes a recipe SPATIALLY and DETERMINISTICALLY: no
+// runtime toggle, each macro simply decomposes from its own position, so an
+// evicted-and-revisited block regenerates byte-for-byte.
 //
 // The two feature generators are plain pure functions of (world position, seed)
 // — no rand/time/global state — registered by id so the recipe can reference
@@ -50,7 +57,9 @@ const double kBlocksVoxelSizeM  = 8.0;
 const double kBedrockVoxelSizeM = 2.0;
 
 // The composite ground is a solid slab from y=0 up to this height (world m).
-constexpr double kGroundTopM = 24.0;
+// Deep enough (six 8 m macro layers) that the depth-driven cave density reads as
+// a clear gradient: sparse near the surface, swiss-cheese near the bottom.
+constexpr double kGroundTopM = 48.0;
 
 // The immutable bedrock floor occupies world Y in [kBedrockBottomM, 0): a solid
 // slab flush with the bottom of the terrain, so a player who digs or falls
@@ -114,17 +123,37 @@ double value3(double x, double y, double z, uint64_t seed, double frequency) {
     return lerp(lerp(x00, x10, ty), lerp(x01, x11, ty), tz);  // [0,1)
 }
 
-// ── Feature generator: cave network ──────────────────────────────────────────
+// ── Feature generator: cave network (depth-driven) ───────────────────────────
 // Carves connected voids out of the solid grid where a coherent 3D value-noise
-// field falls below "cave_density" (0..1). Higher density => more void; 0 carves
-// nothing, 1 carves everything. "scale" sets the cave feature size in meters.
-// Only solid voxels are carved (empty space is left alone), so the void fraction
-// is measured against the rock the recipe placed. Pure in (position, seed).
+// field falls below the LOCAL cave density. The density is not constant: it ramps
+// from "cave_density_surface" at the top of the slab to that plus
+// "cave_density_depth" at the bottom, interpolated by the macro voxel's depth
+// below "surface_y". The depth comes from the engine-cascaded "__altitude" param
+// (the decomposing macro's center height — see the file header), so the SAME
+// recipe carves more the deeper it decomposes, deterministically per macro and
+// with no runtime mutation. "scale" sets the cave feature size in meters. Only
+// solid voxels are carved (empty space is left alone). Pure in (position, seed).
 void cave_feature(WorldCoord origin, double vs, int n, Voxel* inout,
                   const RecipeParam* params, size_t count, uint64_t seed, void*) {
-    double density = recipe_param_num(params, count, "cave_density", 0.35);
-    double scale   = recipe_param_num(params, count, "scale", 12.0);
-    density = std::clamp(density, 0.0, 1.0);
+    const double scale = recipe_param_num(params, count, "scale", 12.0);
+    // An explicit "cave_density" pins the carve threshold directly (the flat
+    // single-density form — used when a caller, or an ancestor seed parameter,
+    // wants uniform caves regardless of depth). When it is absent (-1 sentinel),
+    // ramp the density with depth from the cascaded "__altitude" instead.
+    const double explicitDensity = recipe_param_num(params, count, "cave_density", -1.0);
+    double density;
+    if (explicitDensity >= 0.0) {
+        density = std::clamp(explicitDensity, 0.0, 1.0);
+    } else {
+        const double surfaceDensity = recipe_param_num(params, count, "cave_density_surface", 0.10);
+        const double depthDensity   = recipe_param_num(params, count, "cave_density_depth", 0.50);
+        const double surfaceY       = recipe_param_num(params, count, "surface_y", kGroundTopM);
+        // Cascaded macro altitude; default to the surface (depthFrac 0 => no caves)
+        // when absent, so the feature is harmless if invoked outside the cascade.
+        const double altitude       = recipe_param_num(params, count, "__altitude", surfaceY);
+        const double depthFrac = std::clamp((surfaceY - altitude) / std::max(1.0, surfaceY), 0.0, 1.0);
+        density = std::clamp(surfaceDensity + depthDensity * depthFrac, 0.0, 1.0);
+    }
     const double freq = (scale > 0.0) ? (1.0 / scale) : (1.0 / 12.0);
 
     for (int z = 0; z < n; ++z)
@@ -229,9 +258,14 @@ VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
 
     MaterialWeight topMats[1] = {{"soil", 1.0f}};
 
-    RecipeParam caveParams[1];
-    caveParams[0].key = "scale"; caveParams[0].kind = RecipeParamKind::Number;
-    caveParams[0].number = 12.0;
+    // Cave knobs: feature size plus the depth ramp the feature blends with the
+    // engine-cascaded "__altitude" (see cave_feature). Sparse caves at the surface
+    // (0.08), heavy caves at the slab bottom (0.08 + 0.50).
+    RecipeParam caveParams[4];
+    caveParams[0].key = "scale";                caveParams[0].kind = RecipeParamKind::Number; caveParams[0].number = 12.0;
+    caveParams[1].key = "cave_density_surface"; caveParams[1].kind = RecipeParamKind::Number; caveParams[1].number = 0.08;
+    caveParams[2].key = "cave_density_depth";   caveParams[2].kind = RecipeParamKind::Number; caveParams[2].number = 0.50;
+    caveParams[3].key = "surface_y";            caveParams[3].kind = RecipeParamKind::Number; caveParams[3].number = kGroundTopM;
 
     RecipeParam oreParams[3];
     oreParams[0].key = "scale";         oreParams[0].kind = RecipeParamKind::Number; oreParams[0].number = 6.0;
@@ -239,13 +273,8 @@ VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
     oreParams[2].key = "target_palette"; oreParams[2].kind = RecipeParamKind::Number; oreParams[2].number = kGraniteIdx;
 
     FeatureRef feats[2];
-    feats[0].generator_id = "cave"; feats[0].params = caveParams; feats[0].param_count = 1;
+    feats[0].generator_id = "cave"; feats[0].params = caveParams; feats[0].param_count = 4;
     feats[1].generator_id = "ore";  feats[1].params = oreParams;  feats[1].param_count = 3;
-
-    // Parent seed parameter: biases the child grid. Demo 09 toggles this value.
-    RecipeParam seedParams[1];
-    seedParams[0].key = "cave_density"; seedParams[0].kind = RecipeParamKind::Number;
-    seedParams[0].number = 0.45;
 
     RecipeDesc recipe{};
     recipe.interior.materials         = interiorMats;
@@ -259,8 +288,6 @@ VOXEL_PLUGIN_EXPORT int voxel_plugin_init(PluginContext* ctx) {
     recipe.top.depth                  = 2;
     recipe.top.distribution.materials      = topMats;
     recipe.top.distribution.material_count = 1;
-    recipe.seed_parameters            = seedParams;
-    recipe.seed_parameter_count       = 1;
 
     ctx->register_recipe(ctx, "blocks", &recipe);
     return 0;

@@ -1,59 +1,61 @@
-// M9 demo — recipe-built voxel.
+// Demo 09 — recipe-built voxel.
 //
-// A three-layer world driven by a composition RECIPE (the recipe-world plugin):
+// The composite-RECIPE rung of the ladder. Where demo 05 decomposed a macro voxel
+// by re-running a child generator, this world attaches a declarative composition
+// recipe to its composite "blocks" layer (the recipe-world plugin), and the
+// engine-owned DecompositionManager resolves and applies it. A recipe describes
+// HOW a coarse macro voxel fills itself when it decomposes (ARCHITECTURE §6):
 //
-//   - "blocks"  — a composite layer of 8 m macro voxels forming a solid ground
-//                 slab. Rendered as atomic gray blocks until decomposed.
-//   - "terrain" — the fine 1 m child layer the macro voxels decompose INTO. Its
-//                 voxels are produced by the recipe, NOT a plain generator: a
-//                 granite/basalt material distribution, a two-voxel soil cap on
-//                 each macro voxel's top face, then a cave-network overlay and an
-//                 ore-vein overlay (in that order).
-//   - "bedrock" — an immutable 2 m floor slab beneath the world. It never
-//                 decomposes; it only catches a player who walks into a cave or
-//                 falls through the bottom of the terrain, so nobody drops into
-//                 the void.
+//   1. interior  — a granite/basalt material distribution arranged by a noise field
+//   2. top cap   — a 2-voxel SOIL boundary on the macro's gravity-opposing face
+//   3. caves     — a feature overlay carving connected voids
+//   4. ore veins — a feature overlay threading iron through the granite bulk
 //
-// Decomposition is recipe-driven: each job carries the resolved recipe plus a
-// deterministic seed from (world_seed, macro VoxelCoord), so an evicted macro
-// regenerates byte-for-byte on revisit. Trigger it two ways — fly within range
-// of a block (approach), or LEFT-CLICK a block (composite picking, the M6
-// deferral). Press T to toggle the parent seed parameter "cave_density" between
-// two values: the world re-decomposes with visibly different cave density, and
-// each value regenerates identically when you return to it.
+// Two things this teaches beyond demo 05:
+//   * Declarative composition. The fine interior is not hand-written by a
+//     generator; it is COMPOSED from a recipe's distribution + boundary + ordered
+//     feature overlays. Dig into a decomposed block to see the result in section:
+//     soil cap on top, stone bulk, cave voids, ore veins.
+//   * A cascaded seed parameter shaping the recipe SPATIALLY. The cave feature
+//     reads the engine-cascaded "__altitude" (the decomposing macro's height,
+//     injected into the recipe's effective params by the manager — §6/§10), so
+//     caves thicken with depth. Dig a shaft straight down: sparse caves near the
+//     surface give way to swiss-cheese near bedrock. It is fully deterministic —
+//     fly away so the fine terrain cascade-collapses back to coarse blocks, return,
+//     and every block regenerates byte-for-byte (no runtime state, just position).
+//
+// Everything streams through the DecompositionManager: it decomposes "blocks" on
+// approach, streams the immutable "bedrock" floor under its own volume/budget, and
+// collapses out-of-range fine terrain so the resident mesh count stays bounded.
 //
 // Controls: WASD move, mouse look, Space/Shift up/down (fly) or jump (walk),
-// G walk (gravity + collision), LEFT-CLICK decompose the targeted block,
-// T toggle cave density, F cursor, ESC quits.
+// G walk (gravity + collision), LEFT-CLICK mine, RIGHT-CLICK place soil,
+// F cursor, ESC quits.
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "core/RecipeValidation.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
 #include "renderer/ChunkMesh.h"
-#include "renderer/LODManager.h"
 #include "world/Chunk.h"
 #include "world/ChunkCoordMath.h"
-#include "world/DecompositionWorker.h"
-#include "world/MacroVoxel.h"
-#include "world/Recipe.h"
-#include "world/RecipeResolve.h"
-#include "world/ResolvedRecipe.h"
+#include "world/DecompositionManager.h"
 #include "world/VoxelCollision.h"
+#include "world/VoxelRaycast.h"
 #include "world/World.h"
+#include "simulation/RemovalAccumulator.h"
 
 #include <GLFW/glfw3.h>
 
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
-#include <memory>
+#include <cstdio>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #ifndef VOXEL_RECIPE_PLUGIN_PATH
@@ -61,13 +63,19 @@
 #endif
 
 namespace {
-constexpr int    kStreamPerFrame    = 2;
-constexpr int    kDecomposePerFrame = 48;
-constexpr double kDecomposeRadiusM  = 120.0;
-constexpr double kTerrainKeepRadiusM = 136.0;  // > decompose radius (hysteresis); bounds resident terrain
-constexpr float  kFlySpeed          = 28.0f;
-constexpr float  kMouseSens         = 0.002f;
-constexpr double kPickReachM        = 96.0;    // composite-picking ray reach
+constexpr char kLogCat[] = "demo09";
+
+// Decompose composite macro voxels within this range of the camera. The manager
+// streams the "blocks" root out to its view distance and decomposes only inside
+// this bubble; the per-layer resident_chunk_budget collapses the farthest fine
+// terrain back to coarse blocks, keeping the resident mesh count under bgfx's
+// 4096 static-buffer ceiling (ARCHITECTURE §10).
+constexpr double kApproachRadiusM = 64.0;
+
+constexpr double kReachM    = 8.0;     // voxel-pick reach (metres)
+constexpr float  kToolPower = 5.0f;    // dig speed (units/s)
+constexpr float  kFlySpeed  = 28.0f;
+constexpr float  kMouseSens = 0.002f;
 
 constexpr double kWalkSpeed = 6.0;
 constexpr double kGravity   = 25.0;
@@ -75,42 +83,83 @@ constexpr double kJumpSpeed = 8.0;
 constexpr double kEyeOffset = 0.7;
 const glm::dvec3 kPlayerHalf(0.3, 0.9, 0.3);
 
-// World seed for decomposition determinism. The per-decomposition seed folds
-// this with the macro VoxelCoord, so each macro voxel decomposes the same way
-// every time (and differently from its neighbors).
+// World seed for decomposition determinism. The per-decomposition seed folds this
+// with the macro VoxelCoord, so each macro decomposes the same way every time.
 constexpr uint64_t kWorldSeed = 0x9E3779B97F4A7C15ull;
-
-// The two parent seed-parameter values the T key toggles between.
-constexpr double kCaveDensityLow  = 0.20;
-constexpr double kCaveDensityHigh = 0.55;
 
 using MeshStore = std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash>;
 
-uint64_t macroSeed(const chunkmath::VoxelCoord& macro) {
-    return voxel_seed_mix(kWorldSeed, chunkmath::VoxelCoordHash{}(macro));
+// Replace (or create) a chunk mesh, destroying old GPU buffers first (plain
+// assignment leaks bgfx handles into the capped static-buffer pool). All-air
+// chunks hold no buffers and are kept OUT of the store.
+void rebuildMesh(MeshStore& ms, const ChunkCoord& cc, const Chunk& chunk) {
+    auto it = ms.find(cc);
+    if (it != ms.end()) { it->second.destroy(); ms.erase(it); }
+    ChunkMesh mesh = ChunkMesh::build(chunk);
+    if (mesh.empty()) return;
+    ms.emplace(cc, std::move(mesh));
 }
 
-// The child terrain chunks covering one composite macro voxel's subvolume.
-std::vector<ChunkCoord> childChunksForMacro(const chunkmath::VoxelCoord& macro,
-                                            const Layer& parent, const Layer& child) {
-    const double parentVoxel    = parent.voxelSizeM();
-    const double childChunkSize  = child.voxelSizeM() * child.chunkSizeVoxels();
-    const int    span = std::max(1, static_cast<int>(std::llround(parentVoxel / childChunkSize)));
-    const WorldCoord origin = chunkmath::voxelOrigin(macro, parentVoxel);
-    const ChunkCoord base =
-        chunkmath::worldToChunk(origin, child.voxelSizeM(), child.chunkSizeVoxels());
-    std::vector<ChunkCoord> out;
-    out.reserve(static_cast<size_t>(span) * span * span);
-    for (int dz = 0; dz < span; ++dz)
-        for (int dy = 0; dy < span; ++dy)
-            for (int dx = 0; dx < span; ++dx)
-                out.push_back(ChunkCoord{base.x + dx, base.y + dy, base.z + dz});
-    return out;
+// Apply one DecompositionManager::tick() diff set to the per-layer mesh stores
+// (the M10 front-end contract; identical in shape to demo 10's applyDiffs). The
+// manager owns all decomposition/streaming state and only reports which meshes to
+// build or destroy. Immutable-layer diffs (the bedrock floor) arrive with the
+// layer name in compositeLayerName and their load/evict in newCompChunks/evicted.
+void applyDiffs(const std::vector<LayerTickDiff>& diffs, World& world,
+                std::unordered_map<std::string, MeshStore>& meshStores) {
+    for (const LayerTickDiff& d : diffs) {
+        MeshStore& compMeshes = meshStores[d.compositeLayerName];
+        Layer* compLayer  = world.layer(d.compositeLayerName);
+        Layer* childLayer = d.childLayerName.empty() ? nullptr
+                                                     : world.layer(d.childLayerName);
+
+        for (const ChunkCoord& cc : d.newCompChunks) {
+            if (!compLayer) continue;
+            if (const Chunk* chunk = compLayer->getChunk(cc)) rebuildMesh(compMeshes, cc, *chunk);
+        }
+        for (const ChunkCoord& cc : d.evictedCompChunks) {
+            auto it = compMeshes.find(cc);
+            if (it != compMeshes.end()) { it->second.destroy(); compMeshes.erase(it); }
+        }
+
+        // Macro voxels whose block state changed: remesh the owning composite chunk
+        // (newly decomposed cleared its block; re-atomized restored it). One terrain
+        // chunk per macro here, so the owning-chunk lookup is the dedupe.
+        if (compLayer) {
+            for (const chunkmath::VoxelCoord& macro : d.newlyDecomposed) {
+                const ChunkCoord cc =
+                    chunkmath::voxelToChunkLocal(macro, compLayer->chunkSizeVoxels()).chunk;
+                if (const Chunk* chunk = compLayer->getChunk(cc)) rebuildMesh(compMeshes, cc, *chunk);
+            }
+            for (const chunkmath::VoxelCoord& macro : d.newlyAtomic) {
+                const ChunkCoord cc =
+                    chunkmath::voxelToChunkLocal(macro, compLayer->chunkSizeVoxels()).chunk;
+                if (const Chunk* chunk = compLayer->getChunk(cc)) rebuildMesh(compMeshes, cc, *chunk);
+            }
+        }
+
+        if (childLayer) {
+            MeshStore& childMeshes = meshStores[d.childLayerName];
+            for (const ChunkCoord& cc : d.newChildChunks)
+                if (const Chunk* chunk = childLayer->getChunk(cc)) rebuildMesh(childMeshes, cc, *chunk);
+            for (const ChunkCoord& cc : d.evictedChildChunks) {
+                auto it = childMeshes.find(cc);
+                if (it != childMeshes.end()) { it->second.destroy(); childMeshes.erase(it); }
+            }
+        }
+    }
 }
 
 }  // namespace
 
 int main() {
+    Log::setMinLevel(Log::Level::Info);
+
+    // ── Layer config ────────────────────────────────────────────────────────────
+    // Coarsest-first. blocks(8 m)→bedrock(2 m)→terrain(1 m) satisfies the adjacent
+    // strictly-descending integer-ratio rule (8/2=4, 2/1=2). Parent voxel (8 m) ==
+    // terrain chunk world size (1 m × 8), so each macro decomposes into exactly one
+    // terrain chunk. resident_chunk_budget bounds resident meshes (M16 L5).
     LayerConfig layerConfig = [] {
         try {
             return LayerConfig::loadFromString(R"(
@@ -121,138 +170,100 @@ layers:
     decompose_to: terrain
     chunk_size_voxels: 8
     view_distance_chunks: 4
+    resident_chunk_budget: 256
   - name: bedrock
     voxel_size_m: 2.0
     mode: immutable
     chunk_size_voxels: 8
     view_distance_chunks: 6
+    resident_chunk_budget: 512
   - name: terrain
     voxel_size_m: 1.0
     mode: terminal
     chunk_size_voxels: 8
     view_distance_chunks: 6
+    resident_chunk_budget: 2048
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
 
-    PluginManager pluginManager;
+    // ── Plugin loading ──────────────────────────────────────────────────────────
     if (std::string(VOXEL_RECIPE_PLUGIN_PATH).empty()) {
-        std::cerr << "[main] Fatal: recipe-world plugin path not configured at build time.\n";
+        Log::error(kLogCat, "Fatal: recipe-world plugin path not configured at build time.");
         return 1;
     }
 
     World world(layerConfig);
-
-    // Engine::init registers the built-in noise floor (the recipe's interior uses
-    // the built-in "value" field) and the .vox handlers.
+    // Engine::init registers the built-in "value" noise (the recipe's interior and
+    // cave features use it) and the .vox handlers.
     Engine engine;
+    PluginManager pluginManager;
     engine.init(pluginManager, world);
 
     if (pluginManager.loadPlugin(VOXEL_RECIPE_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load recipe-world plugin from "
-                  << VOXEL_RECIPE_PLUGIN_PATH << "\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load recipe-world plugin from ")
+                             + VOXEL_RECIPE_PLUGIN_PATH).c_str());
         return 1;
     }
 
-    // Startup validation: every composite layer must resolve to a recipe whose
-    // feature/noise ids are all registered (a hard error, not a silent skip).
+    // Startup validation: the composite layer's recipe must resolve to registered
+    // feature/noise ids (a hard error, not a silent skip).
     try {
         validateRecipes(layerConfig, pluginManager);
     } catch (const std::exception& e) {
-        std::cerr << "[main] Fatal: recipe validation failed: " << e.what() << "\n";
+        Log::error(kLogCat, (std::string("Fatal: recipe validation failed: ") + e.what()).c_str());
         return 1;
     }
 
-    auto findGenerator = [&](const std::string& name) {
-        for (const auto& g : pluginManager.layerGenerators())
-            if (g.layer_name == name) return g;
-        return RegisteredLayerGenerator{name, nullptr, nullptr, kInvalidPluginId};
-    };
-    const RegisteredLayerGenerator blocksGen  = findGenerator("blocks");
-    const RegisteredLayerGenerator bedrockGen = findGenerator("bedrock");
-    const Recipe* baseRecipe = pluginManager.findRecipe("blocks");
-    if (!blocksGen.fn || !bedrockGen.fn || !baseRecipe) {
-        std::cerr << "[main] Fatal: recipe-world plugin did not register the blocks "
-                     "and bedrock generators plus the blocks recipe.\n";
+    Layer* blocks  = world.layer("blocks");
+    Layer* terrain = world.layer("terrain");
+    Layer* bedrock = world.layer("bedrock");
+    if (!blocks || !terrain || !bedrock) {
+        Log::error(kLogCat, "Fatal: expected blocks/terrain/bedrock layers.");
         return 1;
     }
 
-    // Resolve the recipe for a given cave_density (the parent seed parameter the
-    // T key toggles). Re-resolving threads the new value through the effective
-    // param set handed to the cave generator (see RecipeResolve / ARCHITECTURE §6).
-    auto resolveForDensity = [&](double caveDensity) {
-        Recipe r = *baseRecipe;
-        bool found = false;
-        for (RecipeParamValue& p : r.seed_parameters)
-            if (p.key == "cave_density") { p.number = caveDensity; found = true; }
-        if (!found) {
-            RecipeParamValue p;
-            p.key = "cave_density"; p.kind = RecipeParamKind::Number; p.number = caveDensity;
-            r.seed_parameters.push_back(p);
-        }
-        return std::make_shared<const ResolvedRecipe>(resolveRecipe(r, pluginManager));
-    };
+    // ── Engine-owned cascade orchestrator ───────────────────────────────────────
+    // Resolves and applies the "blocks" recipe on decomposition, streams the
+    // immutable "bedrock" floor under its own volume/budget, and collapses
+    // out-of-range terrain. The ground slab fills blocks chunk-Y 0 (a 64 m row);
+    // band the generator-streamed root there so empty sky/underground is skipped.
+    DecompositionManager decompMgr(world, pluginManager, layerConfig, kWorldSeed);
+    decompMgr.setVerticalBand(0, 0);
 
-    double caveDensity = kCaveDensityLow;
-    std::shared_ptr<const ResolvedRecipe> resolved = resolveForDensity(caveDensity);
-    const int64_t ratio = chunkmath::layerRatio(8.0, 1.0);  // 8
-
-    platform::Window window(1024, 768, "VoxelEngine — M9 Recipe-Built Voxel");
+    platform::Window window(1024, 768, "VoxelEngine — Recipe-Built Voxel");
     BgfxRenderer renderer;
     int fbW, fbH;
     window.framebufferSize(fbW, fbH);
     renderer.initialize(window.nativeHandles(),
                         static_cast<uint32_t>(fbW), static_cast<uint32_t>(fbH));
     renderer.setCrosshair(true);
+    engine.setRenderer(&renderer);
+    engine.setDecompositionManager(&decompMgr);
 
-    Layer* blocks  = world.layer("blocks");
-    Layer* terrain = world.layer("terrain");
-    Layer* bedrock = world.layer("bedrock");
-    if (!blocks || !terrain || !bedrock) {
-        std::cerr << "[main] Fatal: expected blocks/terrain/bedrock layers.\n";
-        return 1;
-    }
+    // One MeshStore per layer.
+    std::unordered_map<std::string, MeshStore> meshStores;
 
-    LODManager lod(layerConfig);
-    // The ground slab lives in chunk-Y 0; the immutable bedrock floor (world
-    // y in [-6,0), 2 m voxels / 16 m chunks) sits in chunk-Y -1. One band covers
-    // both (empty chunks are cheap).
-    lod.setVerticalBand(-1, 0);
-
-    DecompositionState  decomp;
-    DecompositionWorker worker;
-    std::cout << "[main] Decomposition worker threads: " << worker.threadCount() << "\n";
-
-    Voxel blockTemplate;
-    bool  haveBlockTemplate = false;
-
-    MeshStore blocksMeshes;
-    MeshStore terrainMeshes;
-    MeshStore bedrockMeshes;  // immutable floor (rendered at 2 m, never decomposed)
-
-    // Build a recipe-driven decomposition job for one macro voxel.
-    auto makeJob = [&](const chunkmath::VoxelCoord& macro) {
-        DecompositionJob job;
-        job.macro           = macro;
-        job.childChunks     = childChunksForMacro(macro, *blocks, *terrain);
-        job.childChunkSize  = terrain->chunkSizeVoxels();
-        job.childVoxelSizeM = terrain->voxelSizeM();
-        job.recipe          = resolved;
-        job.seed            = macroSeed(macro);
-        job.ratio           = ratio;
-        job.macroChildMin   = chunkmath::childVoxelMin(macro, ratio);
-        return job;
+    // Remesh a single terrain chunk after a voxel edit.
+    auto remeshTerrainChunk = [&](const chunkmath::VoxelCoord& vc) {
+        const chunkmath::LocalVoxel lv =
+            chunkmath::voxelToChunkLocal(vc, terrain->chunkSizeVoxels());
+        const Chunk* chunk = terrain->getChunk(lv.chunk);
+        if (chunk) rebuildMesh(meshStores["terrain"], lv.chunk, *chunk);
     };
+
+    sim::RemovalAccumulator remover;
+    bool prevRight = false;
 
     // Camera.
     float      pitch = -0.35f, yaw = 0.0f;
-    WorldCoord camPos(0.0, 40.0, -52.0);
+    WorldCoord camPos(0.0, 56.0, -16.0);  // above the 48 m slab top, looking in
     double     lastMouseX = 0.0, lastMouseY = 0.0;
     bool       firstMouse = true, cursorCaptured = true;
-    bool       prevKeyF = false, prevKeyG = false, prevKeyT = false, prevMouseL = false;
+    bool       prevKeyF = false, prevKeyG = false;
 
     bool       walkMode = false;
     WorldCoord playerCenter(0.0, 0.0, 0.0);
@@ -264,35 +275,10 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] Fly toward the blocks (or LEFT-CLICK one) to decompose. "
-                 "T toggles cave density,\n"
-                 "[main] G = walk, F = cursor, ESC quits. cave_density = "
-              << caveDensity << "\n";
-
-    // Drop every decomposed macro back to its atomic block (used on a density
-    // toggle, so the whole world re-decomposes under the new recipe). Drains any
-    // in-flight jobs first so a late result cannot resurrect stale terrain after
-    // the reset.
-    auto dropAllTerrain = [&]() {
-        while (worker.inFlight() > 0) worker.drain();
-        worker.drain();
-        for (auto& kv : terrainMeshes) kv.second.destroy();
-        terrainMeshes.clear();
-        std::vector<ChunkCoord> tcs;
-        for (const auto& kv : terrain->chunks()) tcs.push_back(kv.first);
-        for (const ChunkCoord& c : tcs) terrain->unloadChunk(c);
-        decomp = DecompositionState{};
-        // Re-generate every resident blocks chunk so any macro voxel cleared on
-        // decompose returns to its atomic block, then re-mesh it.
-        std::vector<ChunkCoord> bcs;
-        for (const auto& kv : blocksMeshes) bcs.push_back(kv.first);
-        for (const ChunkCoord& c : bcs) {
-            blocks->unloadChunk(c);
-            Chunk* chunk = blocks->loadChunk(c, blocksGen.fn, blocksGen.user_data);
-            auto it = blocksMeshes.find(c);
-            if (it != blocksMeshes.end()) { it->second.destroy(); it->second = ChunkMesh::build(*chunk); }
-        }
-    };
+    Log::info(kLogCat, "Fly toward the blocks to decompose them via the recipe. "
+                       "LEFT-CLICK mines, RIGHT-CLICK places soil.");
+    Log::info(kLogCat, "Dig a shaft straight down: caves thicken with depth "
+                       "(the cascaded __altitude param). G = walk, F = cursor, ESC quits.");
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -320,19 +306,9 @@ layers:
                 playerCenter = WorldCoord(camPos.value - glm::dvec3(0.0, kEyeOffset, 0.0));
                 vy = 0.0; grounded = false;
             }
-            std::cout << "[main] Mode: " << (walkMode ? "WALK" : "FLY") << "\n";
+            Log::info(kLogCat, walkMode ? "Mode: WALK" : "Mode: FLY");
         }
         prevKeyG = curKeyG;
-
-        bool curKeyT = (glfwGetKey(glfwWin, GLFW_KEY_T) == GLFW_PRESS);
-        if (curKeyT && !prevKeyT) {
-            caveDensity = (caveDensity == kCaveDensityLow) ? kCaveDensityHigh : kCaveDensityLow;
-            resolved = resolveForDensity(caveDensity);
-            dropAllTerrain();
-            std::cout << "[main] cave_density = " << caveDensity
-                      << " (re-decomposing)\n";
-        }
-        prevKeyT = curKeyT;
 
         if (cursorCaptured) {
             double mx, my;
@@ -383,192 +359,108 @@ layers:
             camPos = WorldCoord(playerCenter.value + glm::dvec3(0.0, kEyeOffset, 0.0));
         }
 
-        // ── Composite picking: LEFT-CLICK decomposes the targeted block ───────
-        bool curMouseL = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
-        if (curMouseL && !prevMouseL && cursorCaptured) {
-            // March the look ray through the blocks layer (8 m voxels). The first
-            // solid, not-yet-decomposed macro voxel hit is enqueued for recipe
-            // decomposition — interacting with a block triggers its recipe (§6).
-            const double bvs = blocks->voxelSizeM();
-            const double stepM = bvs * 0.25;
-            for (double t = 0.0; t <= kPickReachM; t += stepM) {
-                const WorldCoord p(camPos.value + look * t);
-                if (blocks->getVoxel(p).isEmpty()) continue;
-                const chunkmath::VoxelCoord macro = chunkmath::worldToVoxel(p, bvs);
-                if (decomp.needsDecompose(macro) && decomp.markPending(macro))
-                    worker.enqueue(makeJob(macro));
-                break;
-            }
-        }
-        prevMouseL = curMouseL;
+        // ── DecompositionManager tick ───────────────────────────────────────────
+        // Resolves+applies the recipe for in-range "blocks" macros, streams the
+        // immutable bedrock, and collapses out-of-range terrain. The diffs say
+        // which meshes to build/destroy; applyPerFrame bounds per-frame mesh builds.
+        auto diffs = decompMgr.tick(camPos, kApproachRadiusM,
+                                    /*loadPerFrame=*/32, /*decompPerFrame=*/128,
+                                    /*applyPerFrame=*/16);
+        applyDiffs(diffs, world, meshStores);
 
-        // ── Stream the composite layer around the camera ──────────────────────
+        // Terminal terrain is populated entirely by decomposition; guard against
+        // any mesh whose chunk the cascade has since removed.
         {
-            const ChunkCoord center =
-                chunkmath::worldToChunk(camPos, blocks->voxelSizeM(), blocks->chunkSizeVoxels());
-            int loaded = 0;
-            for (const ChunkCoord& c : lod.desiredChunks(center, "blocks")) {
-                if (blocksMeshes.count(c)) continue;
-                Chunk* chunk = blocks->loadChunk(c, blocksGen.fn, blocksGen.user_data);
-                if (!chunk) continue;
-                blocksMeshes.emplace(c, ChunkMesh::build(*chunk));
-                if (++loaded >= kStreamPerFrame) break;
-            }
-            std::vector<ChunkCoord> toEvict;
-            for (const auto& kv : blocksMeshes)
-                if (lod.shouldEvict(center, kv.first, "blocks")) toEvict.push_back(kv.first);
-            for (const ChunkCoord& c : toEvict) {
-                const int n = blocks->chunkSizeVoxels();
-                bool anyPending = false;
-                for (int z = 0; z < n && !anyPending; ++z)
-                    for (int y = 0; y < n && !anyPending; ++y)
-                        for (int x = 0; x < n && !anyPending; ++x)
-                            if (decomp.isPending(chunkmath::chunkLocalToVoxel(c, x, y, z, n)))
-                                anyPending = true;
-                if (anyPending) continue;
-                for (int z = 0; z < n; ++z)
-                    for (int y = 0; y < n; ++y)
-                        for (int x = 0; x < n; ++x) {
-                            const chunkmath::VoxelCoord V = chunkmath::chunkLocalToVoxel(c, x, y, z, n);
-                            if (!decomp.isDecomposed(V)) continue;
-                            for (const ChunkCoord& tcc : childChunksForMacro(V, *blocks, *terrain)) {
-                                auto it = terrainMeshes.find(tcc);
-                                if (it != terrainMeshes.end()) { it->second.destroy(); terrainMeshes.erase(it); }
-                                terrain->unloadChunk(tcc);
-                            }
-                            decomp.clear(V);
-                        }
-                blocksMeshes[c].destroy();
-                blocksMeshes.erase(c);
-                blocks->unloadChunk(c);
+            MeshStore& terrainMeshes = meshStores["terrain"];
+            std::vector<ChunkCoord> stale;
+            for (const auto& kv : terrainMeshes)
+                if (!terrain->getChunk(kv.first)) stale.push_back(kv.first);
+            for (const ChunkCoord& cc : stale) {
+                terrainMeshes[cc].destroy();
+                terrainMeshes.erase(cc);
             }
         }
 
-        // ── Stream the immutable bedrock floor around the camera ──────────────
-        // Generated once and retained; it never decomposes, so eviction just
-        // drops it. It collides via World::anySolidAt, so a player who digs or
-        // falls through the bottom of the terrain lands on it instead of the void.
+        // ── Terrain editing — dig into a decomposed block to read the recipe ─────
         {
-            const ChunkCoord center =
-                chunkmath::worldToChunk(camPos, bedrock->voxelSizeM(), bedrock->chunkSizeVoxels());
-            int loaded = 0;
-            for (const ChunkCoord& c : lod.desiredChunks(center, "bedrock")) {
-                if (bedrockMeshes.count(c)) continue;
-                Chunk* chunk = bedrock->loadChunk(c, bedrockGen.fn, bedrockGen.user_data);
-                if (!chunk) continue;
-                bedrockMeshes.emplace(c, ChunkMesh::build(*chunk));
-                if (++loaded >= kStreamPerFrame) break;
-            }
-            std::vector<ChunkCoord> toEvict;
-            for (const auto& kv : bedrockMeshes)
-                if (lod.shouldEvict(center, kv.first, "bedrock")) toEvict.push_back(kv.first);
-            for (const ChunkCoord& c : toEvict) {
-                bedrockMeshes[c].destroy();
-                bedrockMeshes.erase(c);
-                bedrock->unloadChunk(c);
-            }
-        }
+            voxelcast::RayHit hit = voxelcast::raycast(world, camPos, look, kReachM);
+            const bool curLeft  = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS);
+            const bool curRight = (glfwGetMouseButton(glfwWin, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
 
-        // ── Trigger decomposition for nearby macro voxels (approach) ──────────
-        int enqueued = 0;
-        for (const auto& kv : blocksMeshes) {
-            if (enqueued >= kDecomposePerFrame) break;
-            const Chunk* chunk = blocks->getChunk(kv.first);
-            if (!chunk) continue;
-            const int n = chunk->size();
-            for (int z = 0; z < n && enqueued < kDecomposePerFrame; ++z)
-                for (int y = 0; y < n && enqueued < kDecomposePerFrame; ++y)
-                    for (int x = 0; x < n && enqueued < kDecomposePerFrame; ++x) {
-                        if (chunk->at(x, y, z).isEmpty()) continue;
-                        const chunkmath::VoxelCoord V = chunkmath::chunkLocalToVoxel(kv.first, x, y, z, n);
-                        if (!decomp.needsDecompose(V)) continue;
-                        const WorldCoord ctr = chunkmath::voxelCenter(V, blocks->voxelSizeM());
-                        if (glm::length(ctr.value - camPos.value) > kDecomposeRadiusM) continue;
-                        if (!decomp.markPending(V)) continue;
-                        worker.enqueue(makeJob(V));
-                        ++enqueued;
-                    }
-        }
-
-        // ── Integrate completed decomposition jobs ────────────────────────────
-        std::unordered_set<ChunkCoord, ChunkCoordHash> compositeToRemesh;
-        for (DecompositionResult& result : worker.drain()) {
-            for (auto& chunkPtr : result.chunks) {
-                const ChunkCoord tcc = chunkPtr->coord();
-                Chunk* inserted = terrain->insertChunk(std::move(chunkPtr));
-                if (!inserted) continue;
-                auto it = terrainMeshes.find(tcc);
-                if (it != terrainMeshes.end()) { it->second.destroy(); it->second = ChunkMesh::build(*inserted); }
-                else                            { terrainMeshes.emplace(tcc, ChunkMesh::build(*inserted)); }
-            }
-            const chunkmath::LocalVoxel lv =
-                chunkmath::voxelToChunkLocal(result.macro, blocks->chunkSizeVoxels());
-            auto cit = blocks->chunks().find(lv.chunk);
-            if (cit != blocks->chunks().end()) {
-                if (!haveBlockTemplate) { blockTemplate = cit->second->at(lv.x, lv.y, lv.z); haveBlockTemplate = true; }
-                cit->second->at(lv.x, lv.y, lv.z) = Voxel::empty();
-                compositeToRemesh.insert(lv.chunk);
-            }
-            decomp.markDecomposed(result.macro);
-        }
-
-        // ── Release decomposed terrain past the keep radius (revert to block) ──
-        std::vector<ChunkCoord> terrainToEvict;
-        for (const auto& kv : terrainMeshes) {
-            const chunkmath::VoxelCoord V{kv.first.x, kv.first.y, kv.first.z};
-            const WorldCoord ctr = chunkmath::voxelCenter(V, blocks->voxelSizeM());
-            if (glm::length(ctr.value - camPos.value) > kTerrainKeepRadiusM)
-                terrainToEvict.push_back(kv.first);
-        }
-        for (const ChunkCoord& tcc : terrainToEvict) {
-            auto it = terrainMeshes.find(tcc);
-            if (it != terrainMeshes.end()) { it->second.destroy(); terrainMeshes.erase(it); }
-            terrain->unloadChunk(tcc);
-            const chunkmath::VoxelCoord V{tcc.x, tcc.y, tcc.z};
-            decomp.clear(V);
-            if (haveBlockTemplate) {
-                const chunkmath::LocalVoxel lv =
-                    chunkmath::voxelToChunkLocal(V, blocks->chunkSizeVoxels());
-                auto cit = blocks->chunks().find(lv.chunk);
-                if (cit != blocks->chunks().end()) {
-                    cit->second->at(lv.x, lv.y, lv.z) = blockTemplate;
-                    compositeToRemesh.insert(lv.chunk);
+            if (hit.hit && curLeft) {
+                const Voxel target = world.getVoxel(
+                    chunkmath::voxelCenter(hit.voxel, terrain->voxelSizeM()));
+                if (remover.accrue(hit.voxel, target.material.hardness, kToolPower, dt)) {
+                    world.setVoxel(chunkmath::voxelCenter(hit.voxel, terrain->voxelSizeM()),
+                                   Voxel::empty());
+                    remeshTerrainChunk(hit.voxel);
+                    remover.reset();
                 }
+            } else {
+                remover.reset();
+            }
+
+            if (hit.hit && curRight && !prevRight) {
+                Voxel placed;
+                placed.material = pluginManager.material("soil");
+                const ChunkCoord ac =
+                    chunkmath::voxelToChunkLocal(hit.adjacent, terrain->chunkSizeVoxels()).chunk;
+                if (!terrain->getChunk(ac)) terrain->loadChunk(ac, nullptr, nullptr);
+                world.setVoxel(chunkmath::voxelCenter(hit.adjacent, terrain->voxelSizeM()), placed);
+                remeshTerrainChunk(hit.adjacent);
+            }
+            prevRight = curRight;
+
+            if (hit.hit) {
+                const float progress =
+                    (remover.hasTarget() && remover.target() == hit.voxel)
+                        ? remover.progress() : -1.0f;
+                renderer.drawVoxelHighlight(
+                    chunkmath::voxelCenter(hit.voxel, terrain->voxelSizeM()),
+                    static_cast<float>(terrain->voxelSizeM()), 0xff00ffff, progress);
             }
         }
 
-        for (const ChunkCoord& c : compositeToRemesh) {
-            const Chunk* chunk = blocks->getChunk(c);
-            if (!chunk) continue;
-            auto it = blocksMeshes.find(c);
-            if (it != blocksMeshes.end()) { it->second.destroy(); it->second = ChunkMesh::build(*chunk); }
+        // ── HUD ─────────────────────────────────────────────────────────────────
+        {
+            const auto metrics = engine.getMetrics();
+            int blockDecomp = 0, terrChunks = 0;
+            for (const auto& lm : metrics.layers) {
+                if (lm.layerName == "blocks") blockDecomp = static_cast<int>(lm.decomposedMacros);
+                else if (lm.layerName == "terrain") terrChunks = static_cast<int>(lm.residentChunks);
+            }
+            char hud[256];
+            std::snprintf(hud, sizeof(hud),
+                "recipe: granite/basalt + soil cap + caves(deeper=more) + ore | "
+                "decomposed=%d terrain=%d y=%.0f | LMB mine RMB soil",
+                blockDecomp, terrChunks, camPos.value.y);
+            renderer.setHudText({std::string(hud)});
         }
 
         int w, h;
         window.framebufferSize(w, h);
         if (w != fbW || h != fbH) { fbW = w; fbH = h; renderer.setViewport(w, h); }
 
+        // ── Render every layer at its own voxel scale (coarsest first) ───────────
         renderer.setCameraPosition(camPos);
         renderer.setCameraRotation(pitch, yaw, 0.0f);
-        for (const auto& kv : bedrockMeshes) {
-            const Chunk* chunk = bedrock->getChunk(kv.first);
-            if (chunk) renderer.renderChunk(kv.second, chunk->origin(), bedrock->voxelSizeM(), bedrock->chunkSizeVoxels());
-        }
-        for (const auto& kv : blocksMeshes) {
-            const Chunk* chunk = blocks->getChunk(kv.first);
-            if (chunk) renderer.renderChunk(kv.second, chunk->origin(), blocks->voxelSizeM(), blocks->chunkSizeVoxels());
-        }
-        for (const auto& kv : terrainMeshes) {
-            const Chunk* chunk = terrain->getChunk(kv.first);
-            if (chunk) renderer.renderChunk(kv.second, chunk->origin(), terrain->voxelSizeM(), terrain->chunkSizeVoxels());
+        for (const auto& layerName : std::vector<std::string>{"bedrock", "blocks", "terrain"}) {
+            Layer* lyr = world.layer(layerName);
+            if (!lyr) continue;
+            const MeshStore& ms = meshStores[layerName];
+            for (const auto& kv : ms) {
+                const Chunk* chunk = lyr->getChunk(kv.first);
+                if (!chunk || kv.second.empty()) continue;
+                renderer.renderChunk(kv.second, chunk->origin(),
+                                     lyr->voxelSizeM(), lyr->chunkSizeVoxels());
+            }
         }
         renderer.render();
     }
 
-    std::cout << "[main] Decomposed macro voxels this session: " << decomp.decomposedCount() << "\n";
-    for (auto& kv : blocksMeshes)  kv.second.destroy();
-    for (auto& kv : terrainMeshes) kv.second.destroy();
-    for (auto& kv : bedrockMeshes) kv.second.destroy();
+    for (auto& [name, ms] : meshStores)
+        for (auto& [cc, mesh] : ms)
+            mesh.destroy();
     renderer.shutdown();
     engine.stop();
     return 0;
