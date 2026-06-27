@@ -356,10 +356,19 @@ TEST(RecipeSeedParameters, ParentSeedBiasesChildGridDeterministically) {
     ASSERT_NE(base, nullptr);
 
     // Decompose the same macro voxel under two parent cave_density values.
+    // We INJECT a "cave_density" seed parameter (the base recipe has none — its
+    // cave feature is normally depth-ramped via __altitude). resolveRecipe merges
+    // seed params underneath each feature's own params, and the cave feature
+    // declares no cave_density of its own, so this parent value reaches the
+    // feature and pins its carve density directly (plugin cave_feature honors an
+    // explicit cave_density). That is the "parent seed biases the child" path.
     auto decompose = [&](double caveDensity) {
         Recipe r = *base;
-        for (RecipeParamValue& p : r.seed_parameters)
-            if (p.key == "cave_density") p.number = caveDensity;
+        RecipeParamValue caveDensityParam;
+        caveDensityParam.key    = "cave_density";
+        caveDensityParam.kind   = RecipeParamKind::Number;
+        caveDensityParam.number = caveDensity;
+        r.seed_parameters = mergeRecipeParams(r.seed_parameters, {caveDensityParam});
         const ResolvedRecipe resolved = resolveRecipe(r, pm);
         return DecompositionWorker::generateChunkFromRecipe(
             ChunkCoord{0, 0, 0}, kN, kVS, resolved, chunkmath::VoxelCoord{0, 0, 0}, kN, 909u);
