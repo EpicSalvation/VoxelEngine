@@ -15,6 +15,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "core/RecipeValidation.h"
 #include "platform/Window.h"
@@ -32,7 +33,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -44,6 +44,7 @@
 
 namespace {
 
+constexpr char   kLogCat[] = "demo10";
 constexpr double kApproachRadiusM = 64.0;   // decompose when within this range
 constexpr double kReachM          = 12.0;   // voxel-pick reach in metres
 constexpr float  kToolPower       = 5.0f;   // dig speed (units/s)
@@ -189,14 +190,14 @@ layers:
     resident_chunk_budget: 2048
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
 
     // ── Plugin loading ────────────────────────────────────────────────────────
     if (std::string(VOXEL_DRILL_PLUGIN_PATH).empty()) {
-        std::cerr << "[main] Fatal: drill-world plugin not configured at build time.\n";
+        Log::error(kLogCat, "Fatal: drill-world plugin not configured at build time.");
         return 1;
     }
 
@@ -206,14 +207,14 @@ layers:
     engine.init(pm, world);
 
     if (pm.loadPlugin(VOXEL_DRILL_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load drill-world plugin from "
-                  << VOXEL_DRILL_PLUGIN_PATH << "\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load drill-world plugin from ")
+                             + VOXEL_DRILL_PLUGIN_PATH).c_str());
         return 1;
     }
     try {
         validateRecipes(cfg, pm);
     } catch (const std::exception& e) {
-        std::cerr << "[main] Fatal: recipe validation: " << e.what() << "\n";
+        Log::error(kLogCat, (std::string("Fatal: recipe validation: ") + e.what()).c_str());
         return 1;
     }
 
@@ -246,7 +247,7 @@ layers:
     // Terminal terrain layer: streamed by the demo independently of the manager.
     Layer* terrain = world.layer("terrain");
     if (!terrain) {
-        std::cerr << "[main] Fatal: 'terrain' layer not found.\n";
+        Log::error(kLogCat, "Fatal: 'terrain' layer not found.");
         return 1;
     }
     const RegisteredLayerGenerator* terrainGenRec = nullptr;
@@ -286,8 +287,8 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] Controls: WASD fly, Space/Shift up/down, G walk, F cursor, ESC quit.\n"
-              << "[main] Fly toward the gray continental blocks to begin the cascade.\n";
+    Log::info(kLogCat, "Controls: WASD fly, Space/Shift up/down, G walk, F cursor, ESC quit. "
+                       "Fly toward the gray continental blocks to begin the cascade.");
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     while (!window.shouldClose()) {

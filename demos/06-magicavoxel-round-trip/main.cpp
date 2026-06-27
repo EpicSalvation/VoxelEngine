@@ -49,6 +49,7 @@
 
 namespace {
 
+constexpr char   kLogCat[] = "demo06";
 constexpr float  kFlySpeed  = 16.0f;
 constexpr float  kMouseSens = 0.002f;
 constexpr double kReachM    = 12.0;
@@ -100,13 +101,13 @@ int main() {
     const std::string outputVox = "output.vox";
 
     if (!std::filesystem::exists(assetVox)) {
-        std::cout << "[main] test_model.vox not found; generating test asset at "
-                  << assetVox << "\n";
+        Log::info(kLogCat, (std::string("test_model.vox not found; generating test asset at ")
+                            + assetVox).c_str());
         if (!generateTestAsset(assetVox)) {
-            std::cerr << "[main] Fatal: could not generate test asset.\n";
+            Log::error(kLogCat, "Fatal: could not generate test asset.");
             return 1;
         }
-        std::cout << "[main] Asset generated.\n";
+        Log::info(kLogCat, "Asset generated.");
     }
 
     // ── Layer / world ─────────────────────────────────────────────────────────
@@ -121,7 +122,7 @@ layers:
     view_distance_chunks: 4
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -133,12 +134,12 @@ layers:
     Engine engine;
     engine.init(pluginManager, world);
 
-    std::cout << "[main] Importing " << assetVox << " ...\n";
+    Log::info(kLogCat, (std::string("Importing ") + assetVox + " ...").c_str());
     if (!engine.importVox(assetVox, "editor", WorldCoord(0, 0, 0))) {
-        std::cerr << "[main] Fatal: .vox import failed.\n";
+        Log::error(kLogCat, "Fatal: .vox import failed.");
         return 1;
     }
-    std::cout << "[main] Import complete.\n";
+    Log::info(kLogCat, "Import complete.");
 
     // ── Window + renderer ─────────────────────────────────────────────────────
     platform::Window window(1024, 768, "VoxelEngine — M7 MagicaVoxel Round-Trip");
@@ -151,7 +152,7 @@ layers:
 
     Layer* editorLayer = world.layer("editor");
     if (!editorLayer) {
-        std::cerr << "[main] Fatal: editor layer missing.\n";
+        Log::error(kLogCat, "Fatal: editor layer missing.");
         return 1;
     }
 
@@ -190,8 +191,8 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] WASD + mouse = fly  |  left/right mouse = break/place\n"
-                 "[main] 1-9 = material  |  E = export to output.vox  |  F = cursor  |  ESC = quit\n";
+    Log::info(kLogCat, "WASD + mouse = fly | left/right mouse = break/place | "
+                       "1-9 = material | E = export to output.vox | F = cursor | ESC = quit");
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     while (!window.shouldClose()) {
@@ -218,14 +219,18 @@ layers:
         // Export on E.
         bool curE = (glfwGetKey(glfwWin, GLFW_KEY_E) == GLFW_PRESS);
         if (curE && !prevKeyE) {
-            std::cout << "[main] Exporting editor layer to " << outputVox << " ...\n";
+            Log::info(kLogCat, (std::string("Exporting editor layer to ") + outputVox
+                                + " ...").c_str());
 
             bool lossyWarned = false;
             bool autoChunked = false;
 
+            // Temporarily install a custom log sink to spot the lossy-property
+            // warning. This handler IS the output sink, so it writes directly
+            // (calling Log::warn here would re-enter the handler — infinite loop).
             Log::setWarnHandler([&](const char* msg) {
                 std::string s(msg);
-                std::cerr << "[WARN] " << s << "\n";
+                std::cerr << "[warn] " << s << "\n";
                 if (s.find("extended voxel properties dropped") != std::string::npos)
                     lossyWarned = true;
             });
@@ -258,15 +263,14 @@ layers:
             Log::setWarnHandler(nullptr);
 
             if (ok) {
-                std::cout << "[main] Export complete -> " << outputVox << "\n";
-                std::cout << "[main] Auto-chunking: "
-                          << (autoChunked ? "YES - region exceeded 256 voxels per axis."
-                                          : "no - region fits in a single 256^3 object.")
-                          << "\n";
+                Log::info(kLogCat, (std::string("Export complete -> ") + outputVox).c_str());
+                Log::info(kLogCat, autoChunked
+                    ? "Auto-chunking: YES - region exceeded 256 voxels per axis."
+                    : "Auto-chunking: no - region fits in a single 256^3 object.");
                 if (lossyWarned)
-                    std::cout << "[main] Lossy-property warning: extended properties dropped.\n";
+                    Log::info(kLogCat, "Lossy-property warning: extended properties dropped.");
             } else {
-                std::cerr << "[main] Export failed.\n";
+                Log::error(kLogCat, "Export failed.");
             }
         }
         prevKeyE = curE;
@@ -276,7 +280,8 @@ layers:
             if (glfwGetKey(glfwWin, GLFW_KEY_1 + i) == GLFW_PRESS &&
                 selectedMat != static_cast<size_t>(i)) {
                 selectedMat = static_cast<size_t>(i);
-                std::cout << "[main] Selected: " << kMaterials[selectedMat].name << "\n";
+                Log::info(kLogCat, (std::string("Selected: ")
+                                    + kMaterials[selectedMat].name).c_str());
             }
         }
 

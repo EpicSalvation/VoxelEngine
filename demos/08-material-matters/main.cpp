@@ -22,6 +22,7 @@
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
+#include "core/Logger.h"
 #include "core/PluginManager.h"
 #include "platform/Window.h"
 #include "renderer/BgfxRenderer.h"
@@ -39,7 +40,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -49,6 +49,7 @@
 #endif
 
 namespace {
+constexpr char   kLogCat[] = "demo08";
 constexpr int    kLoadsPerFrame = 2;      // budget generated/meshed chunks per frame
 constexpr float  kFlySpeed      = 18.0f;  // free-fly camera speed
 constexpr float  kMouseSens     = 0.002f;
@@ -75,7 +76,7 @@ layers:
     view_distance_chunks: 5
 )");
         } catch (const std::exception& e) {
-            std::cerr << "[main] Fatal: layer config error: " << e.what() << "\n";
+            Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
             std::exit(1);
         }
     }();
@@ -84,12 +85,12 @@ layers:
     // Materials and the strata world come from the material-showcase plugin.
     PluginManager pluginManager;
     if (std::string(VOXEL_SHOWCASE_PLUGIN_PATH).empty()) {
-        std::cerr << "[main] Fatal: material-showcase plugin path not configured at build time.\n";
+        Log::error(kLogCat, "Fatal: material-showcase plugin path not configured at build time.");
         return 1;
     }
     if (pluginManager.loadPlugin(VOXEL_SHOWCASE_PLUGIN_PATH) == kInvalidPluginId) {
-        std::cerr << "[main] Fatal: could not load material-showcase plugin from "
-                  << VOXEL_SHOWCASE_PLUGIN_PATH << "\n";
+        Log::error(kLogCat, (std::string("Fatal: could not load material-showcase plugin from ")
+                             + VOXEL_SHOWCASE_PLUGIN_PATH).c_str());
         return 1;
     }
 
@@ -102,7 +103,7 @@ layers:
         }
     }
     if (!generator) {
-        std::cerr << "[main] Fatal: no 'terrain' layer generator registered.\n";
+        Log::error(kLogCat, "Fatal: no 'terrain' layer generator registered.");
         return 1;
     }
 
@@ -113,18 +114,17 @@ layers:
     for (size_t i = 0; i < pluginManager.materials().size() && i < 9; ++i)
         buildMaterials.push_back(pluginManager.materials()[i].material_id);
     if (buildMaterials.empty()) {
-        std::cerr << "[main] Fatal: no materials registered by the plugin.\n";
+        Log::error(kLogCat, "Fatal: no materials registered by the plugin.");
         return 1;
     }
     size_t selectedMaterial = 0;
-    std::cout << "[main] Build materials (press the number to select):\n";
+    Log::info(kLogCat, "Build materials (press the number to select):");
     for (size_t i = 0; i < buildMaterials.size(); ++i) {
         const MaterialProperties m = pluginManager.material(buildMaterials[i]);
-        std::cout << "       " << (i + 1) << " - " << buildMaterials[i]
-                  << "  (hardness "
-                  << (m.hardness < 0.0f ? std::string("INDESTRUCTIBLE")
-                                        : std::to_string(m.hardness))
-                  << ")\n";
+        const std::string line = "  " + std::to_string(i + 1) + " - " + buildMaterials[i]
+            + "  (hardness " + (m.hardness < 0.0f ? std::string("INDESTRUCTIBLE")
+                                                  : std::to_string(m.hardness)) + ")";
+        Log::info(kLogCat, line.c_str());
     }
 
     Engine engine;
@@ -194,10 +194,10 @@ layers:
 
     auto prevTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "[main] Dig down through the strata. Hold left mouse to mine —\n"
-                 "[main] softer materials clear fast, harder ones take longer, and the\n"
-                 "[main] bedrock floor (hardness < 0) never clears. Right mouse places\n"
-                 "[main] the selected material, 1-6 selects, F = cursor, G = walk, ESC quits.\n";
+    Log::info(kLogCat, "Dig down through the strata. Hold left mouse to mine — softer "
+                       "materials clear fast, harder ones take longer, and the bedrock floor "
+                       "(hardness < 0) never clears. Right mouse places the selected material, "
+                       "1-6 selects, F = cursor, G = walk, ESC quits.");
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -227,8 +227,7 @@ layers:
                 vy = 0.0;
                 grounded = false;
             }
-            std::cout << "[main] Mode: " << (walkMode ? "WALK (gravity + collision)"
-                                                      : "FLY") << "\n";
+            Log::info(kLogCat, walkMode ? "Mode: WALK (gravity + collision)" : "Mode: FLY");
         }
         prevKeyG = curKeyG;
 
@@ -237,8 +236,8 @@ layers:
             if (glfwGetKey(glfwWin, GLFW_KEY_1 + i) == GLFW_PRESS &&
                 selectedMaterial != static_cast<size_t>(i)) {
                 selectedMaterial = static_cast<size_t>(i);
-                std::cout << "[main] Selected material: "
-                          << buildMaterials[selectedMaterial] << "\n";
+                Log::info(kLogCat, (std::string("Selected material: ")
+                                    + buildMaterials[selectedMaterial]).c_str());
             }
         }
 
