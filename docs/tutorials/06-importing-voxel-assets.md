@@ -27,6 +27,42 @@ All formats map to the engine's palette-indexed voxel model. Extended
 are **not** preserved in `.vox` or `.qb` round-trips -- only `palette_index`
 survives.
 
+### Choosing a tool
+
+**MagicaVoxel** is the best starting point for most content. It is free, has a
+mature sculpting/painting UI designed specifically for voxels, and its `.vox`
+format is the engine's primary interchange format with full round-trip
+import/export support. Choose MagicaVoxel when you are building solid-color
+voxel models -- characters, props, terrain stamps, or anything where one
+palette color per voxel is enough. Its 256-entry palette maps directly to the
+engine's `palette_index`, so what you see in the editor is what you get
+in-engine. The main limitation is the 256x256x256 size cap per object (the
+engine auto-chunks larger volumes, but the editor itself enforces this bound).
+
+**Qubicle** is a commercial alternative to MagicaVoxel with stronger
+multi-matrix (multi-object) editing and a more traditional 3D-modelling
+workflow. Choose Qubicle if you prefer its UI, need multi-matrix editing with
+named parts, or already have a `.qb` asset library. The engine's `.qb` support
+is functionally equivalent to `.vox` -- same palette-color scope, same
+lossy-property caveat on round-trip.
+
+**Blockbench** is the right choice when you need **per-face textures** rather
+than a single solid color per voxel. It is free and open-source, and its
+`.bbmodel` format embeds PNG textures that the engine's `blockbench` plugin
+maps onto voxel faces via the texture atlas. Choose Blockbench for
+Minecraft-style painted blocks where the top, bottom, and sides each show a
+different image (e.g. a grass block with a green top, brown sides, and a dirt
+bottom). The trade-off: `.bbmodel` import requires the `blockbench` plugin and
+the M15 texture pipeline, so it is a heavier integration than plain `.vox`.
+
+| Use case | Recommended tool |
+|----------|-----------------|
+| Solid-color models, props, characters | MagicaVoxel |
+| Multi-object scenes, named parts | Qubicle |
+| Per-face textured blocks (grass, crates, bricks) | Blockbench |
+| Rapid prototyping (free, zero setup) | MagicaVoxel |
+| Existing `.qb` asset library | Qubicle |
+
 ---
 
 ## 2. MagicaVoxel workflow
