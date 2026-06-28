@@ -16,6 +16,7 @@
 - [Project Structure](#project-structure)
 - [Plugin API](#plugin-api)
 - [Setup](#setup)
+- [Getting Started](#getting-started)
 - [Design Constraints](#design-constraints)
 - [Milestones](#milestones)
   - [Phase 1 — Minimum Viable Engine](#phase-1--minimum-viable-engine)
@@ -264,8 +265,12 @@ voxel-game-engine
 │   │   └── RendererFactory.h             # createRenderer(): bgfx-free renderer seam
 │   └── platform
 │       └── NativeWindowHandles.h         # Library-neutral window↔renderer seam
+├── templates                             # Copy-paste starting points for a new game (not built)
+│   ├── game                              # main.cpp entrypoint + annotated world.yaml
+│   └── plugin                            # world-generation and gameplay plugin templates
 ├── docs
-│   └── ARCHITECTURE.md                   # Subsystem design, invariants, AI agent guidance
+│   ├── ARCHITECTURE.md                   # Subsystem design, invariants, AI agent guidance
+│   └── tutorials                         # Step-by-step walkthroughs (01-hello-voxel … 14-performance-tuning)
 ├── CMakeLists.txt
 └── README.md
 ```
@@ -300,6 +305,66 @@ executables that link it. The build is static by default — pass
 The build is verified on Linux (GCC) — `cmake -B build && cmake --build build`
 configures and compiles cleanly from a fresh checkout, and `ctest --test-dir
 build` passes. macOS/Clang and Windows/MSVC are likewise supported.
+
+### Prerequisites
+
+You install the toolchain; CMake fetches the libraries. Before your first build
+you need:
+
+- A **C++20** compiler — GCC, Clang, or MSVC. (C++20 is a hard floor: `bx`'s SIMD
+  headers use designated initializers.)
+- **CMake ≥ 3.16**
+- **Git** — dependencies are cloned at configure time via `FetchContent`.
+
+Per-OS, a few system packages are also needed (most are preinstalled):
+
+| OS | What to install | Notes |
+|---|---|---|
+| **Linux** | X11 development headers (optionally Wayland) for GLFW; ALSA and/or PulseAudio dev libs for audio | `libdl`, `libm`, `pthread` are part of the base system. On Debian/Ubuntu: `xorg-dev`, `libasound2-dev` and/or `libpulse-dev`. |
+| **macOS** | Xcode command-line tools (provides Clang) | CoreAudio / AudioToolbox / AudioUnit are system frameworks — nothing to install. |
+| **Windows** | Visual Studio with the C++ workload (MSVC) | `ws2_32`, `winmm`, `ole32`, `user32` are system libraries — nothing to install. |
+
+### Dependencies fetched automatically
+
+CMake downloads and builds these at configure time (no manual install). All are
+pinned for reproducible builds; see [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)
+for licenses.
+
+| Dependency | Version | Used for |
+|---|---|---|
+| bgfx / bimg / bx (via bgfx.cmake) | v1.143.9257-544 | Rendering backend |
+| GLM | 1.0.1 | Math types (`WorldCoord`) |
+| yaml-cpp | 0.8.0 | Layer-config parsing |
+| GLFW | 3.4 | Windowing and input |
+| ENet | v1.3.17 | Networking transport (M11) |
+| miniaudio | 0.11.21 | Audio (M12) |
+| GoogleTest | pinned to `main` | Tests only — skipped if `external/googletest` is present |
+
+### What to expect from the setup process
+
+- The **first** `cmake -B build` is slow and **requires network access** — it
+  clones several repositories plus bgfx's git submodules. Subsequent configures
+  reuse the cached sources.
+- **No shader toolchain is required.** Shader bytecode is precompiled and
+  committed (`shaders/generated/`); only `-DVOXEL_BUILD_SHADERS=ON` pulls in the
+  shaderc toolchain, and only when you are regenerating shaders.
+- A clean configure + build from scratch is a few minutes (bgfx dominates); the
+  engine and demos themselves are quick.
+
+### Troubleshooting
+
+- **Configure fails downloading dependencies** — you are offline or behind a
+  proxy. The first configure needs network access to clone the dependencies.
+- **CMake policy / "compatibility with CMake < 3.5" error** — your CMake is older
+  than 3.16. Upgrade it.
+- **Linux: GLFW fails to configure, or X11/`xkb` headers not found** — install the
+  X11 development headers (`xorg-dev` on Debian/Ubuntu).
+- **Linux: no audio at runtime** — install the ALSA and/or PulseAudio dev libs
+  before configuring; miniaudio binds whichever backend it finds at build time.
+- **Compiler errors about designated initializers or `<concepts>`** — your
+  compiler is not in C++20 mode or is too old; use a C++20-capable toolchain.
+
+### Building and running the demos
 
 The `demos/` directory holds a progressive series of reference examples, each a
 standalone target named after its folder. Every `demos/<NN-name>/` with a
@@ -523,6 +588,31 @@ last touched, so you can pick up a controller mid-session. Mine the strata to ba
 materials in the hotbar (harder layers take longer), place them back from the
 selected slot, and watch the top-down minimap fill in the hole you dig; hard
 landings drain the health bar, which regenerates while you stand on the ground.
+
+---
+
+## Getting Started
+
+Once the engine builds (see [Setup](#setup)), there are three on-ramps depending
+on what you want to do:
+
+- **Learn the engine concept by concept** — the [tutorial series](docs/tutorials/)
+  is a progressive, step-by-step walkthrough. Start with
+  [01 — Hello Voxel](docs/tutorials/01-hello-voxel.md) and
+  [02 — Your First Plugin](docs/tutorials/02-your-first-plugin.md), then follow the
+  numbered sequence through materials, recipes, asset import, multi-layer worlds,
+  player mechanics, audio, multiplayer, simulation, and performance tuning.
+- **Start a new game from boilerplate** — the [templates](templates/) are
+  well-commented, copy-paste starting points: a game entrypoint, an annotated
+  layer config, and world-generation / gameplay plugin skeletons. See
+  [`templates/README.md`](templates/README.md) for how they fit together.
+- **Read working code** — the `demos/` series (each a standalone target, listed in
+  [Setup](#setup)) demonstrates every major feature, and the `plugins/` directory
+  holds the reference plugins those demos load.
+
+For materials and composition recipes specifically, see
+[`docs/creating-voxels.md`](docs/creating-voxels.md); for the YAML / tuning
+surfaces, see [`docs/configuration-guide.md`](docs/configuration-guide.md).
 
 ---
 
@@ -1204,7 +1294,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 **M18 — User-Friendlieness**
 - [x] Tutorial series: create a series of tutorial documents that cover fundamental tasks. Propose topics and inject approved topics into this milestone. This should include at least one tutorial on creating and importing custom voxel assets (Blockbench, Magicavoxel, etc).
 - [x] Template series: create a series of well-commented boilerplate/template game development files (cpp, json, etc) a developer could use to jumpstart the development of a new game. (See [`templates/`](templates/): game entrypoint, layer config, world-generation plugin, and gameplay/hooks plugin.)
-- [ ] Any other user-friendliness work needed? Insert tasks in this milestone, or follow-on milestones before release, if appropriate.
+- [x] Any other user-friendliness work needed? Insert tasks in this milestone, or follow-on milestones before release, if appropriate. — *shipped: closed the 1.0 onboarding/legal gaps. (1) **Setup prerequisites + dependencies** — the Setup section now lists the toolchain a developer installs (C++20 compiler, CMake ≥ 3.16, Git), per-OS system packages (X11/ALSA on Linux, Xcode CLT on macOS, MSVC on Windows), the libraries CMake fetches automatically (bgfx, GLM, yaml-cpp, GLFW, ENet, miniaudio, GoogleTest — pinned versions), what to expect from a first configure (slow, network-required, no shader toolchain needed), and a Troubleshooting list. (2) **`LICENSE`** file added (MIT) — the README's "See LICENSE" reference was previously dangling. (3) **Tutorials + templates surfaced** — a new "Getting Started" section and Project-Structure entries link `docs/tutorials/` (14 walkthroughs) and `templates/`, which were previously discoverable only from the milestone list. (4) **`THIRD-PARTY-LICENSES.md`** added — attribution for every fetched dependency, flagging which propagate to a shipped binary. (5) **`CONTRIBUTING.md`** added — build/test, the read-ARCHITECTURE-first rule, codebase layout, coding standards, and PR flow.*
 
 *Demo*
 - [ ] **Demo — Mega Demo:** A large demo that demonstrates as many major features of the engine as possible. The concept doesn't necessarily need to be fresh, but it would be nice.  However, if a mini-Minecraft clone is the best way to do it, then that's what we should do.
@@ -1262,4 +1352,8 @@ The README describes what the engine is. ARCHITECTURE.md describes why it is tha
 
 ## License
 
-MIT License. See LICENSE for details.
+MIT License. See [`LICENSE`](LICENSE) for details.
+
+The engine builds on several third-party libraries, fetched at configure time and
+each under its own license; see [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)
+for attribution. Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
