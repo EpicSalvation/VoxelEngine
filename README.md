@@ -1,5 +1,30 @@
 # Voxel Game Engine
 
+## Table of Contents
+
+- [Overview](#overview)
+- [AI Coding Agent Friendliness](#ai-coding-agent-friendliness)
+- [Core Architectural Concepts](#core-architectural-concepts)
+  - [Multi-Layer Scale System](#multi-layer-scale-system)
+  - [Voxel Modes](#voxel-modes)
+  - [Cascading Decomposition](#cascading-decomposition)
+  - [Coordinate Precision](#coordinate-precision)
+  - [Material-Driven Simulation](#material-driven-simulation)
+  - [Macro-Voxel Composition Recipes](#macro-voxel-composition-recipes)
+  - [Lazy Decomposition Details](#lazy-decomposition-details)
+  - [Voxel Editor Interoperability](#voxel-editor-interoperability)
+- [Project Structure](#project-structure)
+- [Plugin API](#plugin-api)
+- [Setup](#setup)
+- [Design Constraints](#design-constraints)
+- [Milestones](#milestones)
+  - [Phase 1 — Minimum Viable Engine](#phase-1--minimum-viable-engine)
+  - [Phase 2 — 1.0 Release](#phase-2--10-release)
+- [Further Reading](#further-reading)
+- [License](#license)
+
+---
+
 ## Overview
 
 The Voxel Game Engine is a plugin-based C++ game engine designed for creating voxel-based games that go well beyond the conventional single-scale Minecraft model. Its defining architectural features are:
