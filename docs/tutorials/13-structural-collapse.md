@@ -271,6 +271,36 @@ different strength values.
 
 ---
 
+## Challenge: find the support limit, then restyle the collapse
+
+Probe the support model and swap the response.
+
+1. In `13-structural-collapse`, build a horizontal overhang one voxel at a time,
+   extending it past `kSupportSpanPerStrength x strength` voxels. It should
+   collapse once the reach limit is crossed.
+2. Raise the bridge material's `structural_strength` and confirm the overhang
+   now reaches farther before collapsing.
+3. Hot-swap the response plugin from `crumble` to `falling-debris` and repeat to
+   compare the two collapse styles.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Demos: `demos/13-structural-collapse/main.cpp` and
+  `demos/19-multilevel-collapse/main.cpp`.
+- Support reach is governed by `kSupportSpanPerStrength` / `kMaxSupportSpan`
+  (section 10, `include/core/Tuning.h`).
+- Swap responses between `plugins/crumble` and `plugins/falling-debris`
+  (section 6); filter by `voxel_size_m` (section 7).
+
+</details>
+
+**Going further:** in `19-multilevel-collapse`, add a `voxel_size_m` filter to
+your handler (section 7) so only the coarsest macros collapse while intermediate
+levels absorb small edits.
+
+---
+
 ## How to verify
 
 1. **Build and run the structural-collapse demo:**

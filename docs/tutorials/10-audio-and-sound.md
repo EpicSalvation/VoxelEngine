@@ -285,6 +285,35 @@ stopped via owner tracking.
 
 ---
 
+## Challenge: give a new material its own voice
+
+Exercise material-sound bindings and a persistent emitter.
+
+1. Register break/place/footstep sounds for a material you add (reuse existing
+   WAVs if you don't have new ones) and bind them with
+   `register_material_sound`.
+2. Place that material in the world, then mine and walk on it to hear the
+   bindings resolve by `palette_index`.
+3. Add a looping `create_emitter` at a fixed point (e.g. a "machine hum") and
+   walk toward and away from it to hear the spatial attenuation.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Reference plugin: `plugins/material-audio/plugin.cpp`; demo
+  `demos/12-soundscape/main.cpp`.
+- Bind sounds with `register_material_sound` (section 3); loop one with
+  `create_emitter` / `stop_emitter` (section 5).
+- Bindings resolve by `palette_index` at play time (section 4).
+
+</details>
+
+**Going further:** stop the emitter with `stop_emitter` on a key press, then
+confirm owner-tracking also tears it down automatically if you unload the
+plugin.
+
+---
+
 ## How to verify
 
 Build and run the soundscape demo:

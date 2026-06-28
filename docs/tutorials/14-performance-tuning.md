@@ -332,6 +332,36 @@ A typical tuning workflow:
 
 ---
 
+## Challenge: build an adaptive quality controller
+
+Put all three configuration surfaces to work in one loop.
+
+1. Implement the `setQualityLow` / `setQualityHigh` presets from section 4 and
+   bind a key to toggle them manually.
+2. Each frame, read `engine.getMetrics()` frame time; if it exceeds your target
+   for several consecutive frames, drop to the low preset automatically, and
+   restore high when it recovers.
+3. Run `14-flow-and-heat`, break a dam to spike simulation load, and watch the
+   controller switch presets -- confirm it via an on-screen `EngineMetrics`
+   readout.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Demo: `demos/14-flow-and-heat/main.cpp` (and `demos/05-decompose-on-approach`
+  for the fog step).
+- Presets follow the `setQualityLow` / `setQualityHigh` pattern in section 4;
+  read frame time from `engine.getMetrics()` (section 5).
+- Fog `near_m` / `decompose_distance_m` pairing is covered in section 7.
+
+</details>
+
+**Going further:** add fog whose `near_m` sits just inside `decompose_distance_m`
+in `05-decompose-on-approach` and verify the LOD seam disappears into the fog
+band.
+
+---
+
 ## How to verify
 
 1. **Budget overflow test:** Run any demo with simulation fields (e.g.,

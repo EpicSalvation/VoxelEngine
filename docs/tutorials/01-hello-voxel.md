@@ -76,8 +76,8 @@ layers:
 
 A `LayerConfig` describes the world's layer stack. This single-layer config
 says: "one layer called `terrain`, where each voxel is a 1-meter cube, and the
-layer is `terminal`" (meaning it is the editable leaf -- no further
-decomposition).
+layer is `terminal`", meaning it is the editable leaf; no further
+decomposition. (More on decomposition in the "Composition and Recipes" tutorial.)
 
 ### Step 2: Load plugins and start the engine
 
@@ -177,6 +177,46 @@ An invalid config is a hard error at startup -- the engine exits with a
 descriptive message rather than producing undefined behavior at runtime. For
 the full set of per-layer fields and validation rules, see
 [`docs/configuration-guide.md`](../configuration-guide.md).
+
+---
+
+## Challenge: place more than one voxel
+
+You now know the five-step pattern. Reinforce it by extending the demo from a
+single voxel to a small structure. Try it yourself before expanding the
+solution.
+
+1. In `demos/01-single-voxel/main.cpp`, grow the world grid (`World(...)`) so it
+   can hold a 3x3 floor.
+2. Replace the single `setVoxel` call with a loop that lays the floor and gives
+   the center tile a different `palette_index` so it stands out.
+3. Rebuild and run, then press **F** and fly above the grid to check it.
+
+<details>
+<summary>Show solution</summary>
+
+```cpp
+World world(3, 1, 3);  // a 3x3 floor, one voxel tall
+
+for (int x = 0; x < 3; ++x) {
+    for (int z = 0; z < 3; ++z) {
+        Voxel v;
+        v.material.palette_index = (x == 1 && z == 1) ? 8 : 2;  // center stands out
+        v.material.density       = 1.0f;
+        world.setVoxel(x, 0, z, v);
+    }
+}
+```
+
+The center uses palette index `8`; the default visual palette has 256 entries,
+so swap that number to explore its colors. (You'll define your own colors in
+[Tutorial 03](03-materials-and-properties.md).)
+
+</details>
+
+**Going further:** grow to `World(3, 2, 3)` and stack a voxel on the center tile
+to make a tiny pillar. If a voxel never appears, check that its `density` is
+above `0` -- a zero-density voxel is treated as empty.
 
 ---
 

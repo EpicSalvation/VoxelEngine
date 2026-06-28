@@ -276,6 +276,33 @@ parameters, see [`docs/creating-voxels.md`](../creating-voxels.md) section 4.
 
 ---
 
+## Challenge: build a full multi-face block
+
+Extend the grass block from section 5 so every face differs.
+
+1. Activate the `side` boundary with an `exposed_rock` material at `depth = 1`,
+   alongside the existing green `top`.
+2. Bump `top.depth` to `2` for a thicker grass cap.
+3. Rebuild and decompose the block. Inspect a top edge: the grass cap should
+   cover the rim even where the side override also claims those voxels -- that's
+   the `bottom -> side -> top` overlap order (section 4) at work.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- `BoundaryDesc` fields (`present`, `depth`, `distribution`) are in section 3;
+  set `recipe.side` / `recipe.bottom` the same way as `recipe.top` in section 5.
+- Overlap precedence is `bottom -> side -> top` (section 4).
+- Full grass-block reference: `docs/creating-voxels.md` section 4 and
+  `plugins/recipe-world/plugin.cpp`.
+
+</details>
+
+**Going further:** add a `bottom` override too, then dig underneath and confirm
+the side override wins over the bottom one at the lower rim.
+
+---
+
 ## How to verify
 
 1. Build and run the recipe demo:

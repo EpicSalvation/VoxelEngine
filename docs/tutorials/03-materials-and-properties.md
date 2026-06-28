@@ -219,6 +219,35 @@ blocks with boundary overrides), see
 
 ---
 
+## Challenge: add your own stratum
+
+Feel how properties alone drive behavior by adding a new material to the strata.
+
+1. Register a new material -- say `glowstone` -- with a high `light_emission`, a
+   moderate `hardness`, and a bright palette color.
+2. Insert a band of it into `strata_terrain` between stone and topsoil.
+3. Rebuild and run `08-material-matters`. Mine down to your band: the HUD shows
+   its `hardness`/`density`, the wireframe ramp reflects the mining time, and
+   (with the lighting system active) it glows -- all from the property values
+   you set, with no engine changes.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Reference plugin: `plugins/material-showcase/plugin.cpp`, plus the strata
+  registration in section 4.
+- Add your band to the height test in `strata_terrain`.
+- `light_emission` and `hardness` are `MaterialProperties` fields (section 2);
+  `hardness = -1.0f` is the indestructible sentinel.
+
+</details>
+
+**Going further:** set `hardness = -1.0f` on one material and confirm the
+`RemovalAccumulator` refuses to break it. You've just made bedrock from a
+property value alone.
+
+---
+
 ## How to verify
 
 1. **Build and run the material-matters demo:**

@@ -302,6 +302,36 @@ at its correct world scale. Chunk meshes are built in chunk-local units (1 voxel
 
 ---
 
+## Challenge: decouple the cascade
+
+Take direct control of when silhouettes resolve into detail.
+
+1. Start from the 3-layer Minecraft-like config (section 6) and add
+   `decompose_distance_m` to the `blocks` layer (e.g. `48.0`) while leaving its
+   `view_distance_chunks` large.
+2. Load it in `05-decompose-on-approach` and fly toward a macro block: its
+   silhouette should be visible far out but only resolve into fine voxels once
+   you cross the decompose distance.
+3. Switch the backdrop layer's `streaming_volume.shape` to `shell` and confirm
+   only the outer band of chunks stays resident.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Start from the config in section 6; demo
+  `demos/05-decompose-on-approach/main.cpp`.
+- `decompose_distance_m` and `streaming_volume.shape` are documented in
+  sections 2 and 5 (full schema: `include/core/LayerConfig.h`).
+- The validation rules you can trip are listed in section 3.
+
+</details>
+
+**Going further:** deliberately violate a validation rule (section 3) -- e.g.
+give two adjacent layers a 3:1 voxel-size ratio -- and read the startup error.
+The engine rejects invalid stacks loudly rather than misbehaving at runtime.
+
+---
+
 ## How to verify
 
 1. **Decompose on approach:**

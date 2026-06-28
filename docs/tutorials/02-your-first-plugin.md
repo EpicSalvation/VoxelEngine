@@ -274,6 +274,35 @@ that uses this generator to fill chunks on demand.
 
 ---
 
+## Challenge: add a second material
+
+Reinforce the material + generator pattern by giving `my-terrain` a soil cap on
+top of its stone floor. Try it before expanding the solution.
+
+1. Register a second material (`soil`) with a distinct `palette_index` and
+   palette color, just like `stone` in section 3.
+2. In `my_terrain`, place soil in the top layer of the floor and stone below.
+3. Rebuild (no CMake edits needed) and run. You should see a soil-colored
+   surface over a stone base.
+
+<details>
+<summary>Show solution (the generator branch)</summary>
+
+```cpp
+if      (wy < 3.0) out_voxels[idx].material = g_stone;
+else if (wy < 4.0) out_voxels[idx].material = g_soil;
+else               out_voxels[idx] = Voxel::empty();
+```
+
+</details>
+
+**Going further:** vary the surface height with x/z by deriving it from
+`voxel_seed_mix` + `voxel_rng_norm` seeded by world position. Keep it a pure
+function of position so streamed chunks stay seamless -- that's the determinism
+rule from section 4 in action.
+
+---
+
 ## How to verify
 
 1. **Build and run:**

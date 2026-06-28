@@ -310,6 +310,35 @@ for (double d = 0.0; d < hit.distance; d += stepSize) {
 
 ---
 
+## Challenge: add a material-aware reticle and beam
+
+Combine picking, material lookup, and immediate-mode rendering.
+
+1. After the raycast, read the targeted voxel's `hardness` and map it to the
+   highlight color -- green for soft, red for hard -- passed to
+   `drawVoxelHighlight`.
+2. Add the mining-laser beam from section 8: step from `camPos` to
+   `hit.distance` calling `drawVoxel`, using the red-to-blue gradient variant.
+3. Rebuild and run `04-build-break-persist`. Aim at different strata and confirm
+   the reticle color tracks hardness and the beam terminates exactly at the hit
+   point.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Demo: `demos/04-build-break-persist/main.cpp`.
+- Read hardness with `world.getVoxel(...).material.hardness`; pass your color to
+  `drawVoxelHighlight` (section 6).
+- The beam loop and gradient variant are in section 8; `kReachM` is the raycast
+  reach argument (section 3).
+
+</details>
+
+**Going further:** shorten `kReachM` and verify distant voxels stop being
+pickable -- the ray returns `hit.hit == false` once the target is beyond reach.
+
+---
+
 ## How to verify
 
 Build and run the build/break demo:

@@ -286,6 +286,36 @@ The renderer sorts translucent faces back-to-front automatically. See
 
 ---
 
+## Challenge: let material properties shape a flow
+
+See `porosity` drive behavior with no special-case code.
+
+1. Register a fluid source and build two walls in front of it -- one of an
+   impermeable material (`porosity = 0`) and one of a porous material
+   (`porosity ~= 0.6`).
+2. Run `14-flow-and-heat` and watch fluid pool against the solid wall but slowly
+   seep through the porous one.
+3. Add a heat source near the fluid and use the `temperatureAt` / `fluidAmountAt`
+   readback (section 5), or the HUD demo, to watch the values change in real
+   time.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Demo: `demos/14-flow-and-heat/main.cpp`.
+- `register_fluid_source` / `register_heat_source` are in sections 2-3;
+  `porosity` is a `MaterialProperties` field (section 2).
+- Read values back with `engine.fluidAmountAt` / `temperatureAt` (section 5);
+  budgets live in `EngineConfig` (section 6).
+
+</details>
+
+**Going further:** lower `fluidMaxCellsPerFrame` to 256 and confirm the flow
+reaches the same equilibrium, just over more frames -- budgeted work is
+deferred, never lost.
+
+---
+
 ## How to verify
 
 1. **Build and run the flow-and-heat demo:**

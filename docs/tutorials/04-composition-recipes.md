@@ -314,6 +314,37 @@ much work the manager does per frame to avoid stalls. See
 
 ---
 
+## Challenge: make decomposition depth-aware
+
+Extend the recipe so a macro block's interior changes with depth.
+
+1. Add a second material to the interior `DistributionDesc` and switch
+   `noise_id` to `"ridged"` to change the spatial pattern.
+2. Register a feature generator modeled on `cave_feature` (section 5) that reads
+   the engine-injected `"__altitude"` parameter and only carves caves below a
+   chosen height.
+3. Rebuild and run `09-recipe-built-voxel`. Fly in to decompose a macro block,
+   dig a shaft, and confirm caves appear only at depth.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Reference plugin: `plugins/recipe-world/plugin.cpp`; demo
+  `demos/09-recipe-built-voxel/main.cpp`.
+- Model your feature on `cave_feature` (section 5) and register it with
+  `register_feature_generator`.
+- Read depth via `recipe_param_num(params, count, "__altitude", ...)`
+  (section 3); use the seeded `voxel_rng_*` helpers (section 7) for randomness.
+
+</details>
+
+**Going further:** fly away so the block collapses, then return -- the
+regenerated interior must be byte-identical. If it isn't, you've broken the
+determinism rule; hunt for stray `rand()` or global mutable state and replace it
+with the seeded `voxel_rng_*` helpers.
+
+---
+
 ## How to verify
 
 1. **Build and run the recipe demo:**

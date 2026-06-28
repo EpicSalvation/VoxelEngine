@@ -444,6 +444,33 @@ while (!window.shouldClose()) {
 
 ---
 
+## Challenge: add a low-gravity toggle with HUD feedback
+
+Tie together the kinematic body, input bindings, and the cell-grid HUD.
+
+1. Bind an unused key with `kbinput::api().bind_key(...)` that calls
+   `set_gravity` on the player body to toggle a low-gravity mode (e.g.
+   `gravity_accel` 25 -> 6).
+2. Add a HUD status item via `hudText` that shows the current gravity mode.
+3. Rebuild and run `18-hud-and-controls`. Toggle the mode mid-jump and feel the
+   difference; confirm the HUD label updates.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Demo: `demos/18-hud-and-controls/main.cpp`.
+- Toggle gravity with `kinbody::api().set_gravity(...)` (section 1); bind the
+  key via `kbinput::api().bind_key(...)` (section 3).
+- Draw the label with `renderer.hudText(...)` (section 6); airborne state is
+  `BodyState::grounded` (section 1).
+
+</details>
+
+**Going further:** read `BodyState::grounded` each frame and tint the crosshair
+differently when airborne versus standing on a surface.
+
+---
+
 ## How to verify
 
 Build and run the HUD-and-controls demo:

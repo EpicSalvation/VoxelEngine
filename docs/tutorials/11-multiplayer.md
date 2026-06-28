@@ -415,6 +415,34 @@ while (!window.shouldClose()) {
 
 ---
 
+## Challenge: add a protected zone and a join message
+
+Combine an authority policy, a custom message channel, and a lifecycle hook.
+
+1. Register an `authority_policy` on the host that rejects edits inside a small
+   box around spawn (section 3).
+2. Register a handler on a new channel (e.g. `"game.ping"`) and broadcast a
+   short message from the `on_player_joined` hook when a player connects.
+3. Run a host and a client. From the client, try to edit inside the protected
+   zone -- it should be silently refused on both windows -- and confirm the join
+   message prints.
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Demo: `demos/11-shared-world/main.cpp`; reference plugins
+  `plugins/chat/plugin.cpp` and `plugins/server-authority/plugin.cpp`.
+- `register_authority_policy` (section 3), custom messaging (section 6), and
+  `register_on_player_joined` (section 7) are the hooks you need.
+- Interest modes are set with `nm.setInterestMode(...)` (section 5).
+
+</details>
+
+**Going further:** switch `setInterestMode` to `StreamingRadius` and verify
+edits far from a peer no longer reach it.
+
+---
+
 ## How to verify
 
 Build and run two instances of the shared-world demo:

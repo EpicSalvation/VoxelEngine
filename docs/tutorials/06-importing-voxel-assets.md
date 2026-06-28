@@ -19,7 +19,7 @@ round-trip editing cycle.
 | Format | Extension | Editor | Scope |
 |--------|-----------|--------|-------|
 | MagicaVoxel | `.vox` | [MagicaVoxel](https://ephtracy.github.io/) | Single-layer, 256-entry RGBA palette, max 256x256x256 per object (auto-chunked for larger volumes) |
-| Qubicle Binary | `.qb` | [Qubicle](https://www.qubicle.com/) | Single-layer, palette-color |
+| Qubicle Binary | `.qb` | [Qubicle](https://www.minddesk.com/) | Single-layer, palette-color |
 | Blockbench | `.bbmodel` | [Blockbench](https://www.blockbench.net/) | Textured blocks with per-face images |
 
 All formats map to the engine's palette-indexed voxel model. Extended
@@ -62,6 +62,31 @@ the M15 texture pipeline, so it is a heavier integration than plain `.vox`.
 | Per-face textured blocks (grass, crates, bricks) | Blockbench |
 | Rapid prototyping (free, zero setup) | MagicaVoxel |
 | Existing `.qb` asset library | Qubicle |
+
+### Learning each editor
+
+This tutorial covers getting assets *into and out of* the engine, not how to
+sculpt voxels in the first place. For that, start with each tool's own learning
+resources (developer-published where available):
+
+- **MagicaVoxel** — The author (ephtracy) ships in-app reference rather than a
+  step-by-step beginner course: see the **Shortcuts** and **Commands** pages
+  linked from the [official site](https://ephtracy.github.io/). For a guided
+  first model, the community
+  [Introduction to MagicaVoxel](https://magicavoxel.fandom.com/wiki/Introduction_to_MagicaVoxel_0.99.1_(tutorial))
+  on the MagicaVoxel Wiki and the
+  [Mega Voxels beginner tutorial](https://www.megavoxels.com/learn/magicavoxel-tutorial-for-beginners/)
+  are good entry points.
+- **Qubicle** — Minddesk publishes official learning material: the
+  [Qubicle documentation](https://getqubicle.com/qubicle/documentation/) and the
+  [Learn Qubicle](https://getqubicle.com/qubicle/learn) hub (including a
+  getting-started video) on the developer site
+  ([minddesk.com](https://www.minddesk.com/)).
+- **Blockbench** — Start with the official
+  [Quickstart wizard](https://www.blockbench.net/quickstart/) to pick the right
+  format, then the [Blockbench Wiki](https://www.blockbench.net/wiki/) for
+  beginner modeling and texturing guides. Since the engine maps `.bbmodel`
+  per-face textures, the wiki's texturing guides are the most relevant.
 
 ---
 
@@ -132,6 +157,33 @@ Key constraints:
 ---
 
 ## 3. Export from the engine
+
+### 3.0 Why export?
+
+Importing pulls authored art *into* the engine; exporting sends voxels back
+*out* to a standard file. Common reasons to reach for export:
+
+- **Round-trip refinement.** Edit a model in-engine (or generate it
+  procedurally), then export it back to `.vox`/`.qb` to polish in a dedicated
+  editor where the sculpting/painting tools are richer. See section 6.
+- **Capturing procedural or runtime content.** Terrain the engine generated, or
+  a structure a player built at runtime, only exists as live voxels until you
+  export it. Exporting turns that transient state into a reusable, hand-editable
+  asset.
+- **Building a shareable asset library.** `.vox` and `.qb` are widely understood
+  interchange formats, so exported models drop straight into a team or community
+  asset library and open in any compatible editor.
+- **Authoring test fixtures.** Snapshot a known-good region to a file and check
+  it into the repo as a regression asset for automated tests (see section 7 for
+  building fixtures entirely in code).
+- **External-pipeline interop.** Hand off to other voxel tools, converters, or
+  renderers that read `.vox`/`.qb`.
+- **Debugging and archival.** Dump a region's voxel state to inspect it in an
+  external viewer, or archive authored content in a compact standard format
+  under version control.
+
+Keep the **lossy-property caveat** (section 6) in mind: only `palette_index`
+survives a `.vox`/`.qb` round-trip; extended `MaterialProperties` are dropped.
 
 ### 3.1 Via Engine
 
@@ -291,6 +343,36 @@ exporter.save("test_model.vox", *layer, WorldCoord(0, 0, 0), WorldCoord(4, 4, 4)
 ```
 
 This is useful for automated tests and procedural content pipelines.
+
+---
+
+## Challenge: prove the round-trip
+
+Build an asset in code, round-trip it, and watch the lossy-property warning fire.
+
+1. Start from the procedural example in section 7. Instead of a solid 4x4x4
+   block, build a hollow box or a two-color checkerboard, and set a non-default
+   `density` on the voxels.
+2. Export it with `VoxExporter`, then import it back into a fresh layer with
+   `VoxImporter`.
+3. Confirm the geometry and palette survive -- and that the engine logs a
+   `LOG_WARN` about dropped extended properties (only `palette_index`
+   round-trips, per section 6).
+
+<details>
+<summary>Stuck? Where to look</summary>
+
+- Start from the procedural snippet in section 7; APIs live in
+  `src/io/VoxExporter.h` and `src/io/VoxImporter.h`.
+- The dropped-property `LOG_WARN` is emitted by `exportVox` (section 3); the
+  caveat is spelled out in section 6.
+- Re-apply density with a `pluginManager.material("...")` lookup
+  (Tutorial 03, section 5).
+
+</details>
+
+**Going further:** re-apply the density after import via a `PluginManager`
+material lookup, restoring the property the `.vox` format dropped.
 
 ---
 
