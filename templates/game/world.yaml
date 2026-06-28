@@ -1,0 +1,104 @@
+# ---------------------------------------------------------------------------
+# world.yaml — layer-configuration template
+#
+# This file describes the SHAPE of your world: how many scales (layers) it has,
+# how large each voxel is, and how aggressively each layer streams around the
+# camera. It is the "A" surface of the engine's three configuration surfaces
+# (A: YAML world shape, B: compile-time Tuning.h, C: runtime EngineConfig — see
+# tutorial 14, Performance Tuning).
+#
+# Load it from your game with:
+#
+#     LayerConfig cfg = LayerConfig::loadFromFile("world.yaml");
+#
+# (or LayerConfig::loadFromString(R"( ... )") to embed it inline, as the demos
+# do). Both throw std::runtime_error on a malformed or invalid config — catch it
+# and fail loudly; a bad world shape is not something to limp past.
+#
+# Validation rules enforced at load (you get a clear exception if you break one):
+#   * At least one layer.
+#   * Layers are listed COARSEST FIRST. Each child's voxel_size_m must be
+#     strictly smaller than its parent's, and the parent/child ratio must be a
+#     whole integer >= 2 (e.g. 8 -> 1 is fine; 8 -> 3 is not).
+#   * A `composite` layer MUST name the layer it decomposes into (`decompose_to`).
+#   * At most one layer may be `interactive: true`.
+#
+# See tutorial 07 (Multi-Layer Worlds) and docs/configuration-guide.md §A for
+# the full treatment. The two worked examples below are both complete and valid;
+# keep the one you want and delete the other.
+# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# EXAMPLE 1 — Single-layer world (start here).
+#
+# One terminal layer of 1 m voxels. This is all you need for a flat editable
+# world, a first prototype, or any game that does not need multi-scale terrain.
+# ===========================================================================
+layers:
+  - name: terrain          # referenced by register_layer_generator(ctx, "terrain", ...)
+    voxel_size_m: 1.0       # edge length of one voxel, in meters
+    mode: terminal          # terminal = editable leaf layer (the player's voxels)
+                            #   other modes: composite (decomposes into a finer
+                            #   layer on approach) and immutable (never edited,
+                            #   persisted, or decomposed — backdrops / bedrock).
+    chunk_size_voxels: 32   # voxels per chunk side; a chunk is this value cubed.
+                            #   32 is a good default. Larger = fewer, heavier
+                            #   chunks; smaller = more, lighter chunks.
+    view_distance_chunks: 5 # stream chunks within this many chunks of the camera.
+    # resident_chunk_budget: 512   # optional hard cap on resident chunks for
+                                    #   this layer (memory ceiling). Omit to let
+                                    #   view_distance_chunks govern alone.
+    # interactive: true            # optional: force this to be the layer the
+                                    #   single-layer edit API targets. With one
+                                    #   terminal layer the default already picks
+                                    #   it, so this is only needed mid-stack.
+
+# ===========================================================================
+# EXAMPLE 2 — Three-layer Minecraft-like world (delete EXAMPLE 1 to use).
+#
+# A coarse macro terrain that decomposes into blocks, which decompose into fine
+# detail voxels near the camera. Listed coarsest first. Uncomment to use.
+# ===========================================================================
+# layers:
+#   - name: macro                  # 8 m silhouette terrain, visible far out
+#     voxel_size_m: 8.0
+#     mode: composite              # decomposes on approach...
+#     decompose_to: blocks         # ...into the "blocks" layer below
+#     chunk_size_voxels: 16
+#     view_distance_chunks: 12     # macro streams far (cheap, coarse silhouette)
+#     decompose_distance_m: 96.0   # but only decomposes to blocks within 96 m —
+#                                  #   decoupling silhouette range from detail
+#                                  #   range keeps the fine grid off the horizon.
+#
+#   - name: blocks                 # 1 m blocks — the player's edit layer
+#     voxel_size_m: 1.0            # ratio 8:1 from macro (whole integer >= 2 ✓)
+#     mode: terminal
+#     interactive: true            # edits target this layer
+#     chunk_size_voxels: 32
+#     view_distance_chunks: 6
+#
+# ===========================================================================
+# EXAMPLE 3 — Non-block world: immutable backdrop + small playspace.
+#
+# A flying / space game: a huge immutable shell you fly through (never edited)
+# wrapping a small editable box of voxels. Demonstrates streaming-volume shapes.
+# See demos/16-beyond-blocks. Uncomment to use.
+# ===========================================================================
+# layers:
+#   - name: backdrop
+#     voxel_size_m: 4.0
+#     mode: immutable              # pure scenery: no edits, no persistence
+#     chunk_size_voxels: 16
+#     view_distance_chunks: 10
+#     streaming_volume:
+#       shape: shell               # box | sphere | shell — load only a hollow
+#       shell_thickness_chunks: 2  #   crust of chunks, not a filled volume
+#
+#   - name: playspace
+#     voxel_size_m: 1.0
+#     mode: terminal
+#     interactive: true
+#     chunk_size_voxels: 16
+#     view_distance_chunks: 4
+#     streaming_volume:
+#       shape: box                 # a compact filled region around the player
