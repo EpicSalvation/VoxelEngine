@@ -112,6 +112,27 @@ bool poll_attack_impl(float* out_damage) {
 
 void set_seed_impl(uint64_t seed) { g_rng = seed ^ 0x9E3779B97F4A7C15ULL; }
 
+bool attack_nearest_impl(WorldCoord from, double reach, float damage) {
+    double bestDist = reach + 1.0;
+    Mob* bestMob = nullptr;
+    for (Mob& m : g_mobs) {
+        if (m.state.state == mob::State::Dead) continue;
+        const double d = glm::length(m.state.center.value - from.value);
+        if (d <= reach && d < bestDist) { bestDist = d; bestMob = &m; }
+    }
+    if (!bestMob) return false;
+    bestMob->state.health -= damage;
+    if (bestMob->state.health <= 0.0f) {
+        bestMob->state.health = 0.0f;
+        bestMob->state.state  = mob::State::Dead;
+        if (bestMob->growl != kInvalidEmitterId && g_ctx)
+            g_ctx->stop_emitter(g_ctx, bestMob->growl);
+    }
+    if (g_ctx)
+        g_ctx->play_sound(g_ctx, "zombie_bite", bestMob->state.center, nullptr);
+    return true;
+}
+
 // ── Per-frame tick: step every mob ───────────────────────────────────────────
 void tick(double dt, void* /*user_data*/) {
     if (!g_ctx) return;
@@ -190,8 +211,9 @@ void fillApi() {
     mob::api().spawn       = spawn_impl;
     mob::api().mob_count   = mob_count_impl;
     mob::api().get_mob     = get_mob_impl;
-    mob::api().poll_attack = poll_attack_impl;
-    mob::api().set_seed    = set_seed_impl;
+    mob::api().poll_attack     = poll_attack_impl;
+    mob::api().set_seed        = set_seed_impl;
+    mob::api().attack_nearest  = attack_nearest_impl;
 }
 
 }  // namespace

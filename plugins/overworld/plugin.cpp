@@ -1,26 +1,14 @@
 // overworld plugin — the worldgen heart of the M18 mega-demo.
 //
-// A Minecraft-lite surface world built as a single TERMINAL layer plus
-// composable feature overlays, the demo-03 (plugin-driven-world) pattern: the
-// host fills each chunk with this plugin's "terrain" layer generator, then
-// applies every registered feature generator in turn (caves and ore here; water
-// and trees from the water/trees plugins). Nothing decomposes — the surface is a
-// real rolling heightmap, not a flat slab — so the world reads as terrain at a
-// glance while still showing cross-plugin composition (the recipe-world demo
-// already owns the decomposition story).
+// M18.5 revision: the demo now uses a hybrid composite heightmap. A coarse
+// "blocks" layer (4 m macro voxels, loaded EMPTY) sits above the terminal
+// "terrain" layer so PropagationSystem can aggregate children and fire M13
+// structural-collapse events. The terminal generator + feature overlays still
+// fill the actual voxel content (grass/dirt/stone strata, caves, ore); the
+// blocks layer exists purely for the physics/collapse pipeline.
 //
-// Determinism (the M18 seed subtask): every height, cave, and ore lookup is a
-// pure function of world position and the run's world seed. The host passes the
-// seed as the layer generator's user_data and as the `seed` argument to the
-// feature pass, so the SAME seed regenerates the SAME world byte-for-byte
-// (ARCHITECTURE §4). No rand/time/global mutable state.
-//
-// Materials carry real MaterialProperties (M8) so the rest of the engine reacts
-// to them without a block-type table: structural_strength drives M13 collapse,
-// porosity gates M14 fluid, palette_index drives color (and the M15 face-texture
-// bindings set up below). Textures are bound by palette_index via
-// set_material_faces; the host writes the referenced PNG tiles and builds the
-// atlas, so an audio-only/headless host simply renders flat colors (fail-soft).
+// Determinism (§4): every height, cave, and ore lookup is a pure function of
+// world position and the run's world seed. No rand/time/global mutable state.
 
 #include "plugin_api.h"
 #include "world/Voxel.h"
@@ -122,7 +110,7 @@ double fbm2(double x, double z, uint64_t seed) {
 }
 
 // Surface height (integer world Y of the topmost solid voxel) at world (x,z).
-// Shared by the terrain generator and the cave generator so caves stay buried.
+// Shared by the terrain generator, the cave generator, and the heightmap noise.
 int surfaceHeight(double wx, double wz, uint64_t seed) {
     const double h = kBaseHeight + (fbm2(wx, wz, seed) - 0.5) * 2.0 * kAmplitude;
     return static_cast<int>(std::llround(h));
@@ -132,7 +120,22 @@ uint64_t seedFrom(void* user_data) {
     return user_data ? *static_cast<const uint64_t*>(user_data) : 0x9E3779B97F4A7C15ull;
 }
 
-// ── Layer generator: the rolling surface world ───────────────────────────────
+// ── Heightmap NoiseFn for recipe occupancy carving ──────────────────────────
+// Returns a value in [0,1): >= 0.5 when the voxel center is at or below the
+// surface (solid), < 0.5 when above (carved to air). The world seed is read
+// from the "world_seed" recipe param (set on the occupancy desc and merged
+// through the standard M10 precedence).
+float overworld_height_noise(WorldCoord pos, uint64_t /*seed*/,
+                             const RecipeParam* params, size_t count,
+                             void* /*user_data*/) {
+    const uint64_t worldSeed = static_cast<uint64_t>(
+        recipe_param_num(params, count, "world_seed", 0x9E3779B97F4A7C15));
+    const int h = surfaceHeight(pos.value.x, pos.value.z, worldSeed);
+    if (pos.value.y <= static_cast<double>(h) + 0.5) return 0.9f;
+    return 0.1f;
+}
+
+// ── Layer generator: the rolling surface world (terminal "terrain" layer) ────
 // Fills a terminal chunk from a heightmap: bedrock floor, a stone bulk, a few
 // dirt voxels of subsoil, and a grass (or sand, near sea level) cap. Air above.
 void terrain_generator(WorldCoord chunk_origin, int grid_size, Voxel* out, void* user_data) {
@@ -167,10 +170,7 @@ void terrain_generator(WorldCoord chunk_origin, int grid_size, Voxel* out, void*
 
 // ── Feature generator: caves ─────────────────────────────────────────────────
 // Carves connected voids out of the stony bulk where a coherent 3D value-noise
-// field falls below a depth-ramped density: sparse just under the surface,
-// heavier deep down. Caves stay buried (never within kSurfaceMargin of the
-// column's surface) so the ground never reads as swiss cheese from above, and
-// never break the bedrock floor. Pure in (world position, seed).
+// field falls below a depth-ramped density.
 void cave_feature(WorldCoord origin, double vs, int n, Voxel* inout,
                   const RecipeParam* params, size_t count, uint64_t seed, void*) {
     constexpr int kSurfaceMargin = 3;
@@ -187,11 +187,11 @@ void cave_feature(WorldCoord origin, double vs, int n, Voxel* inout,
             const int surf = surfaceHeight(wx, wz, seed);
             for (int y = 0; y < n; ++y) {
                 Voxel& v = inout[x + n * (y + n * z)];
-                if (v.isEmpty()) continue;                       // only carve solid
-                if (v.material.palette_index == kBedrockIdx) continue;  // never the floor
+                if (v.isEmpty()) continue;
+                if (v.material.palette_index == kBedrockIdx) continue;
                 const double wy = origin.value.y + (y + 0.5) * vs;
                 const int iy = static_cast<int>(std::floor(wy));
-                if (iy > surf - kSurfaceMargin || iy < kBedrockTop) continue;  // keep caves buried
+                if (iy > surf - kSurfaceMargin || iy < kBedrockTop) continue;
                 const double depthFrac =
                     std::clamp(static_cast<double>(surf - iy) / std::max(1.0, kBaseHeight), 0.0, 1.0);
                 const double density =
@@ -203,8 +203,6 @@ void cave_feature(WorldCoord origin, double vs, int n, Voxel* inout,
 }
 
 // ── Feature generator: ore veins ─────────────────────────────────────────────
-// Replaces pockets of stone with iron ore where a second value-noise field is
-// rich, restricted to deeper rock so ore is a reward for digging. Pure.
 void ore_feature(WorldCoord origin, double vs, int n, Voxel* inout,
                  const RecipeParam* params, size_t count, uint64_t seed, void*) {
     const double richness = std::clamp(recipe_param_num(params, count, "ore_richness", 0.14), 0.0, 1.0);
@@ -217,7 +215,7 @@ void ore_feature(WorldCoord origin, double vs, int n, Voxel* inout,
         for (int y = 0; y < n; ++y)
             for (int x = 0; x < n; ++x) {
                 Voxel& v = inout[x + n * (y + n * z)];
-                if (v.material.palette_index != kStoneIdx) continue;  // only the stony bulk
+                if (v.material.palette_index != kStoneIdx) continue;
                 const double wx = origin.value.x + (x + 0.5) * vs;
                 const double wy = origin.value.y + (y + 0.5) * vs;
                 const double wz = origin.value.z + (z + 0.5) * vs;
@@ -226,19 +224,19 @@ void ore_feature(WorldCoord origin, double vs, int n, Voxel* inout,
             }
 }
 
-// Bind a material's faces to atlas tiles by texture id (M15). Fail-soft if the
-// host attached no texture pipeline. one tile per world metre (tiling_factor 1).
+// Bind a material's faces to atlas tiles by texture id (M15).
 void bindFaces(PluginContext* ctx, uint8_t palette,
                const char* top, const char* bottom, const char* side) {
     ctx->set_material_faces(ctx, palette, top, bottom, side, 1.0f);
 }
 
+// World seed pointer — stored at init so the heightmap noise can read it.
+uint64_t* g_seedPtr = nullptr;
+
 }  // namespace
 
-// Named entry point so the determinism test can compile this plugin in (sharing
-// the generators) alongside other plugins without a voxel_plugin_init collision.
 VOXEL_PLUGIN_EXPORT int overworld_plugin_init(PluginContext* ctx) {
-    // Materials (M8). Strength/porosity are read by the M13/M14 systems directly.
+    // Materials (M8).
     ctx->register_material(ctx, "grass",    material(kGrassIdx,   1500.0f, 0.35f, 0.30f));
     ctx->register_material(ctx, "dirt",     material(kDirtIdx,    1300.0f, 0.30f, 0.25f));
     ctx->register_material(ctx, "stone",    material(kStoneIdx,   2700.0f, 0.85f, 0.70f));
@@ -247,14 +245,10 @@ VOXEL_PLUGIN_EXPORT int overworld_plugin_init(PluginContext* ctx) {
     ctx->register_material(ctx, "leaves",   material(kLeavesIdx,   200.0f, 0.05f, 0.10f, 0.40f));
     ctx->register_material(ctx, "iron-ore", material(kIronIdx,    5200.0f, 0.90f, 0.85f));
     ctx->register_material(ctx, "bedrock",  material(kBedrockIdx, 4000.0f, 1.00f, 1.00f));
-    // Water is also registered by the water plugin (static sea flood); registering
-    // it here too lets the M14 fluid spring below resolve "water" → palette_index
-    // at registration regardless of plugin load order. Same palette/props, so the
-    // duplicate is harmless (last write wins).
     ctx->register_material(ctx, "water",
                            material(kWaterIdx, 1000.0f, 0.0f, 0.0f, /*porosity=*/1.0f));
 
-    // Palette colours (ABGR 0xAABBGGRR), so the world reads even with no atlas.
+    // Palette colours (ABGR 0xAABBGGRR).
     ctx->set_palette_color(ctx, kStoneIdx,   0xff7a7a7a);
     ctx->set_palette_color(ctx, kGrassIdx,   0xff3fa83f);
     ctx->set_palette_color(ctx, kDirtIdx,    0xff3f5a8b);
@@ -265,11 +259,7 @@ VOXEL_PLUGIN_EXPORT int overworld_plugin_init(PluginContext* ctx) {
     ctx->set_palette_color(ctx, kIronIdx,    0xff9a9aa8);
     ctx->set_palette_color(ctx, kBedrockIdx, 0xff202028);
 
-    // M15 textures: register each atlas tile by id → PNG path, then bind material
-    // faces to those ids by palette_index. The host writes these PNG tiles
-    // (assets/textures/overworld/*.png) before building the atlas. All fail-soft:
-    // with no texture pipeline attached (headless/audio-only host) both calls are
-    // no-ops and the world renders the flat palette colours set above.
+    // M15 textures.
     const char* kTexDir = "assets/textures/overworld/";
     const char* kTiles[] = {"grass_top", "grass_side", "dirt", "stone",
                             "sand", "log_top", "log_side", "leaves"};
@@ -284,17 +274,28 @@ VOXEL_PLUGIN_EXPORT int overworld_plugin_init(PluginContext* ctx) {
     bindFaces(ctx, kLogIdx,   "log_top",   "log_top", "log_side");
     bindFaces(ctx, kLeavesIdx,"leaves",    "leaves", "leaves");
 
+    // Heightmap noise — registered so the engine (or a future recipe-based
+    // decomposition) can reference it; the current hybrid demo doesn't consume
+    // it, but tests and tooling can query it.
+    ctx->register_noise(ctx, "overworld_height", overworld_height_noise, g_seedPtr);
+
+    // Terminal "terrain" layer generator — fills the actual voxel data
+    // (grass/dirt/stone strata, bedrock floor).
     ctx->register_layer_generator(ctx, "terrain", terrain_generator, nullptr);
+
+    // Feature generators (caves + ore veins).
     ctx->register_feature_generator(ctx, "cave", cave_feature, nullptr);
     ctx->register_feature_generator(ctx, "ore",  ore_feature,  nullptr);
 
-    // M14 fluid spring: a steady source above the surface near spawn. With a
-    // FluidSystem attached and the `flow` responder loaded, the engine injects
-    // fluid into the field here each tick and `flow` realizes water voxels that
-    // run downhill and pool — a live waterfall over the procedural terrain.
-    // Fail-soft: a no-op when no FluidSystem is attached (headless host).
+    // M14 fluid spring.
     ctx->register_fluid_source(ctx, WorldCoord(6.5, 33.5, 6.5), 6.0f, "water");
     return 0;
+}
+
+// Set the world seed pointer before init so the heightmap noise can use it.
+// Called by the host (mega-demo) or by tests.
+VOXEL_PLUGIN_EXPORT void overworld_set_seed_ptr(uint64_t* ptr) {
+    g_seedPtr = ptr;
 }
 
 #ifndef OVERWORLD_COMPILED_IN

@@ -89,15 +89,15 @@ practical effect of a codebase whose conventions are discoverable once (the sing
 tests + docs) rather than an exploration-heavy one, which is the desired shape — the agent
 spent its budget producing code, not hunting for how the engine works.
 
-## A note on scope honesty
+## A note on scope honesty (updated M18.5)
 
-The mega-demo is built on a single **terminal heightmap layer** (rolling Minecraft-lite
-terrain). That choice makes M14 fluid (a spring that realizes flowing water) and M15 textures
-drop in cleanly, but it is *incompatible* with M13 structural collapse: the M13 support-flood
-fires `on_structural_event` only for **composite macro voxels**, and a terminal world has none.
-Showing M13 would require rebuilding the world on the M9 recipe/decomposition path (a flat
-composite slab), which trades away the rolling surface. M13 collapse is already the headline of
-`demos/13-structural-collapse` and `demos/19-multilevel-collapse`, so the mega-demo references
-those rather than reverting its terrain model. This trade-off is itself an AI-friendliness data
-point: the constraint was discovered by reading the system's own contract (composite-only
-structural events), not by trial and error.
+The original M18 mega-demo was built on a single **terminal heightmap layer**, which was
+incompatible with M13 structural collapse (the M13 support-flood fires only for composite
+macro voxels). M18.5 resolved this by adding a **hybrid composite stack**: a coarse "blocks"
+layer (4 m macro voxels, loaded empty) sits above the terminal "terrain" layer so
+`PropagationSystem` can aggregate children and detect unsupported structures. Mining under
+an overhang now triggers a real cave-in via the `crumble` plugin — the M13 headline the demo
+previously disclaimed. The player can also fight back against mobs (melee combat via
+`mob::api().attack_nearest`), turning the demo from a flee-only survival slice into an
+actual combat loop. The rolling heightmap surface, M14 fluid, and M15 textures are all
+preserved.
