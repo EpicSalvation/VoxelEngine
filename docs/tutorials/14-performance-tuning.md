@@ -402,7 +402,7 @@ band.
 | What | Where |
 |------|-------|
 | EngineConfig (all runtime knobs) | [`include/core/EngineConfig.h`](../../include/core/EngineConfig.h) |
-| Tuning constants (all compile-time) | `include/core/Tuning.h` |
+| Tuning constants (all compile-time) | `src/core/Tuning.h` |
 | LayerConfig (YAML schema) | [`include/core/LayerConfig.h`](../../include/core/LayerConfig.h) |
 | EngineMetrics | `include/core/EngineMetrics.h` |
 | Logger | [`include/core/Logger.h`](../../include/core/Logger.h) |

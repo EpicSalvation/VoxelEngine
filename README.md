@@ -34,7 +34,7 @@ The Voxel Game Engine is a plugin-based C++ game engine designed for creating vo
 - **Three voxel modes** — Composite (lazily decomposes on demand), Immutable (collision/rendering only, no decomposition), and Terminal (player-buildable leaf layer)
 - **Cascading lazy decomposition** — macro-voxels decompose one layer at a time through a chain of intermediate composite layers, never jumping scales in a single step
 - **Material-driven simulation** — voxels carry physical properties rather than hardcoded block type logic, enabling composable modding and emergent simulation
-- **Standard tool interoperability** — compatible with `.vox` (MagicaVoxel) and `.qb` (Qubicle) for single-layer content; extended engine-native format for multi-layer and material features. *(Palette-color content only today. The textured-block painting workflow — e.g. per-face textures authored in **Blockbench** — is **not yet implemented**; it is scoped as **M15 — Textured Voxels & Content-Tool Interop**, `docs/m15-textured-voxels-audit.md`.)*
+- **Standard tool interoperability** — compatible with `.vox` (MagicaVoxel) and `.qb` (Qubicle) for single-layer palette-color content, plus `.bbmodel` (Blockbench) import for per-face textured blocks; extended engine-native `.vxe` format for multi-layer and material features
 - **Plugin architecture** — nearly all engine behavior including world generation, features, physics, and import/export is extensible via plugins
 - **AI agent-friendly design** — explicit invariants, a strong `WorldCoord` type, flat callback-based plugin hooks, and dedicated architecture documentation
 
@@ -193,17 +193,18 @@ The engine is designed to remain compatible with standard voxel editors for the 
 | Content type | Format | Compatibility |
 |---|---|---|
 | Single-layer, palette materials | `.vox`, `.qb` | Full import/export |
+| Per-face textured blocks | `.bbmodel` (Blockbench) | Import (one-way) via plugin |
 | Multi-layer or anchored content | Engine-native `.vxe` + `.vox` sidecar | Import/export via plugin |
 | Extended material properties | `.vxe` | Engine-native only |
 
 A plugin that adds non-standard features should also register an import/export handler. If none is registered, the engine falls back to vanilla `.vox` export (lossy but functional, with a logged warning).
 
-> **Status — textured-tool interop is not yet implemented.** The interoperability
-> above covers **palette-color** content only (`.vox`/`.qb`). The textured-block
-> workflow — painting per-face textures in a tool like **Blockbench** — is not
-> supported yet: the renderer draws one solid (shaded) color per voxel. Adding it
-> is scoped as **M15 — Textured Voxels & Content-Tool Interop**
-> (`docs/m15-textured-voxels-audit.md`).
+> **Textured-block interop (M15).** Per-face textured voxels are supported via a
+> material-keyed texture atlas and a Blockbench (`.bbmodel`) importer plugin. The
+> renderer samples per-face UVs from an atlas uploaded at runtime; materials bind
+> tiles per face via `set_material_faces`, and the tiling factor is scale-agnostic
+> (one authored texture serves 1 m terminal and large composite voxels alike). See
+> `docs/m15-textured-voxels-audit.md` for the design audit that preceded the work.
 
 The `.vox` format supports volumes up to 256³ per object. Larger volumes are automatically chunked on import/export. Imported `.vox` content is always assigned to a specific layer and world-space anchor; it has no concept of the other layers.
 
@@ -213,65 +214,168 @@ The `.vox` format supports volumes up to 256³ per object. Larger volumes are au
 
 ```
 voxel-game-engine
-├── src                                   # → voxel-engine library (all sources below)
+├── src                                    # → voxel-engine library (all sources below)
 │   ├── core
-│   │   ├── Engine.cpp                    # Engine lifecycle, startup validation (header in include/core)
-│   │   ├── PluginManager.cpp / .h        # Plugin load/unload, hook registration
-│   │   └── LayerConfig.cpp               # Layer stack definition and validation (header in include/core)
+│   │   ├── Engine.cpp                     # Engine lifecycle, startup validation (header in include/core)
+│   │   ├── EngineConfig.cpp               # Runtime-settable per-frame work budgets
+│   │   ├── PluginManager.cpp / .h         # Plugin load/unload, hook registration, ABI guard
+│   │   ├── LayerConfig.cpp                # Layer stack definition and validation (header in include/core)
+│   │   ├── RecipeValidation.cpp / .h      # Startup validation of recipe/noise/feature references
+│   │   ├── Logger.cpp / .h                # Leveled, category-tagged logging (info/debug/warn/error)
+│   │   ├── Profiler.cpp                   # Optional CPU zone profiler (header in include/core)
+│   │   └── Tuning.h                       # Model constants (compile-time); budget defaults from EngineConfig
 │   ├── world
-│   │   ├── Voxel.cpp / .h                # Voxel data: material props, palette index, mode
-│   │   ├── Layer.cpp / .h                # Per-layer chunk management and coordinate space
-│   │   ├── World.cpp / .h                # Multi-layer world container
-│   │   ├── MacroVoxel.cpp / .h           # Composition recipe, decomposition state, mode
-│   │   └── DecompositionWorker.cpp / .h  # Async on-demand child grid generation
+│   │   ├── Voxel.cpp / .h                 # Voxel data: material props, palette index, mode
+│   │   ├── Chunk.h                        # Fixed-size voxel grid with dirty tracking
+│   │   ├── ChunkCoordMath.h               # Coord conversions: WorldCoord ↔ VoxelCoord ↔ ChunkCoord
+│   │   ├── Layer.cpp / .h                 # Per-layer chunk management and coordinate space
+│   │   ├── World.cpp / .h                 # Multi-layer world container, interactive-layer selection
+│   │   ├── MacroVoxel.h                   # Decomposition state tracking per macro voxel
+│   │   ├── DecompositionWorker.cpp / .h   # Async on-demand child grid generation (thread pool)
+│   │   ├── DecompositionManager.cpp / .h  # Engine-owned N-layer cascade orchestrator (M10)
+│   │   ├── LODManager.cpp / .h            # Per-layer streaming budget + eviction (neutral tier, M10)
+│   │   ├── StreamingVolume.cpp / .h       # Camera-centered residency: box / sphere / shell (M16)
+│   │   ├── Recipe.h                       # Owning recipe value type (deep-copies RecipeDesc)
+│   │   ├── RecipeResolve.cpp / .h         # Resolve recipe string ids to fns; seed-param cascade
+│   │   ├── ResolvedRecipe.cpp / .h        # fillChildChunk: distribution + boundary + features + occupancy
+│   │   ├── Noise.cpp / .h                 # Built-in noise: value, fbm, ridged, worley
+│   │   ├── VoxelRaycast.cpp / .h          # DDA grid traversal in double precision
+│   │   ├── VoxelCollision.cpp / .h        # Swept axis-separated AABB vs terminal voxels
+│   │   ├── GravityProvider.h              # gravityAt(WorldCoord) seam: constant / radial / zero-g
+│   │   └── AxisRole.h                     # Gravity-relative face role resolution (up/down/lateral)
 │   ├── renderer
-│   │   ├── RendererFactory.cpp           # createRenderer() impl; sole bgfx-naming public-API code
-│   │   ├── BgfxRenderer.cpp / .h         # bgfx backend: window surface, shaders, floating origin
-│   │   └── LODManager.cpp / .h           # Per-layer view distance and chunk budgets
+│   │   ├── RendererFactory.cpp            # createRenderer() impl; sole bgfx-naming public-API code
+│   │   ├── BgfxRenderer.cpp / .h          # bgfx backend: window, shaders, floating origin, HUD
+│   │   ├── ChunkMesh.cpp / .h             # Per-chunk static mesh build + GPU upload
+│   │   ├── ChunkMeshData.cpp / .h         # Face-culled mesh builder with AO, lighting, texture UVs
+│   │   ├── Palette.h                      # Runtime 256-entry visual palette (RGBA)
+│   │   ├── TextureManager.cpp / .h        # Texture atlas lifecycle: decode → pack → GPU upload
+│   │   ├── TextureAtlasData.cpp / .h      # Headless shelf-packer for atlas sub-rects
+│   │   ├── MaterialFaces.cpp / .h         # (palette_index, face) → atlas tile + tiling factor
+│   │   └── LODManager.cpp / .h            # Backward-compat redirect → src/world/LODManager.h
 │   ├── platform
-│   │   └── Window.cpp / .h               # GLFW window; exposes native handles
+│   │   └── Window.cpp / .h                # GLFW window; exposes native handles
 │   ├── simulation
-│   │   ├── PhysicsSystem.cpp / .h        # Material-property-driven structural simulation
-│   │   └── PropagationSystem.cpp / .h    # Upward damage propagation across composite layers
+│   │   ├── PhysicsSystem.cpp / .h         # Material-property-driven structural simulation (M13)
+│   │   ├── PropagationSystem.cpp / .h     # Multi-level upward damage propagation (M13/M17)
+│   │   ├── RemovalModel.cpp / .h          # Hardness-driven voxel-removal cost function (M8)
+│   │   ├── RemovalAccumulator.cpp / .h    # Per-target removal progress accumulator
+│   │   ├── FluidSystem.cpp / .h           # Gravity-relative fluid flow simulation (M14)
+│   │   ├── ThermalSystem.cpp / .h         # Thermal conduction simulation (M14)
+│   │   ├── LightingSystem.cpp / .h        # Sky + block light propagation (M17)
+│   │   ├── FieldOverlay.h                 # Sparse per-chunk field storage (shared by fluid/thermal/light)
+│   │   └── NeighborWalk.h                 # 6-neighbor iteration utilities
+│   ├── net
+│   │   ├── ITransport.cpp / .h            # Abstract transport seam (swappable via plugin)
+│   │   ├── ENetTransport.cpp / .h         # ENet-backed ITransport implementation
+│   │   ├── NetworkManager.cpp / .h        # Session management, edit replication, interest mgmt
+│   │   ├── NetPackets.h                   # Wire-protocol packet types (little-endian)
+│   │   └── NetJoinHandshake.h             # Join sequence: seed + LayerConfig + dirty chunks
+│   ├── audio
+│   │   ├── IAudioBackend.cpp / .h         # Abstract audio seam (swappable via plugin)
+│   │   ├── MiniaudioBackend.cpp / .h      # miniaudio-backed IAudioBackend (real + null device)
+│   │   ├── AudioManager.cpp / .h          # Listener, emitters, material→sound resolution
+│   │   └── AudioValidation.cpp / .h       # Startup validation of sound/binding registrations
 │   ├── io
-│   │   ├── VoxImporter.cpp / .h          # .vox format import with layer assignment
-│   │   └── VoxExporter.cpp / .h          # .vox format export with auto-chunking
+│   │   ├── VoxImporter.cpp / .h           # .vox format import with layer assignment
+│   │   ├── VoxExporter.cpp / .h           # .vox format export with auto-chunking
+│   │   ├── QbImporter.cpp / .h            # .qb (Qubicle) import with RLE/BGRA support
+│   │   ├── QbExporter.cpp / .h            # .qb format export
+│   │   └── ChunkPersistence.cpp / .h      # .vxc chunk save/load codec (versioned)
 │   └── plugins
-│       └── ExamplePlugin.cpp / .h        # Reference plugin: feature generator + material def
-├── demos                                # Progressive series of reference examples
-│   └── 01-single-voxel                  # M2: single voxel in space (auto-orbit / free-cam)
-│       └── main.cpp                      # Each demo/<NN-name>/main.cpp builds its own target
-├── plugins                              # Runtime-loadable plugins, each a MODULE shared lib
-│   ├── base-terrain/plugin.cpp          # Materials + terrain layer generator (the M3 world)
-│   ├── water/plugin.cpp                 # Removable: water material + sea-level feature generator
-│   ├── layered-world/plugin.cpp         # M6: blocks/terrain/backdrop generators for three layers
-│   ├── recipe-world/plugin.cpp          # M9: composition recipe + cave/ore feature generators
-│   └── kinematic-body/                  # M17: reference multi-body kinematic system
-│       ├── kinematic_body.h             # Shared API header (body registry, input, state)
-│       └── plugin.cpp                   # Body registry, gravity, jump, sweep-and-resolve tick
-├── tests
-│   └── LayerConfigTest.cpp               # Unit tests; link voxel-engine + GoogleTest
-├── shaders                               # bgfx .sc shader sources + committed bytecode
-│   ├── vs_voxel.sc / fs_voxel.sc         # Authored shaders (with varying.def.sc)
-│   └── generated/                        # Per-backend bytecode headers (committed; see ARCHITECTURE §9)
-├── include                               # Public API (propagated to engine consumers)
-│   ├── plugin_api.h                      # Public plugin interface; flat callback registration
-│   ├── WorldCoord.h                      # Double-precision coordinate type; wraps dvec3
+│       └── ExamplePlugin.cpp / .h         # Reference plugin: feature generator + material def
+├── demos                                  # Progressive series of reference examples (20 demos)
+│   ├── 01-single-voxel/                   # M2: single voxel in space (auto-orbit / free-cam)
+│   ├── 02-streaming-terrain/              # M3: chunked terrain flythrough
+│   ├── 03-plugin-driven-world/            # M4: disk-loaded plugins, live water toggle
+│   ├── 04-build-break-persist/            # M5: place/break voxels, walk, save/load
+│   ├── 05-decompose-on-approach/          # M6: multi-layer decomposition + immutable backdrop
+│   ├── 06-magicavoxel-round-trip/         # M7: .vox import → edit → export
+│   ├── 07-arena-platformer/               # M7b: 5-layer platformer, collect-the-keys
+│   ├── 08-material-matters/               # M8: hardness-driven mining, HUD readout
+│   ├── 09-recipe-built-voxel/             # M9: recipe decomposition, caves, ore, seed params
+│   ├── 10-drill-to-the-core/              # M10: 4-layer cascade, cache eviction round-trip
+│   ├── 11-shared-world/                   # M11: two-player multiplayer, chat, interest mgmt
+│   ├── 12-soundscape/                     # M12: positional audio, material sounds, ambient bed
+│   ├── 13-structural-collapse/            # M13: structural load/collapse, crumble response
+│   ├── 14-flow-and-heat/                  # M14: fluid seepage, thermal conduction, HUD probe
+│   ├── 15-textured-blocks/                # M15: Blockbench import, per-face textured rendering
+│   ├── 16-beyond-blocks/                  # M16: zero-g island, shell backdrop, heterogeneous budgets
+│   ├── 17-asteroid-belt-miner/            # M16: radial gravity, volumetric asteroids, surface-cam
+│   ├── 18-hud-and-controls/               # M17: health/inventory/minimap HUD, gamepad support
+│   ├── 19-multilevel-collapse/            # M17: multi-level propagation, grandparent cascade
+│   └── 20-mega-demo/                      # M18: "Overworld" survival slice — seeded terrain,
+│       └── main.cpp                       #   caves, trees, water, zombies, textured blocks, audio
+├── plugins                                # Runtime-loadable plugins, each a MODULE shared lib
+│   ├── base-terrain/                      # Materials + terrain layer generator (the M3 world)
+│   ├── water/                             # Removable: water material + sea-level feature generator
+│   ├── layered-world/                     # M6: blocks/terrain/backdrop generators
+│   ├── recipe-world/                      # M9: composition recipe + cave/ore feature generators
+│   ├── server-authority/                  # M11: authoritative-server / host-as-authority P2P
+│   ├── chat/                              # M11: in-engine chat over the network message channel
+│   ├── material-audio/                    # M12: material-driven break/place sounds
+│   ├── crumble/                           # M13: structural-collapse response (clear unstable voxels)
+│   ├── falling-debris/                    # M13: visual falling-voxel effect on collapse
+│   ├── flow/                              # M14: fluid field → translucent water voxel responder
+│   ├── field-sources/                     # M14: fluid/heat source emitters
+│   ├── blockbench/                        # M15: .bbmodel importer (per-face textured blocks)
+│   ├── asteroid-field/                    # M16: volumetric radial-density asteroid generator
+│   ├── floating-playspace/                # M16: finite floating island generator
+│   ├── atmospheric-mist/                  # M17: distance fog with breathing density
+│   ├── range-attenuation/                 # M17: flickering torch-radius fog
+│   ├── kinematic-body/                    # M17: reference multi-body kinematic system
+│   │   ├── kinematic_body.h               #   Shared API header (body registry, input, state)
+│   │   └── plugin.cpp                     #   Body registry, gravity, jump, sweep-and-resolve tick
+│   ├── keyboard-mouse/                    # M17: rebindable keyboard/mouse input mapping
+│   ├── gamepad/                           # M17: gamepad input with radial dead-zone handling
+│   ├── example-hooks/                     # M17: teaching catalog of all major hook types
+│   ├── material-showcase/                 # M8: strata world with varied hardness + bedrock
+│   ├── arena/                             # M7b: arena world generators and materials
+│   ├── hazards/                           # M7b: lava hazard pools (removable)
+│   ├── drill-world/                       # M10: 4-layer cascade generator
+│   ├── overworld/                         # M18: seeded rolling terrain + caves + ore
+│   ├── trees/                             # M18: tree placement feature generator
+│   └── mob/                               # M18: wander/chase/attack zombie AI
+├── tests                                  # Unit tests; link voxel-engine + GoogleTest (~500 tests)
+├── bench                                  # Performance benchmarks (headless, no window)
+│   └── profile_pass.cpp                   # CPU profiling harness for decomp/streaming/meshing
+├── assets                                 # Runtime assets (audio, Blockbench samples)
+│   ├── audio/                             # Material sounds, ambient bed (synthesised on first run)
+│   └── blockbench/                        # Sample .bbmodel + generate script
+├── shaders                                # bgfx .sc shader sources + committed bytecode
+│   ├── vs_voxel.sc / fs_voxel.sc          # Authored shaders (with varying.def.sc)
+│   └── generated/                         # Per-backend bytecode headers (committed; see ARCHITECTURE §9)
+├── include                                # Public API (propagated to engine consumers)
+│   ├── plugin_api.h                       # Public plugin interface; flat callback registration
+│   ├── WorldCoord.h                       # Double-precision coordinate type; wraps dvec3
 │   ├── core
-│   │   ├── Engine.h                      # Engine lifecycle / front-end entry point
-│   │   └── LayerConfig.h                 # Layer stack definition and validation
+│   │   ├── Engine.h                       # Engine lifecycle / front-end entry point
+│   │   ├── LayerConfig.h                  # Layer stack definition and validation
+│   │   ├── EngineConfig.h                 # Runtime per-frame work budgets
+│   │   ├── EngineMetrics.h                # Queryable engine stats (frame time, draw calls, etc.)
+│   │   └── Profiler.h                     # Optional CPU zone profiler (VOXEL_PROFILE_SCOPE)
 │   ├── renderer
-│   │   ├── Renderer.h                    # Abstract renderer interface (no bgfx types)
-│   │   └── RendererFactory.h             # createRenderer(): bgfx-free renderer seam
+│   │   ├── Renderer.h                     # Abstract renderer interface (no bgfx types)
+│   │   ├── RendererFactory.h              # createRenderer(): bgfx-free renderer seam
+│   │   ├── CameraBasis.h                  # Pitch/yaw/roll + arbitrary up → orthonormal camera frame
+│   │   ├── Fog.h                          # FogParams: color, near/far band, density
+│   │   └── Frustum.h                      # View-frustum culling (bounding-sphere test)
 │   └── platform
-│       └── NativeWindowHandles.h         # Library-neutral window↔renderer seam
-├── templates                             # Copy-paste starting points for a new game (not built)
-│   ├── game                              # main.cpp entrypoint + annotated world.yaml
-│   └── plugin                            # world-generation and gameplay plugin templates
+│       └── NativeWindowHandles.h          # Library-neutral window↔renderer seam
+├── templates                              # Copy-paste starting points for a new game (not built)
+│   ├── game                               # main.cpp entrypoint + annotated world.yaml
+│   └── plugin                             # world-generation and gameplay plugin templates
 ├── docs
-│   ├── ARCHITECTURE.md                   # Subsystem design, invariants, AI agent guidance
-│   └── tutorials                         # Step-by-step walkthroughs (01-hello-voxel … 14-performance-tuning)
+│   ├── architecture.md                    # Subsystem design, invariants, AI agent guidance
+│   ├── configuration-guide.md             # Every tunable knob: YAML, Tuning.h, runtime APIs
+│   ├── creating-voxels.md                 # Material definitions, recipes, asset import
+│   ├── save-format-versioning.md          # .vxc format, version contract, migration path
+│   ├── tutorials/                         # Step-by-step walkthroughs (01-hello-voxel … 14-performance-tuning)
+│   └── proposals/                         # Design proposals (recipe-occupancy, etc.)
 ├── CMakeLists.txt
+├── CONTRIBUTING.md
+├── THIRD-PARTY-LICENSES.md
+├── LICENSE
 └── README.md
 ```
 
@@ -281,16 +385,21 @@ voxel-game-engine
 
 Plugins register flat callbacks for named engine hooks rather than subclassing engine types. This keeps each plugin's contract visible and self-contained.
 
-Registerable hooks (subject to revision as the API matures):
+Registerable hooks (see `include/plugin_api.h` for the full list and signatures):
 
-- **World generation** — Layer N procedural population
-- **Feature generators** — Sub-structure stamps used by composition recipes (caves, dungeons, ore veins, etc.)
-- **Material definitions** — Register new materials with property values and palette entries
-- **Import/Export handlers** — Custom format support or extended `.vox` sidecar data
-- **Simulation hooks** — React to material state changes, structural events, or player interactions
-- **Layer lifecycle hooks** — Called when a layer chunk is created, decomposed, modified, or evicted
+- **World generation** — `register_layer_generator`: procedural population per named layer
+- **Feature generators** — `register_feature_generator`: parameterized sub-structure stamps used by composition recipes (caves, ore veins, etc.)
+- **Composition recipes** — `register_recipe`: material distribution, boundary caps, feature overlays, occupancy carving, and seed parameters for composite-layer decomposition
+- **Noise functions** — `register_noise` / `resolve_noise`: pluggable noise (value, fbm, ridged, worley built-in; overridable)
+- **Material definitions** — `register_material`: register new materials with property values and palette entries
+- **Texture and appearance** — `register_texture` / `register_texture_data` / `set_material_faces` / `set_palette_color`: per-face textured blocks via a runtime atlas
+- **Import/Export handlers** — `register_importer` / `register_exporter`: custom format support (`.vox`, `.qb`, `.bbmodel` built-in)
+- **Simulation hooks** — `register_on_structural_event`, `register_on_fluid_event`, `register_on_thermal_event`, `register_on_lighting_event`, `register_light_source`, `register_fluid_source`, `register_heat_source`
+- **Layer lifecycle hooks** — `register_on_chunk_created` / `register_on_chunk_evicted` / `register_on_voxel_modified`
 - **Per-frame tick** — `register_on_tick`: called every frame with `dt`; drives kinematic stepping, animation, or any per-frame plugin simulation
 - **Collision primitive** — `move_aabb`: sweep-and-resolve an AABB against terminal voxels; returns resolved position and per-axis hit flags
+- **Networking** — `register_on_edit_received`, `register_on_player_joined` / `register_on_player_left`, `register_on_network_message`, `send_network_message`, `apply_edit`, `register_authority_policy`, `register_interest_filter`
+- **Audio** — `register_sound`, `register_material_sound`, `play_sound` / `play_material_sound`, `create_emitter` / `set_emitter_position` / `stop_emitter`
 
 To create a plugin, implement the interface defined in `include/plugin_api.h` and load it via `PluginManager`. See `src/plugins/ExamplePlugin` for a worked example covering feature generator registration and material definition.
 
@@ -1375,7 +1484,7 @@ Items below were evaluated during the M17 pre-release sanity check (`docs/m17-re
 
 ## Further Reading
 
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the primary reference for anyone — human or AI — doing non-trivial work on the engine. It covers:
+[`docs/architecture.md`](docs/architecture.md) is the primary reference for anyone — human or AI — doing non-trivial work on the engine. It covers:
 
 - The *why* behind every major design decision, not just the what
 - A full subsystem dependency map defining which systems may talk to which

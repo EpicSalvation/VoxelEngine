@@ -215,7 +215,7 @@ A simulation system reads the **target voxel's own `MaterialProperties`** and re
 
 `RemovalModel` is pure and stateless (no `rand`/`time`/global state) and depends only on `MaterialProperties` — not on `World`, the renderer, or `PluginManager` — so it is unit-testable in isolation. The **outcome** (removed or not) is fully deterministic; only the wall-clock *time* to reach it depends on frame rate and how long the player holds the action, and that timing never touches saved world state (a voxel is binary: present or `empty()`). The per-target progress accumulator is **transient tool state**, held in the tool/demo path and never persisted; dirty tracking stays chunk-granular (§9). `on_voxel_modified` fires exactly once, at the moment the voxel is cleared.
 
-`structural_strength` (M13 collapse) and `thermal_conductivity`/`porosity` (M14 fluid and heat) are future consumers that follow this same contract: read the property off the voxel, respond to the value, stay off the material-id path.
+`structural_strength` (M13 collapse) and `thermal_conductivity`/`porosity` (M14 fluid and heat) are consumers that follow this same contract: read the property off the voxel, respond to the value, stay off the material-id path.
 
 ---
 
@@ -350,29 +350,63 @@ void register_layer_generator(const char* layer_name, LayerGeneratorFn fn);
 // Feature generators (used by composition recipes)
 void register_feature_generator(const char* generator_id, FeatureGeneratorFn fn);
 
-// Material definitions
+// Composition recipes and noise
+void register_recipe(const char* layer_name, const RecipeDesc* desc);
+void register_noise(const char* noise_id, NoiseFn fn);
+NoiseFn resolve_noise(const char* noise_id);  // consumer accessor
+
+// Material definitions and appearance
 void register_material(const char* material_id, MaterialProperties props);
+void set_palette_color(uint8_t index, uint32_t rgba);
+void register_texture(const char* texture_id, const char* path);
+void register_texture_data(const char* texture_id, const void* rgba, int w, int h);
+void set_material_faces(uint8_t palette_index, /* top, bottom, side, tiling_factor */);
 
 // Import/Export
 void register_importer(const char* extension, ImporterFn fn);
 void register_exporter(const char* extension, ExporterFn fn);
 
-// Simulation
+// Simulation events
 void register_on_voxel_modified(OnVoxelModifiedFn fn);
 void register_on_structural_event(OnStructuralEventFn fn);
 void register_on_fluid_event(OnFluidEventFn fn);
 void register_on_thermal_event(OnThermalEventFn fn);
+void register_on_lighting_event(OnLightingEventFn fn);
 
-// Fluid/thermal sources (plugin-registered emitters; owner-tracked)
+// Simulation sources (plugin-registered emitters; owner-tracked)
 void register_heat_source(WorldCoord pos, float rate);
 void register_fluid_source(WorldCoord pos, float rate, const char* fluid_material);
+void register_light_source(WorldCoord pos, float intensity);
 
 // Layer lifecycle
 void register_on_chunk_created(const char* layer_name, ChunkLifecycleFn fn);
 void register_on_chunk_evicted(const char* layer_name, ChunkLifecycleFn fn);
+
+// Per-frame tick and collision primitive
+void register_on_tick(OnTickFn fn);
+BodyMoveResult move_aabb(/* pos, extents, wish_delta, voxel_size */);
+
+// Networking
+void apply_edit(VoxelCoord coord, Voxel voxel);
+void send_network_message(const MessageEnvelope* env);
+void register_on_edit_received(OnEditReceivedFn fn);
+void register_on_player_joined(OnPlayerJoinedFn fn);
+void register_on_player_left(OnPlayerLeftFn fn);
+void register_on_network_message(const char* channel_prefix, OnNetworkMessageFn fn);
+void register_authority_policy(AuthorityPolicyFn fn);
+void register_interest_filter(InterestFilterFn fn);
+
+// Audio
+void register_sound(const char* sound_id, const char* path, SoundParams params);
+void register_material_sound(const char* material_id, AudioEvent event, const char* sound_id);
+void play_sound(const char* sound_id, WorldCoord pos, const SoundParams* params);
+void play_material_sound(AudioEvent event, uint8_t palette_index, WorldCoord pos);
+AudioEmitterId create_emitter(const char* sound_id, WorldCoord pos, EmitterParams params);
+void set_emitter_position(AudioEmitterId id, WorldCoord pos);
+void stop_emitter(AudioEmitterId id);
 ```
 
-See `include/plugin_api.h` for full signatures and `src/plugins/ExamplePlugin` for a worked example.
+This is the complete hook surface as of 1.0. See `include/plugin_api.h` for exact signatures and `src/plugins/ExamplePlugin` for a worked example. The `plugins/example-hooks/` plugin demonstrates every major hook type in a copy-pasteable format.
 
 **Reference plugins (M17).** A handful of plugins under `plugins/` ship with the engine not to extend it but to spare every game from re-deriving the same boilerplate — developers use them as-is, extend, or replace. Each pairs a `plugin.cpp` with a **shared header** exposing a function-pointer `api()` table the host fills at `voxel_plugin_init` and calls at runtime (the asteroid-field geometry-sharing pattern, widened to a runtime table). `kinematic-body` (B1) drives N AABB bodies on the engine's `move_aabb` primitive via the per-frame `register_on_tick` hook. The two **input plugins** (C1, `keyboard-mouse` and `gamepad`) need *no* engine hook at all: input is read host-side before the game step, so the host drives their `update()` directly. Because the engine — not the plugin — owns the window and therefore GLFW (§9), the plugin cannot poll hardware itself; instead the host installs a tiny **`RawSource`** adapter (one-line wrappers over `glfwGetKey` / `glfwGetGamepadState` / …) and the plugin pulls raw state through it, layering on action mapping, rebindable keys, two-key axes, edge detection, mouse-look deltas, and radial stick dead-zones. No GLFW type crosses the boundary — key/button/axis indices are plain ints and the gamepad snapshot is a flat POD — so the plugins stay GLFW-free and runtime-loadable, the same library-neutrality rule the window/renderer seam enforces.
 
@@ -705,7 +739,14 @@ FluidSystem / ThermalSystem (src/simulation/, M14)
         the mandatory `flow` plugin realizes fluid geometry via the public edit path
     └── must NOT depend on: Renderer, IO, DecompositionWorker
 
-IO (VoxImporter/VoxExporter)
+LightingSystem (src/simulation/, M17)
+    └── depends on: World (read voxel properties: light_emission, opacity),
+                    PluginManager (fire on_lighting_event, read registered light sources)
+    └── owns its sparse field overlay (brightness); the mesher reads light levels
+        per vertex/face via an optional LightQueryFn callback
+    └── must NOT depend on: Renderer, IO, DecompositionWorker
+
+IO (VoxImporter/VoxExporter/QbImporter/QbExporter)
     └── depends on: World (write voxels), LayerConfig (layer assignment)
     └── must NOT depend on: Renderer, PhysicsSystem
 
@@ -841,13 +882,13 @@ struct MessageEnvelope {
     const char*  channel_id;   // namespaced by plugin, e.g. "myplugin.trade_offer"
     PlayerId     sender_id;
     MessageTarget target;      // Broadcast | Server | specific PlayerId
-    Reliability  reliability;  // Reliable | Unreliable
+    MessageReliability  reliability;  // Reliable | Unreliable
     const void*  payload;      // opaque; plugin owns the schema
     size_t       payload_size;
 };
 ```
 
-The engine routes the envelope according to `target` and `reliability`. ENet's reliable and unreliable channels map directly to `Reliability`. The receiving side fires `on_network_message`. Plugins filter by `channel_id`; the engine never inspects the payload.
+The engine routes the envelope according to `target` and `reliability`. ENet's reliable and unreliable channels map directly to `MessageReliability`. The receiving side fires `on_network_message`. Plugins filter by `channel_id`; the engine never inspects the payload.
 
 Clients only ever hold a connection to the authority node, so the authority is also the message router: a `Broadcast` envelope arriving from a peer is relayed to every other connected peer, and a `Player`-targeted envelope is forwarded to its destination peer. On any inbound envelope the authority overwrites `sender_id` with the player id mapped to the connection the packet physically arrived on — the connection is trusted, not the payload, so a peer cannot spoof another player's identity.
 

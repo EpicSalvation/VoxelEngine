@@ -355,7 +355,7 @@ deferred, never lost.
 | FieldCrossing enum | [`include/plugin_api.h`](../../include/plugin_api.h) |
 | MaterialProperties (porosity, thermal_conductivity, light_emission) | [`include/plugin_api.h`](../../include/plugin_api.h) |
 | EngineConfig (per-frame budgets) | [`include/core/EngineConfig.h`](../../include/core/EngineConfig.h) |
-| Tuning constants (AO, thermal, fluid, lighting) | `include/core/Tuning.h` |
+| Tuning constants (AO, thermal, fluid, lighting) | `src/core/Tuning.h` |
 | Flow-and-heat demo | `demos/14-flow-and-heat/main.cpp` |
 | HUD demo (field readback) | `demos/18-hud-and-controls/main.cpp` |
 | Architecture: simulation fields | [`docs/architecture.md`](../architecture.md) |
