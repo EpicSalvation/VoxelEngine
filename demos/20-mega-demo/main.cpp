@@ -1,34 +1,20 @@
-// M18 demo — the Mega-Demo ("Overworld"): a Minecraft-lite survival slice that
-// exercises as much of the engine as one coherent world can.
+// M18.5 demo — the Mega-Demo ("Overworld"): a Minecraft-lite survival slice
+// that exercises as much of the engine as one coherent world can.
 //
-// One playable scene wires together, end to end:
-//   • Seeded worldgen (M3/M8) — a rolling heightmap of grass/dirt/stone/sand with
-//     buried caves and iron ore, built by the `overworld` plugin's terminal layer
-//     generator plus its cave/ore feature overlays. The world SEED is a launch
-//     argument (argv[1], deterministic default when omitted) threaded through the
-//     generator and the feature pass, so the SAME seed regenerates the SAME world
-//     (the §4 determinism guarantee) — shown live on the HUD.
-//   • Trees (M4 composition) — the separate `trees` plugin stamps trunks+canopy
-//     onto the surface as another feature overlay: cross-plugin composition with
-//     no shared code. Drop the plugin and the world is treeless.
-//   • Water (M14 material) — the `water` plugin floods valleys below sea level.
-//   • Textured voxels (M15) — the overworld materials bind per-face atlas tiles;
-//     the demo synthesises the PNG tiles and builds the atlas at startup.
-//   • A zombie-like MOB (new this milestone) — the `mob` plugin runs a
-//     wander/chase/attack AI on the engine's per-frame tick + move_aabb seams; the
-//     demo renders each body (the engine has no entity system) and the bites drain
-//     the player's health.
-//   • Player + HUD + input (M17) — a kinematic body driven by the keyboard-mouse
-//     and gamepad reference plugins, mine/place, fall damage, and a cell-grid HUD.
-//   • Positional + ambient AUDIO (M12) — a panning nature bed, per-mob growls, and
-//     material-appropriate footstep/break/place cues.
-//   • Distance fog (M16) for the LOD sell.
+// M18.5 revision: the world is now a COMPOSITE heightmap — a coarse "blocks"
+// layer (4 m macros) sits above the 1 m "terrain" terminal layer. The blocks
+// layer has no block voxels (every macro is "decomposed"); the engine's
+// PropagationSystem aggregates the terrain children's structural_strength into
+// each macro, and the support-potential flood detects unsupported spans.
+// Mining under an overhang triggers a real cave-in via the `crumble` response
+// plugin (the M13 headline the M18 demo previously disclaimed). An immutable
+// "bedrock" layer anchors the bottom so the cascade stops at the world floor.
+//
+// New in M18.5: the player can ATTACK mobs (Q or LMB-in-air), dealing 20
+// damage per hit. Dead mobs stop chasing. Fight back instead of just running.
 //
 // Controls: WASD/stick move, mouse/stick look, Space/A jump, LMB/RT mine,
-// RMB/LT place, 1-8 select material, F toggles cursor, ESC quits.
-//
-// Run `20-mega-demo 12345` twice → identical worlds; a different number → a
-// different world; no argument → the deterministic default.
+// RMB/LT place, Q/X attack mob, 1-8 select material, F toggles cursor, ESC quits.
 
 #include "core/Engine.h"
 #include "core/LayerConfig.h"
@@ -51,6 +37,7 @@
 
 #include "net/NetworkManager.h"
 #include "simulation/FluidSystem.h"
+#include "simulation/PhysicsSystem.h"
 
 #include "kinematic_body.h"
 #include "keyboard_mouse.h"
@@ -89,9 +76,10 @@
 #ifndef VOXEL_FLOW_PLUGIN_PATH
 #  define VOXEL_FLOW_PLUGIN_PATH ""
 #endif
+#ifndef VOXEL_CRUMBLE_PLUGIN_PATH
+#  define VOXEL_CRUMBLE_PLUGIN_PATH ""
+#endif
 
-// Reference plugins compiled into this binary (shared api() tables resolve in one
-// address space — the demo-18 wiring). The host calls their *_plugin_init.
 extern "C" int kinematic_body_plugin_init(PluginContext* ctx);
 extern "C" int keyboard_mouse_plugin_init(PluginContext* ctx);
 extern "C" int gamepad_plugin_init(PluginContext* ctx);
@@ -108,12 +96,17 @@ constexpr float  kFallDamageK    = 6.0f;
 constexpr float  kRegenPerSec    = 6.0f;
 constexpr double kStrideSeconds  = 0.42;
 constexpr int    kNumMobs        = 6;
+constexpr float  kAttackDamage   = 20.0f;
+constexpr double kAttackCooldown = 0.4;
 const glm::dvec3 kPlayerHalf(0.3, 0.9, 0.3);
 constexpr uint64_t kDefaultSeed  = 0xA11CE5EEDull;
 
+// Composite layer geometry.
+constexpr double kBlocksVoxelSizeM = 4.0;  // macro voxel edge length
+constexpr double kTerrainVoxelSizeM = 1.0;
+constexpr int    kRatio = 4;  // terrain voxels per blocks macro edge (4 m / 1 m)
+
 // ───────────────────────── Asset synthesis ──────────────────────────────────
-// The demo writes its own texture tiles and sound assets at startup (the demo-12
-// "generate your own asset" pattern) so the repo carries no binaries.
 
 uint32_t hash2(int x, int y, uint32_t s) {
     uint32_t h = s ^ (static_cast<uint32_t>(x) * 374761393u) ^ (static_cast<uint32_t>(y) * 668265263u);
@@ -121,7 +114,6 @@ uint32_t hash2(int x, int y, uint32_t s) {
     return h ^ (h >> 16);
 }
 
-// ── Minimal RGBA PNG writer (zlib stored blocks; decodes in stb/bimg) ─────────
 uint32_t crc32_of(const uint8_t* p, size_t n, uint32_t crc = 0xFFFFFFFFu) {
     for (size_t i = 0; i < n; ++i) {
         crc ^= p[i];
@@ -142,7 +134,6 @@ void chunk(std::vector<uint8_t>& out, const char* type, const std::vector<uint8_
     put32(out, crc32_of(td.data(), td.size()) ^ 0xFFFFFFFFu);
 }
 bool writePng(const std::string& path, int w, int h, const std::vector<uint8_t>& rgba) {
-    // Raw filtered scanlines: a leading 0 filter byte per row.
     std::vector<uint8_t> raw;
     raw.reserve(static_cast<size_t>(h) * (1 + w * 4));
     for (int y = 0; y < h; ++y) {
@@ -150,12 +141,11 @@ bool writePng(const std::string& path, int w, int h, const std::vector<uint8_t>&
         const uint8_t* row = rgba.data() + static_cast<size_t>(y) * w * 4;
         raw.insert(raw.end(), row, row + static_cast<size_t>(w) * 4);
     }
-    // zlib: 0x78 0x01, stored deflate blocks, Adler-32 trailer.
     std::vector<uint8_t> z; z.push_back(0x78); z.push_back(0x01);
     size_t off = 0;
     while (off < raw.size()) {
         const size_t n = std::min<size_t>(65535, raw.size() - off);
-        z.push_back(off + n >= raw.size() ? 1 : 0);  // BFINAL on last block
+        z.push_back(off + n >= raw.size() ? 1 : 0);
         z.push_back(uint8_t(n)); z.push_back(uint8_t(n >> 8));
         z.push_back(uint8_t(~n)); z.push_back(uint8_t((~n) >> 8));
         z.insert(z.end(), raw.begin() + off, raw.begin() + off + n);
@@ -180,8 +170,6 @@ bool writePng(const std::string& path, int w, int h, const std::vector<uint8_t>&
     return f.good();
 }
 
-// Procedural 16×16 tile: base color jittered by a little per-pixel noise, with an
-// optional top band (for grass_side) — enough to read as a textured surface.
 void makeTile(const std::string& path, uint8_t r, uint8_t g, uint8_t b,
               int jitter, uint32_t seed, int topBandRows = 0,
               uint8_t tr = 0, uint8_t tg = 0, uint8_t tb = 0) {
@@ -205,9 +193,9 @@ void makeTile(const std::string& path, uint8_t r, uint8_t g, uint8_t b,
 void ensureTextures(const std::string& dir) {
     std::error_code ec; std::filesystem::create_directories(dir, ec);
     auto p = [&](const char* n) { return dir + "/" + n + ".png"; };
-    if (std::filesystem::exists(p("grass_top"))) return;  // generated on a prior run
+    if (std::filesystem::exists(p("grass_top"))) return;
     makeTile(p("grass_top"),  72, 140, 64, 10, 1);
-    makeTile(p("grass_side"), 110, 84, 56, 8, 2, 4, 72, 140, 64);  // grass lip over dirt
+    makeTile(p("grass_side"), 110, 84, 56, 8, 2, 4, 72, 140, 64);
     makeTile(p("dirt"),       110, 84, 56, 8, 3);
     makeTile(p("stone"),      120, 120, 124, 6, 4);
     makeTile(p("sand"),       214, 200, 150, 6, 5);
@@ -216,7 +204,6 @@ void ensureTextures(const std::string& dir) {
     makeTile(p("leaves"),     58, 120, 52, 14, 8);
 }
 
-// ── Minimal mono 16-bit WAV writer + a few seamless-loop synths ───────────────
 bool writeWav(const std::string& path, const std::vector<int16_t>& pcm, int sampleRate) {
     std::ofstream f(path, std::ios::binary);
     if (!f) return false;
@@ -243,8 +230,6 @@ void ensureSounds(const std::string& dir) {
     auto p = [&](const char* n) { return dir + "/" + n + ".wav"; };
     if (std::filesystem::exists(p("nature_bed"))) return;
 
-    // Nature bed: a soft breeze (filtered noise) under a slow cricket pulse — a
-    // 4 s seamless loop (integer cycles of the LFO).
     {
         const int frames = sr * 4;
         std::vector<int16_t> pcm(static_cast<size_t>(frames));
@@ -253,14 +238,13 @@ void ensureSounds(const std::string& dir) {
             const double t = double(i) / sr;
             rng = rng * 1664525u + 1013904223u;
             const double white = (double(rng >> 9) / 8388608.0) - 1.0;
-            lp += 0.04 * (white - lp);                       // breeze
+            lp += 0.04 * (white - lp);
             const double cricket = 0.12 * std::sin(2 * kPi * 2200 * t) *
-                                   std::max(0.0, std::sin(2 * kPi * 4 * t));  // 4 Hz chirp pulse
+                                   std::max(0.0, std::sin(2 * kPi * 4 * t));
             pcm[size_t(i)] = toS16(0.5 * lp + cricket);
         }
         writeWav(p("nature_bed"), pcm, sr);
     }
-    // Bird: a short two-note whistle, looped over 3 s of mostly silence.
     {
         const int frames = sr * 3;
         std::vector<int16_t> pcm(static_cast<size_t>(frames), 0);
@@ -272,7 +256,6 @@ void ensureSounds(const std::string& dir) {
         }
         writeWav(p("bird"), pcm, sr);
     }
-    // Zombie growl: low rumble (60–90 Hz) with slow tremolo, 2 s seamless loop.
     {
         const int frames = sr * 2;
         std::vector<int16_t> pcm(static_cast<size_t>(frames));
@@ -285,7 +268,6 @@ void ensureSounds(const std::string& dir) {
         }
         writeWav(p("zombie_growl"), pcm, sr);
     }
-    // Zombie bite: a short noisy chomp.
     {
         const int frames = sr / 4;
         std::vector<int16_t> pcm(static_cast<size_t>(frames));
@@ -300,7 +282,6 @@ void ensureSounds(const std::string& dir) {
     }
 }
 
-// Scan a column for the topmost solid voxel; returns its world Y, or INT_MIN.
 int findSurfaceY(World& world, double x, double z, int yTop) {
     for (int y = yTop; y >= 0; --y) {
         const Voxel v = world.getVoxel(WorldCoord(x, y + 0.5, z));
@@ -311,14 +292,14 @@ int findSurfaceY(World& world, double x, double z, int yTop) {
 
 uint8_t hudColorForPalette(uint8_t idx) {
     switch (idx) {
-        case 1:  return hud::LightGray;   // stone
-        case 2:  return hud::LightGreen;  // grass
-        case 3:  return hud::Brown;       // dirt
-        case 4:  return hud::Green;       // leaves
-        case 5:  return hud::LightBlue;   // water
-        case 6:  return hud::Yellow;      // sand
-        case 8:  return hud::Brown;       // log
-        case 11: return hud::Cyan;        // iron
+        case 1:  return hud::LightGray;
+        case 2:  return hud::LightGreen;
+        case 3:  return hud::Brown;
+        case 4:  return hud::Green;
+        case 5:  return hud::LightBlue;
+        case 6:  return hud::Yellow;
+        case 8:  return hud::Brown;
+        case 11: return hud::Cyan;
         default: return hud::White;
     }
 }
@@ -326,7 +307,6 @@ uint8_t hudColorForPalette(uint8_t idx) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    // ── World seed (the M18 subtask) ────────────────────────────────────────────
     uint64_t worldSeed = kDefaultSeed;
     if (argc > 1) {
         char* end = nullptr;
@@ -337,9 +317,6 @@ int main(int argc, char** argv) {
     Log::info(kLogCat, (std::string("World seed: ") + std::to_string(worldSeed)
                         + " (pass a different number as argv[1] to regenerate a new world).").c_str());
 
-    // Resolve relative asset paths from the repo root when not launched there, so
-    // both the generated assets and the optional material-audio plugin's bundled
-    // WAVs load (the demo-12 working-directory convention).
 #ifdef VOXEL_REPO_ROOT
     if (!std::filesystem::exists("assets/audio")) {
         std::error_code ec; std::filesystem::current_path(VOXEL_REPO_ROOT, ec);
@@ -348,14 +325,31 @@ int main(int argc, char** argv) {
     ensureTextures("assets/textures/overworld");
     ensureSounds("assets/audio/nature");
 
-    // ── Layer config: one terminal heightmap layer, a single vertical band ──────
+    // ── Layer config: composite "blocks" → terminal "terrain" + immutable "bedrock"
+    // The "blocks" composite layer (4 m macros, ratio 4:1 over 1 m terrain) gives
+    // the engine's PropagationSystem a structural level to aggregate and flood.
+    // The immutable "bedrock" layer (1 m, same scale as terrain) anchors the
+    // cascade — its voxels are indestructible support. The terrain layer is marked
+    // interactive so the single-layer World API (getVoxel/setVoxel) targets it.
     LayerConfig layerConfig = [] {
         try {
             return LayerConfig::loadFromString(R"(
 layers:
+  - name: blocks
+    voxel_size_m: 4.0
+    mode: composite
+    decompose_to: terrain
+    chunk_size_voxels: 12
+    view_distance_chunks: 3
   - name: terrain
     voxel_size_m: 1.0
     mode: terminal
+    chunk_size_voxels: 48
+    view_distance_chunks: 3
+    interactive: true
+  - name: bedrock
+    voxel_size_m: 1.0
+    mode: immutable
     chunk_size_voxels: 48
     view_distance_chunks: 3
 )");
@@ -364,13 +358,11 @@ layers:
             std::exit(1);
         }
     }();
-    const LayerDef& terrain = layerConfig.layers().front();
 
     PluginManager pm;
     Engine engine;
 
-    // ── Window + renderer + texture atlas (M15) ─────────────────────────────────
-    platform::Window window(1280, 720, "VoxelEngine — M18 Mega-Demo (Overworld)");
+    platform::Window window(1280, 720, "VoxelEngine — M18.5 Mega-Demo (Overworld)");
     BgfxRenderer renderer;
     int fbW, fbH;
     window.framebufferSize(fbW, fbH);
@@ -378,18 +370,14 @@ layers:
                         static_cast<uint32_t>(fbW), static_cast<uint32_t>(fbH));
     renderer.setCrosshair(true);
     renderer.setFarClip(400.0f);
-    // Distance-obscurance fog (M16): fade the far chunks into the sky.
     FogParams fog; fog.color = glm::vec3(0.62f, 0.74f, 0.86f);
     fog.near_m = 120.0f; fog.far_m = 360.0f; fog.density = 1.0f;
     renderer.setFog(fog);
     renderer.setClearColor(glm::vec3(0.62f, 0.74f, 0.86f));
 
-    // TextureManager self-registers with the PluginManager; construct it BEFORE the
-    // worldgen plugin so overworld's register_texture calls feed the atlas.
     texture::TextureManager textureManager(pm, renderer);
 
     // ── Plugins ─────────────────────────────────────────────────────────────────
-    // Worldgen from disk; reference plugins compiled in (shared api() tables).
     auto loadOrDie = [&](const char* path, const char* name) {
         if (std::string(path).empty() || pm.loadPlugin(path) == kInvalidPluginId) {
             Log::error(kLogCat, (std::string("Fatal: could not load ") + name
@@ -397,14 +385,19 @@ layers:
             std::exit(1);
         }
     };
-    loadOrDie(VOXEL_OVERWORLD_PLUGIN_PATH, "overworld");  // terrain + cave/ore + materials/textures
-    loadOrDie(VOXEL_TREES_PLUGIN_PATH, "trees");          // tree feature overlay
-    loadOrDie(VOXEL_WATER_PLUGIN_PATH, "water");          // sea-level flood
-    // material-audio is optional (break/place/footstep cues).
+    loadOrDie(VOXEL_OVERWORLD_PLUGIN_PATH, "overworld");
+    loadOrDie(VOXEL_TREES_PLUGIN_PATH, "trees");
+    loadOrDie(VOXEL_WATER_PLUGIN_PATH, "water");
     const bool materialAudio = !std::string(VOXEL_MATERIAL_AUDIO_PLUGIN_PATH).empty() &&
         pm.loadPlugin(VOXEL_MATERIAL_AUDIO_PLUGIN_PATH) != kInvalidPluginId;
     if (!materialAudio)
         Log::warn(kLogCat, "material-audio plugin not loaded — break/place/footstep cues silent.");
+
+    // M13 structural-response plugin.
+    const bool crumbleLoaded = !std::string(VOXEL_CRUMBLE_PLUGIN_PATH).empty() &&
+        pm.loadPlugin(VOXEL_CRUMBLE_PLUGIN_PATH) != kInvalidPluginId;
+    if (!crumbleLoaded)
+        Log::warn(kLogCat, "crumble plugin not loaded — mining will not trigger cave-ins.");
 
     pm.wireInPlugin(kinematic_body_plugin_init);
     pm.wireInPlugin(keyboard_mouse_plugin_init);
@@ -412,28 +405,29 @@ layers:
     pm.wireInPlugin(mob_plugin_init);
     mob::api().set_seed(worldSeed);
 
-    // Build the texture atlas now that overworld has registered its tiles.
     textureManager.rebuild();
     renderer.setAtlas(textureManager.atlas());
     Log::info(kLogCat, (std::string("Texture atlas: ")
                         + std::to_string(textureManager.tileCount()) + " tiles.").c_str());
 
-    // Terrain layer generator (host overrides its user_data with &worldSeed so the
-    // CLI seed drives generation — the §4 determinism knob).
+    // Terrain layer generator.
     LayerGeneratorFn generator = nullptr;
     for (const auto& g : pm.layerGenerators())
         if (g.layer_name == "terrain") generator = g.fn;
     if (!generator) { Log::error(kLogCat, "Fatal: no 'terrain' generator."); return 1; }
 
-    World world(terrain);
+    World world(layerConfig);
+    Layer* blocksLayer  = world.layer("blocks");
+    Layer* terrainLayer = world.layer("terrain");
+    Layer* bedrockLayer = world.layer("bedrock");
+    if (!blocksLayer || !terrainLayer || !bedrockLayer) {
+        Log::error(kLogCat, "Fatal: expected blocks/terrain/bedrock layers."); return 1;
+    }
+
     engine.init(pm, world);
     engine.setRenderer(&renderer);
 
     // ── M14 fluid ───────────────────────────────────────────────────────────────
-    // Route edits through the choke point (NetworkManager) so the flow plugin's
-    // apply_edit water writes fire the engine hook; attach a FluidSystem the host
-    // ticks each frame; load the mandatory `flow` responder that realizes water
-    // voxels from saturated field cells. Overworld registers a spring above spawn.
     net::NetworkManager nm; nm.init(world, pm);
     sim::FluidSystem fluid(world, pm);
     engine.setFluidSystem(&fluid);
@@ -442,13 +436,15 @@ layers:
     if (!flowLoaded)
         Log::warn(kLogCat, "flow plugin not loaded — the fluid spring will not realize water.");
 
-    // Track chunks touched by ANY edit (player or the flow plugin's apply_edit) so
-    // exactly those are re-meshed each frame.
+    // ── M13 structural collapse ─────────────────────────────────────────────────
+    // Constructed after init so its on_voxel_modified hook catches every edit.
+    sim::PhysicsSystem physics(world, pm);
+
     struct EditTracker {
         std::unordered_set<ChunkCoord, ChunkCoordHash> touched;
         int    chunkSize;
         double voxelSize;
-    } tracker{ {}, world.chunkSizeVoxels(), world.voxelSizeM() };
+    } tracker{ {}, terrainLayer->chunkSizeVoxels(), terrainLayer->voxelSizeM() };
     pm.registerEngineVoxelModifiedHook(
         [](WorldCoord pos, const Voxel*, const Voxel*, PlayerId, void* ud) {
             auto* t = static_cast<EditTracker*>(ud);
@@ -459,26 +455,86 @@ layers:
     LODManager lod(layerConfig);
     lod.setVerticalBand(0, 0);
 
-    // After the base layer fills a chunk, apply every registered feature generator
-    // in turn (caves, ore, water, trees), threading the world seed (demo-03 pattern).
+    // Feature overlays applied after the base generator fills a terrain chunk.
     auto applyFeatures = [&](Chunk& chunk) {
         for (const auto& f : pm.featureGenerators())
             if (f.fn)
-                f.fn(chunk.origin(), world.voxelSizeM(), world.chunkSizeVoxels(),
+                f.fn(chunk.origin(), terrainLayer->voxelSizeM(),
+                     terrainLayer->chunkSizeVoxels(),
                      chunk.data(), nullptr, 0, worldSeed, f.user_data);
     };
 
+    // Bedrock generator: fill a chunk with indestructible bedrock for y in [0,1).
+    auto bedrockGenerator = [](WorldCoord origin, int n, Voxel* out, void*) {
+        MaterialProperties bed;
+        bed.density = 4000.0f; bed.structural_strength = 1.0f;
+        bed.hardness = -1.0f; bed.palette_index = 14;
+        const int64_t baseY = static_cast<int64_t>(std::llround(origin.value.y));
+        for (int z = 0; z < n; ++z)
+            for (int y = 0; y < n; ++y)
+                for (int x = 0; x < n; ++x) {
+                    Voxel& v = out[x + n * (y + n * z)];
+                    v = (baseY + y >= 0 && baseY + y < 1) ? Voxel{bed} : Voxel::empty();
+                }
+    };
+
     std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash> meshes;
+
+    // Ensure the blocks-layer and bedrock-layer chunks overlapping a terrain chunk
+    // are loaded. The blocks chunks are loaded EMPTY (no block voxels — every macro
+    // is "decomposed", so the PropagationSystem aggregates the terrain children
+    // directly). The bedrock chunks are filled with bedrock at y=0 so they serve as
+    // structural anchors (the cascade stops at immutable voxels).
+    std::unordered_set<ChunkCoord, ChunkCoordHash> loadedBlocksChunks;
+    std::unordered_set<ChunkCoord, ChunkCoordHash> loadedBedrockChunks;
+    auto ensureCompositeChunks = [&](const ChunkCoord& terrainCC) {
+        // Compute which blocks-layer chunk(s) overlap this terrain chunk.
+        const double tvs = terrainLayer->voxelSizeM();
+        const int tcs = terrainLayer->chunkSizeVoxels();
+        const double bvs = blocksLayer->voxelSizeM();
+        const int bcs = blocksLayer->chunkSizeVoxels();
+
+        // Terrain chunk covers world X in [terrainCC.x * tcs * tvs, (terrainCC.x+1) * tcs * tvs).
+        // A blocks chunk covers [blocksCC.x * bcs * bvs, (blocksCC.x+1) * bcs * bvs).
+        const double tx0 = terrainCC.x * tcs * tvs;
+        const double ty0 = terrainCC.y * tcs * tvs;
+        const double tz0 = terrainCC.z * tcs * tvs;
+        const double tx1 = tx0 + tcs * tvs;
+        const double ty1 = ty0 + tcs * tvs;
+        const double tz1 = tz0 + tcs * tvs;
+        const double bChunkSpan = bcs * bvs;
+
+        const int bx0 = static_cast<int>(std::floor(tx0 / bChunkSpan));
+        const int by0 = static_cast<int>(std::floor(ty0 / bChunkSpan));
+        const int bz0 = static_cast<int>(std::floor(tz0 / bChunkSpan));
+        const int bx1 = static_cast<int>(std::floor((tx1 - 0.001) / bChunkSpan));
+        const int by1 = static_cast<int>(std::floor((ty1 - 0.001) / bChunkSpan));
+        const int bz1 = static_cast<int>(std::floor((tz1 - 0.001) / bChunkSpan));
+
+        for (int bz = bz0; bz <= bz1; ++bz)
+            for (int by = by0; by <= by1; ++by)
+                for (int bx = bx0; bx <= bx1; ++bx) {
+                    ChunkCoord bcc{bx, by, bz};
+                    if (loadedBlocksChunks.insert(bcc).second)
+                        blocksLayer->loadChunk(bcc, nullptr);
+                }
+
+        // Bedrock chunks at the same coords as terrain.
+        if (loadedBedrockChunks.insert(terrainCC).second)
+            bedrockLayer->loadChunk(terrainCC, bedrockGenerator, nullptr);
+    };
+
     auto loadChunk = [&](const ChunkCoord& c) -> bool {
         if (meshes.count(c)) return false;
-        Chunk* chunk = world.loadChunk(c, generator, &worldSeed);
+        Chunk* chunk = terrainLayer->loadChunk(c, generator, &worldSeed);
         if (!chunk) return false;
         applyFeatures(*chunk);
-        meshes.emplace(c, ChunkMesh::build(*chunk, world.voxelSizeM()));
+        ensureCompositeChunks(c);
+        meshes.emplace(c, ChunkMesh::build(*chunk, terrainLayer->voxelSizeM()));
         return true;
     };
 
-    // ── Inventory (one hotbar slot per material) ────────────────────────────────
+    // ── Inventory ──────────────────────────────────────────────────────────────
     struct Slot { std::string id; uint8_t palette; uint8_t color; int count; };
     std::vector<Slot> slots;
     std::unordered_map<uint8_t, size_t> paletteToSlot;
@@ -502,9 +558,8 @@ layers:
     pm.setAudioManager(&audioManager);
     AudioEmitterId bedEmitter = kInvalidEmitterId, birdEmitter = kInvalidEmitterId;
     if (backend.isReady()) {
-        audioManager.preloadSounds();  // loads mob + material-audio registered sounds
+        audioManager.preloadSounds();
         audio::validateAudio(pm, &backend, audio::AudioStrictPolicy::Warn);
-        // Front-end-owned ambient beds (loaded straight into the backend).
         SoundParams bedP{}; bedP.volume = 0.45f; bedP.min_distance = 10.0f; bedP.max_distance = 120.0f;
         if (backend.loadSound("nature_bed", "assets/audio/nature/nature_bed.wav", bedP)) {
             EmitterParams ep{}; ep.sound = bedP; ep.loop = true;
@@ -519,7 +574,7 @@ layers:
         Log::warn(kLogCat, "Audio backend unavailable — running silently.");
     }
 
-    // ── Input plugins (host RawSource adapters over GLFW; the demo-18 wiring) ────
+    // ── Input plugins ──────────────────────────────────────────────────────────
     GLFWwindow* glfwWin = window.glfwHandle();
     glfwSetInputMode(glfwWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
@@ -548,6 +603,7 @@ layers:
     kbinput::api().bind_key("jump", GLFW_KEY_SPACE);
     kbinput::api().bind_mouse_button("mine",  GLFW_MOUSE_BUTTON_LEFT);
     kbinput::api().bind_mouse_button("place", GLFW_MOUSE_BUTTON_RIGHT);
+    kbinput::api().bind_key("attack", GLFW_KEY_Q);
     for (size_t i = 0; i < slots.size() && i < 9; ++i)
         kbinput::api().bind_key(("slot" + std::to_string(i + 1)).c_str(), GLFW_KEY_1 + int(i));
     kbinput::api().set_mouse_sensitivity(0.0022);
@@ -555,13 +611,15 @@ layers:
     gpinput::api().bind_button("jump",      GLFW_GAMEPAD_BUTTON_A);
     gpinput::api().bind_trigger("mine",     gpinput::AxisRightTrigger);
     gpinput::api().bind_trigger("place",    gpinput::AxisLeftTrigger);
+    gpinput::api().bind_button("attack",    GLFW_GAMEPAD_BUTTON_X);
     gpinput::api().bind_button("slot_next", GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER);
     gpinput::api().bind_button("slot_prev", GLFW_GAMEPAD_BUTTON_LEFT_BUMPER);
 
-    // ── Pre-stream spawn neighbourhood, then place the player on the surface ─────
+    // ── Pre-stream spawn neighbourhood ──────────────────────────────────────────
     {
         ChunkCoord c0 = chunkmath::worldToChunk(WorldCoord(0.5, 24, 0.5),
-                                                world.voxelSizeM(), world.chunkSizeVoxels());
+                                                terrainLayer->voxelSizeM(),
+                                                terrainLayer->chunkSizeVoxels());
         for (const ChunkCoord& c : lod.desiredChunks(c0, "terrain")) loadChunk(c);
     }
     const int surfY = std::max(findSurfaceY(world, 0.5, 0.5, 47), 18);
@@ -572,7 +630,7 @@ layers:
     if (player == kinbody::kInvalidBody) { Log::error(kLogCat, "Fatal: no player body."); return 1; }
     const WorldCoord spawn = desc.center;
 
-    // ── Spawn mobs at seeded surface positions around the player ────────────────
+    // ── Spawn mobs ──────────────────────────────────────────────────────────────
     {
         uint64_t s = worldSeed ^ 0x5A1Du;
         for (int i = 0; i < kNumMobs; ++i) {
@@ -581,7 +639,8 @@ layers:
             const double mx = 0.5 + std::cos(ang) * rad;
             const double mz = 0.5 + std::sin(ang) * rad;
             const ChunkCoord c = chunkmath::worldToChunk(WorldCoord(mx, 24, mz),
-                                                         world.voxelSizeM(), world.chunkSizeVoxels());
+                                                         terrainLayer->voxelSizeM(),
+                                                         terrainLayer->chunkSizeVoxels());
             loadChunk(c);
             const int gy = findSurfaceY(world, mx, mz, 47);
             if (gy > 0) mob::api().spawn(WorldCoord(mx, gy + 2.0, mz));
@@ -589,21 +648,18 @@ layers:
     }
 
     // ── Edit helpers ────────────────────────────────────────────────────────────
-    auto remeshChunkOf = [&](const chunkmath::VoxelCoord& vc) {
-        ChunkCoord cc = chunkmath::voxelToChunkLocal(vc, world.chunkSizeVoxels()).chunk;
-        const Chunk* chunk = world.getChunk(cc);
+    // Route edits through NetworkManager so PhysicsSystem's on_voxel_modified
+    // hook observes them and fires structural events.
+    auto editVoxel = [&](const chunkmath::VoxelCoord& vc, const Voxel& newVox) {
+        const WorldCoord center = chunkmath::voxelCenter(vc, terrainLayer->voxelSizeM());
+        nm.applyEdit(kLocalPlayer, center, newVox);
+        // Remesh.
+        ChunkCoord cc = chunkmath::voxelToChunkLocal(vc, terrainLayer->chunkSizeVoxels()).chunk;
+        const Chunk* chunk = terrainLayer->getChunk(cc);
         if (!chunk) return;
         auto it = meshes.find(cc);
-        if (it != meshes.end()) { it->second.destroy(); it->second = ChunkMesh::build(*chunk, world.voxelSizeM()); }
-        else meshes.emplace(cc, ChunkMesh::build(*chunk, world.voxelSizeM()));
-    };
-    auto editVoxel = [&](const chunkmath::VoxelCoord& vc, const Voxel& newVox) {
-        const WorldCoord center = chunkmath::voxelCenter(vc, world.voxelSizeM());
-        const Voxel oldVox = world.getVoxel(center);
-        if (!world.setVoxel(center, newVox)) return;
-        for (const auto& h : pm.voxelModifiedHooks())
-            if (h.fn) h.fn(center, &oldVox, &newVox, kLocalPlayer, h.user_data);
-        remeshChunkOf(vc);
+        if (it != meshes.end()) { it->second.destroy(); it->second = ChunkMesh::build(*chunk, terrainLayer->voxelSizeM()); }
+        else meshes.emplace(cc, ChunkMesh::build(*chunk, terrainLayer->voxelSizeM()));
     };
 
     // ── Player + HUD state ──────────────────────────────────────────────────────
@@ -613,9 +669,11 @@ layers:
     bool prevGrounded = true, cursorCaptured = true, prevF = false;
     int activeDevice = 0;
     double strideTimer = 0.0;
+    double attackTimer = 0.0;
+    int kills = 0;
 
     Log::info(kLogCat, "Survive the overworld. WASD move, mouse look, LMB mine, RMB place, "
-                       "1-8 select, Space jump, F cursor, ESC quit.");
+                       "Q attack mob, 1-8 select, Space jump, F cursor, ESC quit.");
     auto prevTime = std::chrono::high_resolution_clock::now();
 
     while (!window.shouldClose()) {
@@ -675,8 +733,6 @@ layers:
         in.wish_x = wish.x; in.wish_y = 0.0; in.wish_z = wish.z; in.jump = jump;
         kinbody::api().set_input(player, &in);
 
-        // Push the player AABB to the mob AI, then step all tick hooks (player body
-        // + mob AI) via engine.update.
         const kinbody::BodyState* pst = kinbody::api().get_state(player);
         const WorldCoord pc = pst ? pst->center : spawn;
         mob::api().set_player(pc, kPlayerHalf.x, kPlayerHalf.y, kPlayerHalf.z);
@@ -686,7 +742,7 @@ layers:
         const WorldCoord playerCenter = st ? st->center : spawn;
         const bool grounded = st && st->grounded;
 
-        // Fall damage + regen + respawn (demo-18 model).
+        // Fall damage + regen + respawn.
         if (st) {
             if (!grounded) fallSpeed = std::max(fallSpeed, static_cast<float>(-st->vel_y));
             if (grounded && !prevGrounded && fallSpeed > kSafeFallSpeed)
@@ -696,7 +752,7 @@ layers:
         prevGrounded = grounded;
         if (grounded && health < 100.0f) health = std::min(100.0f, health + kRegenPerSec * dt);
 
-        // Mob melee → health.
+        // Mob melee → player health.
         float dmg = 0.0f;
         if (mob::api().poll_attack(&dmg)) health = std::max(0.0f, health - dmg);
 
@@ -706,7 +762,7 @@ layers:
         }
         camPos = WorldCoord(playerCenter.value + glm::dvec3(0.0, kEyeOffset, 0.0));
 
-        // Footsteps (material under the feet).
+        // Footsteps.
         if (grounded && glm::length(glm::dvec3(wish.x, 0, wish.z)) > 0.0) {
             strideTimer += dt;
             if (strideTimer >= kStrideSeconds) {
@@ -736,25 +792,30 @@ layers:
         }
 
         // ── Stream chunks ───────────────────────────────────────────────────────
-        ChunkCoord center = chunkmath::worldToChunk(camPos, world.voxelSizeM(), world.chunkSizeVoxels());
+        ChunkCoord center = chunkmath::worldToChunk(camPos, terrainLayer->voxelSizeM(),
+                                                     terrainLayer->chunkSizeVoxels());
         int loaded = 0;
         for (const ChunkCoord& c : lod.desiredChunks(center, "terrain"))
             if (loadChunk(c) && ++loaded >= kLoadsPerFrame) break;
         std::vector<ChunkCoord> toEvict;
         for (const auto& kv : meshes)
-            if (lod.shouldEvict(center, kv.first, "terrain") && !world.isChunkDirty(kv.first))
+            if (lod.shouldEvict(center, kv.first, "terrain") && !terrainLayer->isChunkDirty(kv.first))
                 toEvict.push_back(kv.first);
-        for (const ChunkCoord& c : toEvict) { meshes[c].destroy(); meshes.erase(c); world.unloadChunk(c); }
+        for (const ChunkCoord& c : toEvict) {
+            meshes[c].destroy(); meshes.erase(c);
+            terrainLayer->unloadChunk(c);
+        }
 
-        // ── Targeting + edits ─────────────────────────────────────────────────────
+        // ── Targeting + edits + combat ───────────────────────────────────────────
         const float sp = std::sin(pitch), cp = std::cos(pitch);
         glm::dvec3 lookDir{cp * std::sin(yaw), sp, cp * std::cos(yaw)};
         voxelcast::RayHit hit = voxelcast::raycast(world, camPos, lookDir, kReachM);
         const Voxel target = hit.hit
-            ? world.getVoxel(chunkmath::voxelCenter(hit.voxel, world.voxelSizeM())) : Voxel::empty();
+            ? world.getVoxel(chunkmath::voxelCenter(hit.voxel, terrainLayer->voxelSizeM())) : Voxel::empty();
 
         const bool mine  = (activeDevice == 1) ? gpinput::api().pressed("mine")  : kbinput::api().pressed("mine");
         const bool place = (activeDevice == 1) ? gpinput::api().pressed("place") : kbinput::api().pressed("place");
+        const bool attack = (activeDevice == 1) ? gpinput::api().pressed("attack") : kbinput::api().pressed("attack");
 
         if (hit.hit && mine && target.material.hardness >= 0.0f &&
             target.material.palette_index != 14 /* bedrock */) {
@@ -765,7 +826,7 @@ layers:
         }
         if (hit.hit && place && slots[selectedSlot].count > 0) {
             const chunkmath::VoxelCoord t = hit.adjacent;
-            const double vs = world.voxelSizeM();
+            const double vs = terrainLayer->voxelSizeM();
             glm::dvec3 cmin{t.x * vs, t.y * vs, t.z * vs}, cmax = cmin + glm::dvec3(vs, vs, vs);
             glm::dvec3 pmin = playerCenter.value - kPlayerHalf, pmax = playerCenter.value + kPlayerHalf;
             const bool blocked = pmin.x < cmax.x && pmax.x > cmin.x && pmin.y < cmax.y &&
@@ -777,16 +838,38 @@ layers:
             }
         }
 
+        // Player attack: Q (keyboard) or X (gamepad), or LMB when not targeting a
+        // block. Deals kAttackDamage to the nearest mob within reach.
+        attackTimer -= dt;
+        const bool wantAttack = attack || (mine && !hit.hit);
+        if (wantAttack && attackTimer <= 0.0) {
+            if (mob::api().attack_nearest &&
+                mob::api().attack_nearest(camPos, kReachM, kAttackDamage)) {
+                attackTimer = kAttackCooldown;
+                int alive = 0;
+                for (uint32_t i = 0; i < mob::api().mob_count(); ++i) {
+                    const mob::MobState* m = mob::api().get_mob(i);
+                    if (m && m->state != mob::State::Dead) ++alive;
+                }
+                kills = static_cast<int>(mob::api().mob_count()) - alive;
+            }
+        }
+
         if (backend.isReady()) audioManager.update();
 
-        // ── M14 fluid pass: advance the field, realize water, remesh touches ──────
+        // ── M14 fluid pass ──────────────────────────────────────────────────────
         fluid.tick(dt);
+
+        // ── M13 structural pass ─────────────────────────────────────────────────
+        physics.tick();
+
+        // Remesh touched chunks (from player edits, crumble, fluid).
         for (const ChunkCoord& cc : tracker.touched) {
-            const Chunk* ch = world.getChunk(cc);
+            const Chunk* ch = terrainLayer->getChunk(cc);
             if (!ch) continue;
             auto it = meshes.find(cc);
-            if (it != meshes.end()) { it->second.destroy(); it->second = ChunkMesh::build(*ch, world.voxelSizeM()); }
-            else meshes.emplace(cc, ChunkMesh::build(*ch, world.voxelSizeM()));
+            if (it != meshes.end()) { it->second.destroy(); it->second = ChunkMesh::build(*ch, terrainLayer->voxelSizeM()); }
+            else meshes.emplace(cc, ChunkMesh::build(*ch, terrainLayer->voxelSizeM()));
         }
         tracker.touched.clear();
 
@@ -797,30 +880,30 @@ layers:
         renderer.setCameraPosition(camPos);
         renderer.setCameraRotation(pitch, yaw, 0.0f);
         for (const auto& kv : meshes) {
-            const Chunk* chunk = world.getChunk(kv.first);
-            if (chunk) renderer.renderChunk(kv.second, chunk->origin());
+            const Chunk* ch = terrainLayer->getChunk(kv.first);
+            if (ch) renderer.renderChunk(kv.second, ch->origin());
         }
 
-        // Mobs: a stacked-voxel body, tinted by AI state (the engine has no entity
-        // system, so the front-end draws the body itself).
+        // Mobs.
         const uint32_t mobN = mob::api().mob_count();
-        int chasing = 0;
+        int chasing = 0, aliveCount = 0;
         for (uint32_t i = 0; i < mobN; ++i) {
             const mob::MobState* m = mob::api().get_mob(i);
             if (!m || m->state == mob::State::Dead) continue;
+            ++aliveCount;
             if (m->state != mob::State::Wander) ++chasing;
-            uint32_t body = 0xff3f8f3f, head = 0xff2f6f2f;  // green idle
-            if (m->state == mob::State::Chase)  { body = 0xff2f7fcf; head = 0xff1f5faf; }  // orange (ABGR)
-            if (m->state == mob::State::Attack) { body = 0xff3030d0; head = 0xff2020a0; }  // red
+            uint32_t body = 0xff3f8f3f, head = 0xff2f6f2f;
+            if (m->state == mob::State::Chase)  { body = 0xff2f7fcf; head = 0xff1f5faf; }
+            if (m->state == mob::State::Attack) { body = 0xff3030d0; head = 0xff2020a0; }
             renderer.drawVoxel(WorldCoord(m->center.value + glm::dvec3(0, -0.4, 0)), body);
             renderer.drawVoxel(WorldCoord(m->center.value + glm::dvec3(0,  0.7, 0)), head);
         }
 
         if (hit.hit)
-            renderer.drawVoxelHighlight(chunkmath::voxelCenter(hit.voxel, world.voxelSizeM()),
-                                        static_cast<float>(world.voxelSizeM()), 0xff00ffff, -1.0f);
+            renderer.drawVoxelHighlight(chunkmath::voxelCenter(hit.voxel, terrainLayer->voxelSizeM()),
+                                        static_cast<float>(terrainLayer->voxelSizeM()), 0xff00ffff, -1.0f);
 
-        // ── HUD: health bar, hotbar, status line ──────────────────────────────────
+        // ── HUD ──────────────────────────────────────────────────────────────────
         renderer.hudClear();
         const int filled = static_cast<int>(std::round(health / 100.0f * 20));
         const uint8_t hpColor = health > 30.0f ? hud::LightGreen : hud::LightRed;
@@ -834,13 +917,15 @@ layers:
             char cell[8]; std::snprintf(cell, sizeof(cell), "%d:%d", int(i + 1), slots[i].count);
             renderer.hudText(col, 3, a, cell);
         }
-        char status[128];
+        char status[160];
         std::snprintf(status, sizeof(status),
-                      "Seed %llu | %s | XYZ %.0f %.0f %.0f | mobs %u (%d hostile) | %s",
+                      "Seed %llu | %s | XYZ %.0f %.0f %.0f | mobs %d/%u (%d hostile) kills %d | %s%s",
                       static_cast<unsigned long long>(worldSeed),
                       slots[selectedSlot].id.c_str(),
                       camPos.value.x, camPos.value.y, camPos.value.z,
-                      mobN, chasing, activeDevice == 1 ? "gamepad" : "kbd/mouse");
+                      aliveCount, mobN, chasing, kills,
+                      activeDevice == 1 ? "gamepad" : "kbd/mouse",
+                      crumbleLoaded ? " | M13" : "");
         renderer.hudText(1, 5, hud::attr(hud::Yellow), status);
 
         renderer.render();

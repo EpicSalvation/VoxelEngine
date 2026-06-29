@@ -1,10 +1,12 @@
-// Verifies the M18 mega-demo's headline guarantee: the world seed deterministically
-// drives generation, so the SAME seed regenerates the SAME world and a DIFFERENT
-// seed produces a different one (ARCHITECTURE §4). Exercises the real overworld +
-// trees worldgen plugins through the exact pipeline the demo uses — the terminal
-// terrain layer generator followed by every registered feature overlay (caves,
-// ore, trees) — with the seed threaded through the generator's user_data and the
-// feature pass's seed argument. Headless: no window or GPU.
+// Verifies the M18.5 mega-demo's headline guarantee: the world seed
+// deterministically drives generation, so the SAME seed regenerates the SAME
+// world and a DIFFERENT seed produces a different one (ARCHITECTURE §4).
+//
+// M18.5: the demo now uses a composite heightmap — a "blocks" composite layer
+// decomposes to a "terrain" terminal layer via a recipe with occupancy carving.
+// This test exercises the real overworld + trees worldgen plugins through the
+// terminal terrain generator + feature overlays (the same path the demo uses
+// for pre-streaming the spawn neighbourhood).
 
 #include "core/PluginManager.h"
 #include "world/Voxel.h"
@@ -13,25 +15,25 @@
 #include <cstdint>
 #include <vector>
 
-// The two M18 worldgen plugins are compiled into the test binary (OVERWORLD_/
-// TREES_COMPILED_IN suppress their generic voxel_plugin_init); wire them in here.
 extern "C" int overworld_plugin_init(PluginContext* ctx);
 extern "C" int trees_plugin_init(PluginContext* ctx);
+extern "C" void overworld_set_seed_ptr(uint64_t* ptr);
 
 namespace {
 
 struct Gen {
     PluginManager     pm;
     LayerGeneratorFn  terrain = nullptr;
+    uint64_t          seed = 0;
     Gen() {
         pm.wireInPlugin(overworld_plugin_init);
         pm.wireInPlugin(trees_plugin_init);
         for (const auto& g : pm.layerGenerators())
             if (g.layer_name == "terrain") terrain = g.fn;
     }
-    // Generate a chunk the way the demo does: base layer, then every feature
-    // overlay in registration order, all driven by `seed`.
-    std::vector<Voxel> world(WorldCoord origin, int n, uint64_t seed) {
+    std::vector<Voxel> world(WorldCoord origin, int n, uint64_t s) {
+        seed = s;
+        overworld_set_seed_ptr(&seed);
         std::vector<Voxel> v(static_cast<size_t>(n) * n * n, Voxel::empty());
         terrain(origin, n, v.data(), &seed);
         for (const auto& f : pm.featureGenerators())
@@ -73,9 +75,6 @@ TEST(MegaDemoDeterminism, DifferentSeedProducesDifferentWorld) {
 }
 
 TEST(MegaDemoDeterminism, ChunkOriginIsSeamless) {
-    // The world voxel at a given position must not depend on which chunk grid it
-    // is generated in — guards against a chunk-local (non-world-space) noise lattice
-    // that would tear caves/terrain at chunk borders.
     Gen g;
     ASSERT_NE(g.terrain, nullptr);
     const int small = 16, big = 32;
@@ -90,15 +89,14 @@ TEST(MegaDemoDeterminism, ChunkOriginIsSeamless) {
 }
 
 TEST(MegaDemoDeterminism, ProducesLayeredTerrain) {
-    // Sanity: a generated chunk has air, a grass surface, and stone below.
     Gen g;
     ASSERT_NE(g.terrain, nullptr);
     const std::vector<Voxel> v = g.world(kOrigin, kN, 12345u);
     bool air = false, grass = false, stone = false;
     for (const auto& vox : v) {
         if (vox.isEmpty()) air = true;
-        else if (vox.material.palette_index == 2) grass = true;   // grass
-        else if (vox.material.palette_index == 1) stone = true;   // stone
+        else if (vox.material.palette_index == 2) grass = true;
+        else if (vox.material.palette_index == 1) stone = true;
     }
     EXPECT_TRUE(air);
     EXPECT_TRUE(grass);

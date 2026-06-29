@@ -49,6 +49,10 @@ struct API {
 
     // Seed the plugin's AI RNG so a run's mob behaviour is reproducible.
     void (*set_seed)(uint64_t seed) = nullptr;
+
+    // Host → plugin: deal damage to the nearest mob within reach of a world
+    // position (the player's eye). Returns true if a mob was hit.
+    bool (*attack_nearest)(WorldCoord from, double reach, float damage) = nullptr;
 };
 
 // Singleton accessor. Plugin fills it during init; host reads it after wiring in.
