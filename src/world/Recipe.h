@@ -54,6 +54,17 @@ struct BoundaryValue {
     DistributionValue distribution;
     int               depth   = 1;
     bool              present = false;
+    BoundaryMode      mode    = BoundaryMode::MacroFace;  // depth from macro face or carved surface (M18.5)
+};
+
+// Owning mirror of OccupancyDesc: the optional carve stage. `present == false`
+// (the default) leaves the macro fully solid — exactly the pre-M18.5 behavior.
+// `noise_id` empty means the built-in "value" noise.
+struct OccupancyValue {
+    std::string                   noise_id;            // empty => built-in "value"
+    float                         threshold = 0.0f;
+    std::vector<RecipeParamValue> params;
+    bool                          present   = false;
 };
 
 struct Recipe {
@@ -63,6 +74,7 @@ struct Recipe {
     BoundaryValue                 bottom;           //   bottom -> side -> top (top wins)
     BoundaryValue                 side;             // shared by all four lateral faces
     std::vector<RecipeParamValue> seed_parameters;  // biases the layer below
+    OccupancyValue                occupancy;         // optional carve stage (M18.5)
 
     // Deep-copy a flat POD RecipeDesc into an owning Recipe. Null id/text pointers
     // become empty strings; null arrays with a non-zero count are treated as empty.
@@ -115,6 +127,16 @@ inline BoundaryValue copyBoundary(const BoundaryDesc& b) {
     out.distribution = copyDistribution(b.distribution);
     out.depth        = b.depth;
     out.present      = b.present;
+    out.mode         = b.mode;
+    return out;
+}
+
+inline OccupancyValue copyOccupancy(const OccupancyDesc& o) {
+    OccupancyValue out;
+    out.noise_id  = copyStr(o.noise_id);
+    out.threshold = o.threshold;
+    out.params    = copyParams(o.params, o.param_count);
+    out.present   = o.present;
     return out;
 }
 
@@ -135,5 +157,6 @@ inline Recipe Recipe::fromDesc(const RecipeDesc& desc) {
     r.bottom          = copyBoundary(desc.bottom);
     r.side            = copyBoundary(desc.side);
     r.seed_parameters = copyParams(desc.seed_parameters, desc.seed_parameter_count);
+    r.occupancy       = copyOccupancy(desc.occupancy);
     return r;
 }

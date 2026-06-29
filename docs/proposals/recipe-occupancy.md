@@ -1,7 +1,21 @@
 # Proposal: Recipe Occupancy (carve-to-surface for recipe-driven decomposition)
 
-Status: **proposed** (design only — implementation not scheduled).
-Origin: M10 fix-plan item 15 (`docs/m10-incremental-decomposition-plan.md`).
+Status: **implemented — M18.5** (Composite Heightmap Worlds breakfix; see README milestones).
+Origin: M10 fix-plan item 15 (`docs/m10-incremental-decomposition-plan.md`); re-surfaced
+by the M18 Mega-Demo (`docs/m18-mega-demo-metrics.md`, "A note on scope honesty"), which hit
+the same limitation from the M13-collapse angle — a heightmap world has no composite macros.
+
+> **As built (M18.5).** Shipped as designed below, with three notes: (1) `OccupancyDesc`
+> is **appended** to `RecipeDesc` (not placed first) per the ABI append-only rule, and the
+> plugin ABI version was bumped 2 → 3. (2) The v2 surface boundary landed in the same
+> milestone as a `BoundaryMode::Surface` flag on `BoundaryDesc` — depth measured from the
+> carved surface per column (worker-only second pass in `fillChildChunk`). (3) The
+> "coarse-supersets-fine" half is now **engine-derived**: a root composite layer with an
+> occupancy recipe and no registered generator has its coarse occupancy synthesized by
+> `DecompositionManager` from the same carve field (sampled over each macro's footprint with
+> the same per-macro occupancy seed), so the surface lives in one place and the superset
+> invariant is guaranteed rather than authored. The occupancy salt is shared
+> (`kRecipeOccupancySalt`) so coarse and fine occupancy sample an identical field.
 
 ## Problem
 

@@ -14,6 +14,10 @@ namespace {
 // has to differ from the feature salts.
 constexpr uint64_t kDistributionSalt = 0xD15D15D15D15D15Dull;
 
+// The occupancy (carve) salt is kRecipeOccupancySalt, declared in ResolvedRecipe.h
+// so the engine-derived coarse-occupancy generator (DecompositionManager) samples
+// the same seeded field a macro's decomposition will.
+
 // Flatten owning RecipeParamValues into the POD RecipeParam array a NoiseFn /
 // FeatureGeneratorFn consumes. The returned array's const char* point into the
 // source vector's strings, so the source must outlive the array — it does: the
@@ -89,6 +93,15 @@ void fillChildChunk(Chunk& chunk, double voxelSizeM, const ResolvedRecipe& recip
     const WorldCoord origin = chunk.origin();
     const uint64_t distSeed = voxel_seed_mix(decompSeed, kDistributionSalt);
 
+    // ── (0) occupancy carve setup ────────────────────────────────────────────
+    // Resolved once for the chunk: the carve noise + its own seed and flattened
+    // (seed-merged) params. Absent (present == false) or unresolved (null fn) ⇒
+    // no carve, so the fill is byte-identical to the pre-M18.5 path.
+    const bool carve = recipe.occupancy.present && recipe.occupancy.noise != nullptr;
+    const uint64_t occSeed = voxel_seed_mix(decompSeed, kRecipeOccupancySalt);
+    const std::vector<RecipeParam> flatOcc =
+        carve ? flatten(recipe.occupancy.params) : std::vector<RecipeParam>{};
+
     // Flat param arrays per distribution, built once (params are constant over
     // the chunk). Only the present boundaries need flattening.
     const std::vector<RecipeParam> flatInterior = flatten(recipe.interior.noiseParams);
@@ -123,6 +136,24 @@ void fillChildChunk(Chunk& chunk, double voxelSizeM, const ResolvedRecipe& recip
                     continue;
                 }
 
+                const WorldCoord center(
+                    origin.value.x + (static_cast<double>(x) + 0.5) * voxelSizeM,
+                    origin.value.y + (static_cast<double>(y) + 0.5) * voxelSizeM,
+                    origin.value.z + (static_cast<double>(z) + 0.5) * voxelSizeM);
+
+                // (0) Occupancy carve: a cell whose sampled field value is below
+                // the threshold is empty — applied BEFORE the distribution sample
+                // so the recipe can follow a surface. Carve-only: it never makes a
+                // cell solid, so coarse-supersets-fine (§4) is preserved. Sampled
+                // at the WORLD center so adjacent macros' grids stay seamless.
+                if (carve &&
+                    recipe.occupancy.noise(center, occSeed, flatOcc.data(),
+                                           flatOcc.size(), recipe.occupancy.noiseUser)
+                        < recipe.occupancy.threshold) {
+                    chunk.at(x, y, z) = Voxel::empty();
+                    continue;
+                }
+
                 // Distance (in child voxels) inward from the gravity-relative
                 // down face and up face, and nearness to either lateral face —
                 // computed off the resolved gravity axis so the roles follow
@@ -135,26 +166,101 @@ void fillChildChunk(Chunk& chunk, double voxelSizeM, const ResolvedRecipe& recip
                     return mc[axis] < depth || mc[axis] >= ratio - depth;
                 };
 
-                // Overlap order bottom -> side -> top (top wins), per §6.
+                // Overlap order bottom -> side -> top (top wins), per §6. Only
+                // MacroFace-mode boundaries paint here; Surface-mode top/bottom are
+                // applied in the per-column second pass below (their depth is
+                // measured from the carved surface, unknown until the column is
+                // filled). A Surface-mode boundary is skipped here (treated as
+                // not-present) so it does not double-paint.
+                const auto inlineFace = [](const ResolvedBoundary& b) {
+                    return b.present && b.mode == BoundaryMode::MacroFace;
+                };
                 const ResolvedDistribution* dist = &recipe.interior;
                 const std::vector<RecipeParam>* flat = &flatInterior;
-                if (recipe.bottom.present && distDown < recipe.bottom.depth) {
+                if (inlineFace(recipe.bottom) && distDown < recipe.bottom.depth) {
                     dist = &recipe.bottom.distribution; flat = &flatBottom;
                 }
-                if (recipe.side.present &&
+                if (inlineFace(recipe.side) &&
                     (nearFace(latA, recipe.side.depth) || nearFace(latB, recipe.side.depth))) {
                     dist = &recipe.side.distribution; flat = &flatSide;
                 }
-                if (recipe.top.present && distUp < recipe.top.depth) {
+                if (inlineFace(recipe.top) && distUp < recipe.top.depth) {
                     dist = &recipe.top.distribution; flat = &flatTop;
                 }
 
-                const WorldCoord center(
-                    origin.value.x + (static_cast<double>(x) + 0.5) * voxelSizeM,
-                    origin.value.y + (static_cast<double>(y) + 0.5) * voxelSizeM,
-                    origin.value.z + (static_cast<double>(z) + 0.5) * voxelSizeM);
                 chunk.at(x, y, z) = sampleDistribution(*dist, *flat, center, distSeed);
             }
+
+    // ── (2.5) surface-relative boundary caps (M18.5) ─────────────────────────
+    // A Surface-mode top/bottom boundary measures its depth from the CARVED
+    // surface of each column, not the macro's geometric face — so a cap tracks a
+    // sloped heightmap instead of landing on a flat face. Per lateral column,
+    // walk the gravity axis from the surface end inward: a solid cell whose
+    // outward neighbor is air (an exposed surface) starts a `depth`-cell band that
+    // is repainted with the boundary distribution, ending at the first empty cell.
+    //
+    // The "outward neighbor" is known only within this chunk. When a macro spans
+    // several child chunks vertically (ratio > childChunkSize), a column whose
+    // surface lands exactly on an internal chunk boundary is conservatively NOT
+    // capped (the cell above is in the next chunk, unseen) — a one-chunk under-cap
+    // seam, the §6 exposure-aware-boundary deferral. Configs with the macro one
+    // child-chunk tall (ratio == childChunkSize, the common case) never hit it.
+    const int64_t chunkBase[3] = {static_cast<int64_t>(cc.x) * n,
+                                  static_cast<int64_t>(cc.y) * n,
+                                  static_cast<int64_t>(cc.z) * n};
+    const int64_t macroMin[3] = {macroChildMin.x, macroChildMin.y, macroChildMin.z};
+    const auto applySurfaceCap = [&](const ResolvedBoundary& b, bool towardUp) {
+        if (!b.present || b.mode != BoundaryMode::Surface || b.depth <= 0) return;
+        const std::vector<RecipeParam> flat = flatten(b.distribution.noiseParams);
+        // The surface end is the up end for a top cap, the down end for a bottom
+        // cap; whether that end is the high or low index depends on gravity.
+        const bool surfaceEndIsHigh = towardUp ? downAtLow : !downAtLow;
+        const int  axStart = surfaceEndIsHigh ? (n - 1) : 0;
+        const int  axStep  = surfaceEndIsHigh ? -1 : 1;
+        const int64_t surfaceFaceLocal = surfaceEndIsHigh ? (ratio - 1) : 0;
+        for (int ia = 0; ia < n; ++ia)
+            for (int ib = 0; ib < n; ++ib) {
+                // Lateral position within the macro; skip columns outside it.
+                const int64_t latAloc = chunkBase[latA] + ia - macroMin[latA];
+                const int64_t latBloc = chunkBase[latB] + ib - macroMin[latB];
+                if (latAloc < 0 || latAloc >= ratio || latBloc < 0 || latBloc >= ratio)
+                    continue;
+                // The neighbor toward the surface end ("outward" — above for a top
+                // cap, below for a bottom cap) is air iff the chunk's surface-end
+                // row is the macro's surface face (else the macro continues into a
+                // neighbor chunk — unknown, treated as not air).
+                bool outwardAir =
+                    (chunkBase[gAxis] + axStart - macroMin[gAxis]) == surfaceFaceLocal;
+                int remaining = 0;
+                int coord[3];
+                coord[latA] = ia;
+                coord[latB] = ib;
+                for (int s = 0; s < n; ++s) {
+                    const int axial = axStart + s * axStep;
+                    const int64_t mAxial = chunkBase[gAxis] + axial - macroMin[gAxis];
+                    coord[gAxis] = axial;
+                    const bool inMacro = (mAxial >= 0 && mAxial < ratio);
+                    Voxel& v = chunk.at(coord[0], coord[1], coord[2]);
+                    if (inMacro && !v.isEmpty()) {
+                        if (outwardAir) remaining = b.depth;  // exposed surface: new band
+                        if (remaining > 0) {
+                            const WorldCoord c(
+                                origin.value.x + (coord[0] + 0.5) * voxelSizeM,
+                                origin.value.y + (coord[1] + 0.5) * voxelSizeM,
+                                origin.value.z + (coord[2] + 0.5) * voxelSizeM);
+                            v = sampleDistribution(b.distribution, flat, c, distSeed);
+                            --remaining;
+                        }
+                        outwardAir = false;
+                    } else {
+                        remaining = 0;      // air (or outside macro) breaks the band
+                        outwardAir = true;  // and exposes the next cell inward
+                    }
+                }
+            }
+    };
+    applySurfaceCap(recipe.top, /*towardUp=*/true);
+    applySurfaceCap(recipe.bottom, /*towardUp=*/false);
 
     // ── (3) feature overlays, in declared order ──────────────────────────────
     for (const ResolvedFeature& f : recipe.features) {

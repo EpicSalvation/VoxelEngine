@@ -45,9 +45,28 @@ ResolvedBoundary resolveBoundary(const BoundaryValue& b, const PluginManager& pm
     ResolvedBoundary rb;
     rb.present = b.present;
     rb.depth   = b.depth;
+    rb.mode    = b.mode;
     if (b.present)
         rb.distribution = resolveDistribution(b.distribution, pm, seedParams);
     return rb;
+}
+
+// Resolve the optional occupancy stage: its noise id (empty => built-in "value")
+// and seed-merged params, exactly like a distribution noise (M18.5). An absent
+// stage resolves to a null fn that fillChildChunk treats as "no carve".
+ResolvedOccupancy resolveOccupancy(const OccupancyValue& o, const PluginManager& pm,
+                                   const std::vector<RecipeParamValue>& seedParams) {
+    ResolvedOccupancy ro;
+    ro.present   = o.present;
+    ro.threshold = o.threshold;
+    if (o.present) {
+        const std::string id = o.noise_id.empty() ? std::string("value") : o.noise_id;
+        const RegisteredNoise* nz = pm.resolveNoise(id);
+        ro.noise     = nz ? nz->fn : nullptr;
+        ro.noiseUser = nz ? nz->user_data : nullptr;
+        ro.params    = mergeRecipeParams(seedParams, o.params);
+    }
+    return ro;
 }
 
 }  // namespace
@@ -60,6 +79,7 @@ ResolvedRecipe resolveRecipe(const Recipe& recipe, const PluginManager& pm,
         mergeRecipeParams(inherited, recipe.seed_parameters);
 
     ResolvedRecipe out;
+    out.occupancy = resolveOccupancy(recipe.occupancy, pm, seed);
     out.interior = resolveDistribution(recipe.interior, pm, seed);
     out.top      = resolveBoundary(recipe.top,    pm, seed);
     out.bottom   = resolveBoundary(recipe.bottom, pm, seed);

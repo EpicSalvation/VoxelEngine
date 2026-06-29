@@ -44,11 +44,12 @@ struct ResolvedDistribution {
 
 // A resolved per-face boundary override. `present == false` leaves the face to
 // the interior distribution; `depth` is how many child-voxel layers inward from
-// the face it replaces.
+// the face (MacroFace) or carved surface (Surface) it replaces.
 struct ResolvedBoundary {
     ResolvedDistribution distribution;
     int                  depth   = 1;
     bool                 present = false;
+    BoundaryMode         mode    = BoundaryMode::MacroFace;  // M18.5
 };
 
 // A resolved feature overlay: the generator fn plus its effective (seed-merged)
@@ -60,7 +61,20 @@ struct ResolvedFeature {
     uint64_t                      seedSalt = 0;       // mixed into the per-feature seed
 };
 
+// A resolved occupancy (carve) stage (M18.5). `present == false` (the default)
+// means "fully solid" — fillChildChunk skips the carve and behaves as before. A
+// null `noise` (an unresolved id, caught earlier by validateRecipes) is likewise
+// treated as absent, so the worker fails soft rather than dereferencing null.
+struct ResolvedOccupancy {
+    NoiseFn                       noise     = nullptr;  // null => no carve (treated absent)
+    void*                         noiseUser = nullptr;
+    float                         threshold = 0.0f;     // solid iff value >= threshold
+    std::vector<RecipeParamValue> params;               // effective params, owning
+    bool                          present   = false;
+};
+
 struct ResolvedRecipe {
+    ResolvedOccupancy            occupancy;            // carve stage, run first (M18.5)
     ResolvedDistribution         interior;
     ResolvedBoundary             top;
     ResolvedBoundary             bottom;
@@ -68,10 +82,21 @@ struct ResolvedRecipe {
     std::vector<ResolvedFeature> features;            // applied in declared order
 };
 
+// Salt mixed into the per-decomposition seed for the occupancy (carve) field, so
+// the carve is decorrelated from the material distribution and feature fields.
+// Exposed here (not file-local to ResolvedRecipe.cpp) so the engine-derived
+// coarse-occupancy generator (DecompositionManager, M18.5) samples the *same*
+// seeded field a macro's decomposition will, keeping coarse occupancy an exact
+// match for fine occupancy.
+inline constexpr uint64_t kRecipeOccupancySalt = 0x0CC0CC0CC0CC0CC0ull;
+
 // Fill one child chunk from a resolved recipe — the recipe-driven counterpart of
 // the M6 "run the child generator over the subvolume" path. One self-contained
 // pure pass:
-//   (1) sample the material distribution into every voxel,
+//   (0) if an occupancy stage is present, carve each cell whose sampled field
+//       value is below the threshold to empty (M18.5) — this is what lets a
+//       recipe follow a surface instead of refining a solid cube,
+//   (1) sample the material distribution into every (surviving) voxel,
 //   (2) apply boundary overrides on the macro voxel's exposed faces
 //       (overlap order bottom -> side -> top; top wins), then
 //   (3) run each feature overlay in declared order over the filled grid.

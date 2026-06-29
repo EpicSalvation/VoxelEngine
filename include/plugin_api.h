@@ -482,13 +482,54 @@ struct FeatureRef {
     size_t             param_count  = 0;
 };
 
+// How a boundary override measures its `depth` (M18.5).
+enum class BoundaryMode : uint8_t {
+    // `depth` child layers inward from the macro voxel's geometric face. The
+    // historical behavior, and the default (zero-initialized) — a cap lands on the
+    // macro cube's face regardless of where the carved surface sits.
+    MacroFace,
+    // `depth` solid cells inward from the CARVED surface of each column — the cap
+    // tracks the occupancy surface (a sloped heightmap, a radial well) instead of
+    // a flat macro face. Meaningful for `top` and `bottom` only (the gravity-axis
+    // faces); a `side` boundary in this mode paints nothing (a `side` surface has
+    // no well-defined column and is left to the interior). Without an occupancy
+    // stage the "surface" is the macro face, so this reduces to MacroFace.
+    Surface,
+};
+
 // A per-face boundary override (top / bottom / side). `depth` is how many
-// child-voxel layers inward from the face it replaces; `present == false` leaves
-// the face to the interior distribution.
+// child-voxel layers inward from the face (MacroFace) or carved surface (Surface)
+// it replaces; `present == false` leaves the face to the interior distribution.
 struct BoundaryDesc {
     DistributionDesc distribution;
     int              depth   = 1;
     bool             present = false;
+    BoundaryMode     mode    = BoundaryMode::MacroFace;  // appended (M18.5)
+};
+
+// An optional occupancy (carve) stage that decides which child cells of a
+// decomposing macro are solid at all, BEFORE any material is assigned (M18.5,
+// docs/proposals/recipe-occupancy.md). Without it a recipe fills the macro's
+// whole subvolume solid (a solid cube refines to a smaller-voxel solid cube), so
+// recipes cannot follow a surface; with it a cell whose sampled field value is
+// below `threshold` is left empty, letting a recipe-driven composite layer track
+// a heightmap / signed-distance surface.
+//
+// The field is a registered NoiseFn (the same ABI a distribution noise uses),
+// sampled at the child voxel's WORLD-space center so adjacent macros' grids stay
+// seamless. A plugin registers it once via register_noise (e.g. a height field
+// whose value encodes signed distance to its surface) and names it here.
+//
+// Carve-only: it may turn a cell empty but never solid, so the coarse-supersets-
+// fine invariant (ARCHITECTURE §4) holds by construction. Zero-initialized
+// (`present == false`) means "fully solid" — exactly the pre-M18.5 behavior, so
+// existing recipes are byte-identical.
+struct OccupancyDesc {
+    const char*        noise_id    = nullptr;  // nullptr => built-in "value"
+    float              threshold   = 0.0f;     // solid iff sampled value >= threshold
+    const RecipeParam* params      = nullptr;  // merged under inherited seed params
+    size_t             param_count = 0;
+    bool               present     = false;
 };
 
 struct RecipeDesc {
@@ -503,6 +544,10 @@ struct RecipeDesc {
 
     const RecipeParam* seed_parameters      = nullptr; // biases the layer below
     size_t             seed_parameter_count = 0;
+
+    OccupancyDesc      occupancy;                       // optional carve stage (M18.5);
+                                                        // appended (ABI append-only rule),
+                                                        // zero-init = absent = today
 };
 
 // ---------------------------------------------------------------------------
@@ -933,7 +978,7 @@ struct PluginContext {
 // way. The engine checks a plugin's stamped version at load time and rejects
 // a mismatch with a clear diagnostic rather than risking silent corruption.
 // ---------------------------------------------------------------------------
-static constexpr uint32_t VOXEL_PLUGIN_ABI_VERSION = 2;
+static constexpr uint32_t VOXEL_PLUGIN_ABI_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Plugin entry point

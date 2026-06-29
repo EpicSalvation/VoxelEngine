@@ -41,7 +41,85 @@ double chunkSurfaceDistSq(ChunkCoord cc, double voxelSize, int chunkSizeVoxels,
                       voxelSize * chunkSizeVoxels, point);
 }
 
+// Flatten owning RecipeParamValues into the POD RecipeParam array a NoiseFn
+// consumes. The char* point into the source vector's strings, which must outlive
+// the array — they do: the DerivedOccupancyGen owns both for the manager's life.
+std::vector<RecipeParam> flattenParams(const std::vector<RecipeParamValue>& params) {
+    std::vector<RecipeParam> out;
+    out.reserve(params.size());
+    for (const RecipeParamValue& p : params) {
+        RecipeParam rp;
+        rp.key    = p.key.c_str();
+        rp.kind   = p.kind;
+        rp.number = p.number;
+        rp.text   = p.text.empty() ? nullptr : p.text.c_str();
+        out.push_back(rp);
+    }
+    return out;
+}
+
+// The material an atomic (undecomposed) macro renders/collides as until it
+// decomposes: the highest-weight material of the recipe's interior distribution,
+// resolved through the M8 lookup. Falls back to a neutral solid block when the
+// recipe paints no interior (a degenerate occupancy-only recipe).
+MaterialProperties dominantInteriorMaterial(const Recipe& recipe, const PluginManager& pm) {
+    const MaterialWeightValue* best = nullptr;
+    for (const MaterialWeightValue& m : recipe.interior.materials)
+        if (!best || m.weight > best->weight) best = &m;
+    if (best) return pm.material(best->material_id);
+    MaterialProperties m;
+    m.density = 1000.0f;
+    m.structural_strength = 0.5f;
+    m.hardness = 0.5f;
+    m.palette_index = 1;
+    return m;
+}
+
 }  // namespace
+
+// Synthesized coarse-occupancy generator (M18.5). For each macro voxel in the
+// chunk, sample the recipe's carve field over the macro's child-resolution
+// footprint with the SAME per-macro occupancy seed decomposition uses; mark the
+// macro solid (its block material) iff any child cell is solid, else empty. This
+// makes coarse occupancy an exact superset of fine occupancy by construction,
+// removing the hand-written, must-stay-in-sync coarse generator (ARCHITECTURE §4).
+void DecompositionManager::derivedOccupancyGenerator(WorldCoord chunkOrigin, int gridSize,
+                                                     Voxel* out, void* user_data) {
+    const DerivedOccupancyGen& d = *static_cast<const DerivedOccupancyGen*>(user_data);
+    if (!d.occ.noise || d.ratio <= 0) return;  // nothing to derive: leave all empty
+
+    for (int z = 0; z < gridSize; ++z)
+        for (int y = 0; y < gridSize; ++y)
+            for (int x = 0; x < gridSize; ++x) {
+                const double mx0 = chunkOrigin.value.x + x * d.macroVoxelSizeM;
+                const double my0 = chunkOrigin.value.y + y * d.macroVoxelSizeM;
+                const double mz0 = chunkOrigin.value.z + z * d.macroVoxelSizeM;
+                // The macro VoxelCoord (its center disambiguates the floor) and the
+                // per-macro occupancy seed, matching makeJob/fillChildChunk exactly.
+                const WorldCoord macroCenter(mx0 + 0.5 * d.macroVoxelSizeM,
+                                             my0 + 0.5 * d.macroVoxelSizeM,
+                                             mz0 + 0.5 * d.macroVoxelSizeM);
+                const chunkmath::VoxelCoord macro =
+                    chunkmath::worldToVoxel(macroCenter, d.macroVoxelSizeM);
+                const uint64_t decompSeed =
+                    voxel_seed_mix(d.worldSeed, chunkmath::VoxelCoordHash{}(macro));
+                const uint64_t occSeed = voxel_seed_mix(decompSeed, kRecipeOccupancySalt);
+
+                bool present = false;
+                for (int cz = 0; cz < d.ratio && !present; ++cz)
+                    for (int cy = 0; cy < d.ratio && !present; ++cy)
+                        for (int cx = 0; cx < d.ratio && !present; ++cx) {
+                            const WorldCoord cc(mx0 + (cx + 0.5) * d.childVoxelSizeM,
+                                                my0 + (cy + 0.5) * d.childVoxelSizeM,
+                                                mz0 + (cz + 0.5) * d.childVoxelSizeM);
+                            if (d.occ.noise(cc, occSeed, d.flat.data(), d.flat.size(),
+                                            d.occ.noiseUser) >= d.occ.threshold)
+                                present = true;
+                        }
+                out[x + gridSize * (y + gridSize * z)] =
+                    present ? Voxel{d.block} : Voxel::empty();
+            }
+}
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
@@ -117,6 +195,37 @@ DecompositionManager::DecompositionManager(World& world, PluginManager& pm,
                 info.ancestorSeedParams = mergeRecipeParams(
                     info.ancestorSeedParams, ancestorRecipe->seed_parameters);
         }
+    }
+
+    // Engine-derived coarse occupancy (M18.5): a ROOT composite layer that has an
+    // occupancy-bearing recipe but NO registered layer generator gets its coarse
+    // occupancy synthesized from the recipe's own carve field, so the surface
+    // lives in exactly one place and the §4 superset invariant is guaranteed, not
+    // authored. A layer with a registered generator keeps it (opt-in).
+    for (auto& info : composites_) {
+        if (info.parentIdx >= 0) continue;  // only root layers are generator-loaded
+        bool hasGen = false;
+        for (const auto& g : pm_.layerGenerators())
+            if (g.layer_name == info.layer->name()) { hasGen = true; break; }
+        if (hasGen) continue;
+
+        const Recipe* recipe = pm_.findRecipe(info.layer->name());
+        if (!recipe || !recipe->occupancy.present) continue;
+
+        // Resolve the occupancy at the recipe's own (root) seed level — the carve
+        // field is sampled at world position, so no per-macro __altitude is needed.
+        ResolvedRecipe resolved = resolveRecipe(*recipe, pm_, {});
+        if (!resolved.occupancy.noise) continue;  // unresolved id (validateRecipes guards this)
+
+        auto gen = std::make_unique<DerivedOccupancyGen>();
+        gen->occ             = std::move(resolved.occupancy);
+        gen->flat            = flattenParams(gen->occ.params);
+        gen->macroVoxelSizeM = info.layer->voxelSizeM();
+        gen->childVoxelSizeM = info.childLayer->voxelSizeM();
+        gen->ratio           = info.ratio;
+        gen->worldSeed       = worldSeed_;
+        gen->block           = dominantInteriorMaterial(*recipe, pm_);
+        info.derivedOcc      = std::move(gen);
     }
 }
 
@@ -634,6 +743,12 @@ std::vector<LayerTickDiff> DecompositionManager::tick(const WorldCoord& cameraPo
             void* genUD = nullptr;
             for (const auto& g : pm_.layerGenerators())
                 if (g.layer_name == layer.name()) { genFn = g.fn; genUD = g.user_data; break; }
+            // No registered generator but the recipe carries occupancy: synthesize
+            // the coarse occupancy from the carve field (M18.5).
+            if (!genFn && info.derivedOcc) {
+                genFn = &DecompositionManager::derivedOccupancyGenerator;
+                genUD = info.derivedOcc.get();
+            }
 
             int loaded = 0;
             for (const ChunkCoord& cc : lod_.desiredChunks(camChunk, layer.name())) {

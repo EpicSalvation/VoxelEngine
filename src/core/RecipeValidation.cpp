@@ -40,6 +40,17 @@ void validateRecipe(const Recipe& recipe, const PluginManager& pm,
     if (recipe.side.present)
         validateDistribution(recipe.side.distribution, pm, layerName, "side boundary distribution");
 
+    // Occupancy carve noise (M18.5): when present with an explicit id it must
+    // resolve, same rule as a distribution noise. An empty id means built-in
+    // "value"; an absent stage (present == false) is skipped.
+    if (recipe.occupancy.present && !recipe.occupancy.noise_id.empty()) {
+        if (!pm.resolveNoise(recipe.occupancy.noise_id))
+            throw std::runtime_error(
+                "Composite layer '" + layerName + "' recipe occupancy references "
+                "unregistered noise id '" + recipe.occupancy.noise_id +
+                "'. Register it (built-in or via register_noise) or remove the occupancy stage.");
+    }
+
     // Feature overlays must each name a registered feature generator.
     for (const FeatureRefValue& f : recipe.features) {
         if (!hasFeatureGenerator(pm, f.generator_id))

@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -145,6 +146,26 @@ public:
     size_t inFlight() const { return worker_.inFlight() + backlog_.size(); }
 
 private:
+    // Engine-derived coarse occupancy (M18.5, docs/proposals/recipe-occupancy.md).
+    // When a ROOT composite layer registers an occupancy-bearing recipe but NO
+    // layer generator, the manager synthesizes the layer's coarse occupancy from
+    // the recipe's own carve field instead of requiring a hand-written generator
+    // that must re-derive (and stay in sync with) the same surface — the §4
+    // coarse-supersets-fine contract becomes engine-guaranteed rather than
+    // authored. A macro is solid iff sampling the carve field over its footprint
+    // (at child resolution, with the same per-macro occupancy seed decomposition
+    // uses) finds any solid cell, so coarse occupancy is an EXACT match for what
+    // the macro's decomposition would produce.
+    struct DerivedOccupancyGen {
+        ResolvedOccupancy        occ;              // resolved carve field (owns its params)
+        std::vector<RecipeParam> flat;             // POD view of occ.params, built once
+        double                   macroVoxelSizeM = 0.0;
+        double                   childVoxelSizeM = 0.0;
+        int64_t                  ratio           = 0;
+        uint64_t                 worldSeed        = 0;
+        MaterialProperties       block;            // material stamped on a present macro
+    };
+
     struct CompositeLayerInfo {
         Layer*             layer;      // the composite layer (owned by World)
         Layer*             childLayer; // its direct child (owned by World)
@@ -174,6 +195,10 @@ private:
         // are never cleared outside the drain (pinning forbids it), so the
         // counters cannot drift.
         std::unordered_map<ChunkCoord, int, ChunkCoordHash> pendingChunks;
+        // Set only for a root composite layer with an occupancy recipe and no
+        // registered generator (M18.5); null otherwise. Heap-owned so its address
+        // (passed as the synthesized generator's user_data) is stable.
+        std::unique_ptr<DerivedOccupancyGen> derivedOcc;
     };
 
     // An immutable layer streamed by the manager (M16, L5). Immutable layers have
@@ -197,6 +222,13 @@ private:
     // DecompositionWorker never touches PluginManager (ARCHITECTURE §13).
     DecompositionJob makeJob(const CompositeLayerInfo& info,
                              chunkmath::VoxelCoord macro) const;
+
+    // Synthesized root-layer generator (M18.5): fills a composite chunk's coarse
+    // occupancy by sampling a DerivedOccupancyGen (passed as user_data) over each
+    // macro voxel's footprint. A LayerGeneratorFn, used in place of a registered
+    // generator for an occupancy-recipe root layer that has none.
+    static void derivedOccupancyGenerator(WorldCoord chunkOrigin, int gridSize,
+                                          Voxel* out, void* user_data);
 
     // The child-layer chunks that cover one composite macro voxel's subvolume.
     // When parent_voxel_size == child_chunk_world_size this is exactly one chunk;
