@@ -490,6 +490,18 @@ cmake --build build
 # Single-config:   ./build/18-hud-and-controls
 # Multi-config:    ./build/Debug/18-hud-and-controls.exe
 
+# Run the MEGA-DEMO (M18, "Overworld"): a Minecraft-lite survival slice tying many
+# engine features together — seeded rolling terrain with caves + ore, trees, valley
+# water plus a live fluid spring, textured blocks, a wander/chase/attack zombie, and
+# a kinematic player with a HUD and ambient nature audio. Pass a world SEED as the
+# first argument to choose the world; the SAME seed always regenerates the SAME world
+# (terrain, caves, trees, mob spawns), and omitting it uses a deterministic default.
+# The active seed is shown on the HUD. (Synthesises its texture/sound assets on first
+# run; resolves them from the repo root when launched elsewhere, like 12-soundscape.)
+# Single-config:   ./build/20-mega-demo           # deterministic default seed
+#                  ./build/20-mega-demo 12345     # choose a world seed
+# Multi-config:    ./build/Debug/20-mega-demo.exe 12345
+
 # Run the test suite
 ctest --test-dir build
 ```
@@ -588,6 +600,19 @@ last touched, so you can pick up a controller mid-session. Mine the strata to ba
 materials in the hotbar (harder layers take longer), place them back from the
 selected slot, and watch the top-down minimap fill in the hole you dig; hard
 landings drain the health bar, which regenerates while you stand on the ground.
+
+Controls for `20-mega-demo`: **keyboard/mouse** — **WASD** move, **mouse** look,
+**Space** jump, **LMB** mine (banks the material), **RMB** place from the selected
+slot, **1**–**8** select a material, **F** toggles the mouse cursor, **ESC** quits.
+**Gamepad** — **left stick** move, **right stick** look, **A** jump, **RT** mine,
+**LT** place, **bumpers** cycle slots (the active device auto-switches to whichever
+you last touched). **Choosing a world:** pass a seed as the first launch argument —
+`20-mega-demo 12345` (multi-config: `./build/Debug/20-mega-demo.exe 12345`) — and omit
+it for a deterministic default; the same seed regenerates the same terrain, caves,
+trees, and mob spawns. The HUD status line reads the active **seed**, the selected
+material, your coordinates, the live mob count (and how many are hostile), and the
+input device. Zombies wander until they sense you, then chase and bite (draining the
+health bar); mine into the spring/valley water to watch it flow, and chop trees for wood.
 
 ---
 
@@ -1297,8 +1322,8 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] Any other user-friendliness work needed? Insert tasks in this milestone, or follow-on milestones before release, if appropriate. — *shipped: closed the 1.0 onboarding/legal gaps. (1) **Setup prerequisites + dependencies** — the Setup section now lists the toolchain a developer installs (C++20 compiler, CMake ≥ 3.16, Git), per-OS system packages (X11/ALSA on Linux, Xcode CLT on macOS, MSVC on Windows), the libraries CMake fetches automatically (bgfx, GLM, yaml-cpp, GLFW, ENet, miniaudio, GoogleTest — pinned versions), what to expect from a first configure (slow, network-required, no shader toolchain needed), and a Troubleshooting list. (2) **`LICENSE`** file added (MIT) — the README's "See LICENSE" reference was previously dangling. (3) **Tutorials + templates surfaced** — a new "Getting Started" section and Project-Structure entries link `docs/tutorials/` (14 walkthroughs) and `templates/`, which were previously discoverable only from the milestone list. (4) **`THIRD-PARTY-LICENSES.md`** added — attribution for every fetched dependency, flagging which propagate to a shipped binary. (5) **`CONTRIBUTING.md`** added — build/test, the read-ARCHITECTURE-first rule, codebase layout, coding standards, and PR flow.*
 
 *Demo*
-- [ ] **Demo — Mega Demo:** A large demo that demonstrates as many major features of the engine as possible. The concept doesn't necessarily need to be fresh, but it would be nice.  However, if a mini-Minecraft clone is the best way to do it, then that's what we should do.
-  - [ ] **Custom world seed at launch:** let the user pass a world seed on the command line (with a deterministic default when omitted) so they can see how the seed drives world generation — and that the *same* seed regenerates the *same* world (the §4 determinism guarantee). The engine already threads a `worldSeed` through `DecompositionManager` and the recipe/generator stack; this just surfaces it as a launch knob. Good teaching home for "what a seed is and why it matters." Consider also a HUD readout of the active seed.
+- [x] **Demo — Mega Demo:** A large demo that demonstrates as many major features of the engine as possible. The concept doesn't necessarily need to be fresh, but it would be nice.  However, if a mini-Minecraft clone is the best way to do it, then that's what we should do. — *shipped: [`demos/20-mega-demo`](demos/20-mega-demo/main.cpp), an "Overworld" survival slice. One playable world wires together rolling seeded terrain with caves + ore (the new [`overworld`](plugins/overworld/) plugin), trees placed by a separate [`trees`](plugins/trees/) plugin (cross-plugin feature composition), valley water (the existing `water` plugin) plus a live M14 fluid spring (FluidSystem + `flow`), per-face textured blocks the demo synthesises at startup (M15), a wander/chase/attack zombie MOB (the new [`mob`](plugins/mob/) plugin on the `register_on_tick` + `move_aabb` seams), a kinematic-body player with mine/place/fall-damage and a cell-grid HUD driven by the M17 input plugins, positional + ambient nature audio (M12), and distance fog (M16). Build metrics for this demo (an "AI-friendliness" case study) are in [`docs/m18-mega-demo-metrics.md`](docs/m18-mega-demo-metrics.md). Note: M13 structural collapse is intentionally not included — it fires only for composite macro voxels and this demo uses a single rolling-terrain terminal layer; that headline is owned by [`demos/13-structural-collapse`](demos/13-structural-collapse/main.cpp) and [`demos/19-multilevel-collapse`](demos/19-multilevel-collapse/main.cpp).*
+  - [x] **Custom world seed at launch:** let the user pass a world seed on the command line (with a deterministic default when omitted) so they can see how the seed drives world generation — and that the *same* seed regenerates the *same* world (the §4 determinism guarantee). — *shipped: `20-mega-demo [seed]` takes the seed as `argv[1]` (deterministic default when omitted), threads it through the terrain generator's `user_data` and the feature pass's `seed` argument, and shows it live on the HUD status line. Same seed ⇒ same terrain, caves, trees, and mob spawns.*
 
 **M19 — Release**
 - [ ] Verify docs are all correct

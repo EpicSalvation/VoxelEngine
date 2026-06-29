@@ -92,3 +92,7 @@ voxelsave/
 
 # ─── Demo runtime-generated assets (12-soundscape synthesises this) ──
 ambient_bed.wav
+
+# ─── Mega-demo (20) runtime-synthesised tiles + sounds ───────────────
+assets/textures/overworld/
+assets/audio/nature/

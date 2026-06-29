@@ -362,6 +362,14 @@ foreach(_demo ${_voxel_demo_dirs})
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_WATER_PLUGIN_PATH="$<TARGET_FILE:water>")
     endif()
+    if(TARGET overworld)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_OVERWORLD_PLUGIN_PATH="$<TARGET_FILE:overworld>")
+    endif()
+    if(TARGET trees)
+      target_compile_definitions(${_demo} PRIVATE
+        VOXEL_TREES_PLUGIN_PATH="$<TARGET_FILE:trees>")
+    endif()
     if(TARGET layered-world)
       target_compile_definitions(${_demo} PRIVATE
         VOXEL_LAYERED_PLUGIN_PATH="$<TARGET_FILE:layered-world>")
@@ -476,6 +484,27 @@ foreach(_demo ${_voxel_demo_dirs})
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad)
     endif()
+    # The M18 mega-demo compiles in the same three reference plugins demo 18 uses
+    # PLUS the new mob plugin, so every shared api() singleton (kinbody/kbinput/
+    # gpinput/mob) resolves in this one binary's address space. The *_COMPILED_IN
+    # guards drop each plugin's generic voxel_plugin_init wrapper; the target-wide
+    # VOXEL_PLUGIN_NO_ABI_STAMP drops their ABI stamps so no symbol multiply-defines.
+    # (overworld/trees/water still load from disk via their *_PLUGIN_PATH defines.)
+    if(_demo STREQUAL "20-mega-demo")
+      target_sources(${_demo} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body/plugin.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse/plugin.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad/plugin.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/mob/plugin.cpp)
+      target_compile_definitions(${_demo} PRIVATE
+        KINBODY_COMPILED_IN KBINPUT_COMPILED_IN GPINPUT_COMPILED_IN MOB_COMPILED_IN
+        VOXEL_PLUGIN_NO_ABI_STAMP)
+      target_include_directories(${_demo} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/kinematic-body
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/keyboard-mouse
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/mob)
+    endif()
     # Inject the assets directory path for demos that bundle asset files.
     set(_demo_assets ${_demo_dir}/assets)
     if(EXISTS ${_demo_assets})
@@ -545,9 +574,13 @@ if(TEST_SOURCES)
   # their mist::api() / rangefog::api() inline statics resolve in one address space.
   set(_mist_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/atmospheric-mist/plugin.cpp)
   set(_ra_plugin_src   ${CMAKE_CURRENT_SOURCE_DIR}/plugins/range-attenuation/plugin.cpp)
+  # MegaDemoDeterminismTest.cpp wires in the M18 overworld + trees worldgen plugins
+  # to verify the seed → world determinism guarantee on the real generators.
+  set(_ow_plugin_src    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/overworld/plugin.cpp)
+  set(_tr_plugin_src    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/trees/plugin.cpp)
   add_executable(voxel-engine-tests ${TEST_SOURCES}
     ${_kb_plugin_src} ${_km_plugin_src} ${_gp_plugin_src} ${_eh_plugin_src}
-    ${_mist_plugin_src} ${_ra_plugin_src})
+    ${_mist_plugin_src} ${_ra_plugin_src} ${_ow_plugin_src} ${_tr_plugin_src})
   # The compiled-in plugins are wired in (wireInPlugin) and never ABI-checked, so
   # drop their stamps target-wide — several stamps of the one exported symbol would
   # collide at link. The disk-loaded fixture plugins (test-plugin-*) are separate
@@ -568,6 +601,13 @@ if(TEST_SOURCES)
     COMPILE_DEFINITIONS MIST_COMPILED_IN)
   set_source_files_properties(${_ra_plugin_src} PROPERTIES
     COMPILE_DEFINITIONS RANGEFOG_COMPILED_IN)
+  # overworld/trees are ALSO built as disk MODULE plugins that the mega-demo loads
+  # at runtime; scope their COMPILED_IN guard to THIS target (not the shared source
+  # file) so it does not leak onto the MODULE and suppress its voxel_plugin_init
+  # export. Each plugin source only checks its own macro, so a target-wide define is
+  # safe here.
+  target_compile_definitions(voxel-engine-tests PRIVATE
+    OVERWORLD_COMPILED_IN TREES_COMPILED_IN)
   target_link_libraries(voxel-engine-tests PRIVATE voxel-engine gtest gtest_main)
   target_include_directories(voxel-engine-tests PRIVATE src)
   # AsteroidFieldTest.cpp checks the body lattice the asteroid-field plugin and
