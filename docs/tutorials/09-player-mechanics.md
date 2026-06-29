@@ -156,7 +156,7 @@ query API.
 ### Keyboard and mouse
 
 ```cpp
-#include "keyboard-mouse/plugin.h"  // or via plugin_api.h
+#include "keyboard-mouse/keyboard_mouse.h"
 
 kbinput::api().set_source(&kbSrc);
 

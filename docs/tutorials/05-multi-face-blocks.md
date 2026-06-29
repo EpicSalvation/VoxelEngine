@@ -53,6 +53,7 @@ struct BoundaryDesc {
     DistributionDesc distribution;  // material distribution for this face
     int              depth   = 1;   // child-voxel layers inward from face
     bool             present = false; // false = face uses interior distribution
+    BoundaryMode     mode    = BoundaryMode::MacroFace;  // MacroFace or Surface
 };
 ```
 
@@ -61,6 +62,7 @@ struct BoundaryDesc {
 | `present` | When `false` (default), this face group uses the interior distribution -- no override. Set to `true` to activate the override. |
 | `depth` | How many child-voxel layers inward from the face are replaced by this override's distribution. `1` = a one-voxel-thick skin; `2` = a two-voxel topsoil. |
 | `distribution` | A `DistributionDesc` specifying which materials fill this face band, with optional noise. |
+| `mode` | `MacroFace` (default) measures depth from the macro voxel's geometric face. `Surface` measures depth from the topmost solid cell of each carved column (M18.5), so a grass cap tracks a sloped carved surface rather than floating above or burying below it. |
 
 The distribution itself:
 

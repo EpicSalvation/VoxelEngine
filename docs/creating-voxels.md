@@ -31,38 +31,30 @@ struct Voxel {
 };
 ```
 
-**A voxel renders as one solid color, brightness-shaded per face.** The mesh
-builder ([`src/renderer/ChunkMeshData.cpp`](../src/renderer/ChunkMeshData.cpp))
-looks up `palette::color(palette_index)` for the voxel and emits its visible
-faces. Each of the six face directions has a fixed brightness multiplier, so a
-single voxel already reads as a 3D cube (top brightest, bottom darkest):
+**A voxel renders with per-face brightness shading, optional textures, ambient
+occlusion, and voxel lighting.** The mesh builder
+([`src/renderer/ChunkMeshData.cpp`](../src/renderer/ChunkMeshData.cpp)) looks up
+`palette::color(palette_index)` for the voxel and emits its visible faces. Each
+face direction has a brightness multiplier (gravity-relative via the axis-role
+system), and the shader samples a per-face texture tile from the runtime atlas,
+modulated by the vertex color:
 
 ```cpp
-constexpr Face kFaces[6] = {
-    {  0,  0,  1, /*+Z front */ 0.8f },
-    {  0,  0, -1, /*-Z back  */ 0.8f },
-    {  0, -1,  0, /*-Y bottom*/ 0.5f },
-    {  0,  1,  0, /*+Y top   */ 1.0f },
-    { -1,  0,  0, /*-X left  */ 0.6f },
-    {  1,  0,  0, /*+X right */ 0.6f },
+struct MeshVertex {
+    float    x, y, z;
+    uint32_t abgr;
+    float    u, v;           // tile-local atlas UV (repeat space)
+    float    r0, r1, r2, r3; // atlas sub-rect of the bound tile
 };
 ```
 
-The vertex format carries only **position + packed ABGR color** — no UVs, no
-texture sampler:
-
-```cpp
-struct MeshVertex { float x, y, z; uint32_t abgr; };
-```
-
-**What this means for you:** a single terminal voxel cannot, today, show a
-*different texture on each face* (green grass on top, brown dirt on the sides of
-the same cube). The engine has no texture atlas and the shader does no UV
-sampling — see [§5](#5-going-further-true-per-face-textures). But you have two
-powerful tools that get you most of the "interesting voxel" experience:
+You have three tools for making visually interesting voxels:
 
 1. **Custom materials with custom palette colors** ([§3](#3-recipe-a-new-colored-material)).
-2. **Composite blocks with boundary-override recipes** — the engine-native way
+2. **Per-face textures** — bind atlas tiles per face via `set_material_faces`
+   (see [§5](#5-per-face-textures-via-set_material_faces)). Import `.bbmodel`
+   assets from Blockbench for authored textured blocks.
+3. **Composite blocks with boundary-override recipes** — the engine-native way
    to build a grass-top/dirt-side block ([§4](#4-recipe-a-minecraft-style-grass-block)).
 
 Everything you register lives in a **plugin**: a shared library exporting
@@ -351,38 +343,44 @@ The same recipe machinery scales up to genuinely interesting blocks:
 
 ---
 
-## 5. Going further: true per-face textures
+## 5. Per-face textures via `set_material_faces`
 
-If you specifically want **image textures** (a grass-blade texture sampled
-across a face, not a flat color), the engine does not support that today, and it
-is a deliberate, documented gap rather than an accident. A single terminal voxel
-is one solid shaded color. To add real per-face textures you would need to
-extend the engine itself (not just a plugin):
+The engine supports **per-face image textures** through a material-keyed
+texture atlas. A plugin registers texture images, then binds atlas tiles to
+faces per material — no engine changes needed:
 
-1. **Vertex format** — add UV (and likely a face/material id) to `MeshVertex`
-   in [`ChunkMeshData.h`](../src/renderer/ChunkMeshData.h) and emit them in the
-   face loop of `ChunkMeshData.cpp`.
-2. **A texture atlas** — load an atlas image and register it with bgfx (there is
-   currently no image asset pipeline; `assets/` holds only audio).
-3. **Shaders** — extend `shaders/vs_voxel.sc` / `fs_voxel.sc` to pass UVs through
-   and sample the atlas, then rebuild the committed bytecode in
-   `shaders/generated/`.
-4. **Per-face material selection** — decide where face textures come from. The
-   palette is per-voxel, so you'd add a mapping from `palette_index` (or a new
-   material field) to atlas tiles per face direction (`kFaces` already labels the
-   six directions).
+```cpp
+// 1. Register texture images (loaded from disk or in-memory RGBA data)
+register_texture(ctx, "grass_top",  "assets/textures/grass_top.png");
+register_texture(ctx, "dirt",       "assets/textures/dirt.png");
 
-The architecture already anticipates this — `MaterialProperties::palette_index`
-is documented as mapping to "color, texture, PBR params" — so the data model has
-room. It's the vertex format and shader that need the work. If you go this
-route, read `docs/architecture.md` §9 (shaders/chunk format) first, and treat it
-as an engine change with its own design discussion.
+// 2. Bind tiles per face for a material's palette index
+set_material_faces(ctx, grass_palette_index,
+    "grass_top",  // top face
+    "dirt",       // bottom face
+    "dirt",       // side faces
+    1.0f);        // tiling factor (tiles per world unit)
+```
 
-For most "interesting voxel" goals, though — colored materials, translucency,
-and grass-block-style multi-face blocks — the material + recipe path in
-[§3](#3-recipe-a-new-colored-material) and
-[§4](#4-recipe-a-minecraft-style-grass-block) is the intended, fully supported
-way, and requires no engine changes at all.
+The tiling factor is **scale-agnostic**: `1.0` on a 1 m face produces one tile
+copy; on an 8 m composite face it produces eight. The shader wraps UVs within
+each tile's atlas sub-rect, so textures repeat correctly at any scale.
+
+**Blockbench import** — for authored textured blocks, the `blockbench` plugin
+imports `.bbmodel` files with embedded per-face textures:
+
+```cpp
+// In your demo / game (after loading the blockbench plugin):
+engine.importVox("path/to/model.bbmodel", "editor", anchor);
+```
+
+The importer decodes each embedded texture, registers it in the atlas, and
+binds per-face tiles automatically. See `demos/15-textured-blocks/` for a
+working example.
+
+Materials with **no texture binding** render with the existing flat palette
+color — the 1×1 white default tile leaves color output unchanged, so the
+textured path is fully backward-compatible.
 
 ---
 

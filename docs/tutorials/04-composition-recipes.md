@@ -69,12 +69,13 @@ to coarse macro voxels, keeping the resident mesh count bounded.
 ## 3. Writing a RecipeDesc
 
 A `RecipeDesc` is a flat POD struct that describes how a composite macro voxel
-fills its child grid when it decomposes. It has four parts:
+fills its child grid when it decomposes. It has five parts:
 
 1. **Interior distribution** -- the bulk material fill
 2. **Boundary overrides** -- face-specific material shells (top, bottom, side)
 3. **Feature overlays** -- structures stamped into the grid after filling
 4. **Seed parameters** -- values cascaded to the child layer's generation
+5. **Occupancy carving** (optional) -- a height/signed-distance field that carves the solid fill, allowing the recipe to follow a surface instead of filling a solid cube (see [Tutorial 07](07-multi-layer-worlds.md) for multi-layer surface worlds)
 
 ### Interior: DistributionDesc
 

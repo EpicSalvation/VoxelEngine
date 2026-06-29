@@ -289,7 +289,7 @@ Probe the support model and swap the response.
 - Demos: `demos/13-structural-collapse/main.cpp` and
   `demos/19-multilevel-collapse/main.cpp`.
 - Support reach is governed by `kSupportSpanPerStrength` / `kMaxSupportSpan`
-  (section 10, `include/core/Tuning.h`).
+  (section 10, `src/core/Tuning.h`).
 - Swap responses between `plugins/crumble` and `plugins/falling-debris`
   (section 6); filter by `voxel_size_m` (section 7).
 
@@ -344,7 +344,7 @@ levels absorb small edits.
 | falling-debris plugin | `plugins/falling-debris/plugin.cpp` |
 | Structural-collapse demo | `demos/13-structural-collapse/main.cpp` |
 | Multi-level collapse demo | `demos/19-multilevel-collapse/main.cpp` |
-| Tuning constants (support span, max span) | `include/core/Tuning.h` |
+| Tuning constants (support span, max span) | `src/core/Tuning.h` |
 | EngineConfig (physics budgets) | [`include/core/EngineConfig.h`](../../include/core/EngineConfig.h) |
 | Architecture: structural propagation | [`docs/architecture.md`](../architecture.md) |
 | Materials tutorial | [Tutorial 03](03-materials-and-properties.md) |
