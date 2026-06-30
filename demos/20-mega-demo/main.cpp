@@ -105,6 +105,11 @@ constexpr uint64_t kDefaultSeed  = 0xA11CE5EEDull;
 constexpr double kBlocksVoxelSizeM = 4.0;  // macro voxel edge length
 constexpr double kTerrainVoxelSizeM = 1.0;
 constexpr int    kRatio = 4;  // terrain voxels per blocks macro edge (4 m / 1 m)
+// Coarse immutable anchor. A single 16 m voxel layer at the world floor is the
+// cheapest way to give the PropagationSystem a real immutable boundary: a few
+// large voxels blanket the whole streamed area, versus a dense fine grid. 16 m
+// keeps the ratio over the 4 m blocks layer a whole integer (4:1).
+constexpr double kBedrockVoxelSizeM = 16.0;
 
 // ───────────────────────── Asset synthesis ──────────────────────────────────
 
@@ -325,16 +330,27 @@ int main(int argc, char** argv) {
     ensureTextures("assets/textures/overworld");
     ensureSounds("assets/audio/nature");
 
-    // ── Layer config: composite "blocks" → terminal "terrain" + immutable "bedrock"
-    // The "blocks" composite layer (4 m macros, ratio 4:1 over 1 m terrain) gives
-    // the engine's PropagationSystem a structural level to aggregate and flood.
-    // The immutable "bedrock" layer (1 m, same scale as terrain) anchors the
-    // cascade — its voxels are indestructible support. The terrain layer is marked
-    // interactive so the single-layer World API (getVoxel/setVoxel) targets it.
+    // ── Layer config: immutable "bedrock" → composite "blocks" → terminal "terrain"
+    // The layer stack is coarsest-first (LayerConfig requires strictly descending
+    // voxel sizes with whole-integer ratios ≥ 2). The "bedrock" immutable layer
+    // (16 m macros) is the coarse root: a single voxel layer at the world floor
+    // that the PropagationSystem treats as an infinite-effective anchor, so a
+    // cave-in cascade stops dead at the floor. Coarse on purpose — a handful of
+    // 16 m voxels blanket the streamed area for almost no memory, versus a dense
+    // fine grid (a fine immutable floor would allocate a near-empty chunk per
+    // terrain chunk). The "blocks" composite layer (4 m macros, ratio 4:1 over
+    // 1 m terrain) gives the PropagationSystem a structural level to aggregate and
+    // flood. The terrain layer is marked interactive so the single-layer World API
+    // (getVoxel/setVoxel) targets it.
     LayerConfig layerConfig = [] {
         try {
             return LayerConfig::loadFromString(R"(
 layers:
+  - name: bedrock
+    voxel_size_m: 16.0
+    mode: immutable
+    chunk_size_voxels: 8
+    view_distance_chunks: 3
   - name: blocks
     voxel_size_m: 4.0
     mode: composite
@@ -347,11 +363,6 @@ layers:
     chunk_size_voxels: 48
     view_distance_chunks: 3
     interactive: true
-  - name: bedrock
-    voxel_size_m: 1.0
-    mode: immutable
-    chunk_size_voxels: 48
-    view_distance_chunks: 3
 )");
         } catch (const std::exception& e) {
             Log::error(kLogCat, (std::string("Fatal: layer config error: ") + e.what()).c_str());
@@ -464,17 +475,20 @@ layers:
                      chunk.data(), nullptr, 0, worldSeed, f.user_data);
     };
 
-    // Bedrock generator: fill a chunk with indestructible bedrock for y in [0,1).
+    // Bedrock generator: fill the single bottom voxel layer (the slab whose world
+    // Y spans [0, 16 m)) with indestructible bedrock; everything above is empty.
+    // One 16 m voxel layer is enough — the PropagationSystem only needs a
+    // non-empty immutable voxel under a structure to anchor it.
     auto bedrockGenerator = [](WorldCoord origin, int n, Voxel* out, void*) {
         MaterialProperties bed;
         bed.density = 4000.0f; bed.structural_strength = 1.0f;
         bed.hardness = -1.0f; bed.palette_index = 14;
-        const int64_t baseY = static_cast<int64_t>(std::llround(origin.value.y));
         for (int z = 0; z < n; ++z)
             for (int y = 0; y < n; ++y)
                 for (int x = 0; x < n; ++x) {
+                    const double wy = origin.value.y + (y + 0.5) * kBedrockVoxelSizeM;
                     Voxel& v = out[x + n * (y + n * z)];
-                    v = (baseY + y >= 0 && baseY + y < 1) ? Voxel{bed} : Voxel::empty();
+                    v = (wy >= 0.0 && wy < kBedrockVoxelSizeM) ? Voxel{bed} : Voxel::empty();
                 }
     };
 
@@ -483,8 +497,8 @@ layers:
     // Ensure the blocks-layer and bedrock-layer chunks overlapping a terrain chunk
     // are loaded. The blocks chunks are loaded EMPTY (no block voxels — every macro
     // is "decomposed", so the PropagationSystem aggregates the terrain children
-    // directly). The bedrock chunks are filled with bedrock at y=0 so they serve as
-    // structural anchors (the cascade stops at immutable voxels).
+    // directly). The bedrock chunks carry one 16 m slab at the world floor so they
+    // serve as structural anchors (the cascade stops at immutable voxels).
     std::unordered_set<ChunkCoord, ChunkCoordHash> loadedBlocksChunks;
     std::unordered_set<ChunkCoord, ChunkCoordHash> loadedBedrockChunks;
     auto ensureCompositeChunks = [&](const ChunkCoord& terrainCC) {
@@ -519,9 +533,23 @@ layers:
                         blocksLayer->loadChunk(bcc, nullptr);
                 }
 
-        // Bedrock chunks at the same coords as terrain.
-        if (loadedBedrockChunks.insert(terrainCC).second)
-            bedrockLayer->loadChunk(terrainCC, bedrockGenerator, nullptr);
+        // Bedrock chunk(s) overlapping this terrain chunk's XZ footprint at the
+        // floor. Bedrock is coarse (16 m) on its own chunk grid, so one bedrock
+        // chunk usually blankets many terrain chunks; the floor slab lives in the
+        // y=0 bedrock chunk (worldY [0, 16) ⊂ chunk [0, rcs·rvs)).
+        const double rvs = bedrockLayer->voxelSizeM();
+        const int    rcs = bedrockLayer->chunkSizeVoxels();
+        const double rChunkSpan = rcs * rvs;
+        const int rx0 = static_cast<int>(std::floor(tx0 / rChunkSpan));
+        const int rz0 = static_cast<int>(std::floor(tz0 / rChunkSpan));
+        const int rx1 = static_cast<int>(std::floor((tx1 - 0.001) / rChunkSpan));
+        const int rz1 = static_cast<int>(std::floor((tz1 - 0.001) / rChunkSpan));
+        for (int rz = rz0; rz <= rz1; ++rz)
+            for (int rx = rx0; rx <= rx1; ++rx) {
+                ChunkCoord rcc{rx, 0, rz};
+                if (loadedBedrockChunks.insert(rcc).second)
+                    bedrockLayer->loadChunk(rcc, bedrockGenerator, nullptr);
+            }
     };
 
     auto loadChunk = [&](const ChunkCoord& c) -> bool {
