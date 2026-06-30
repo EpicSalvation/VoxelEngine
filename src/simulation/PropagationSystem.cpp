@@ -272,17 +272,28 @@ std::vector<PropagationSystem::Unstable> PropagationSystem::findUnstable(
     if (cand.empty()) return result;
 
     // ── Region discovery: the connected solid macros reachable from the
-    //    candidates, expanded in sorted-coord order and capped at
-    //    kMaxSupportFloodNodes so the truncated set (if ever hit) is reproducible.
+    //    candidates, expanded breadth-first (in graph-distance order) and capped at
+    //    kMaxSupportFloodNodes. Nearest-first matters when the cap is hit: the
+    //    region is then the kMaxNodes macros NEAREST the candidates, so an anchor a
+    //    few macros away (e.g. the bedrock / non-resident floor below a surface
+    //    edit) always lands inside it. A coord-order flood would instead race off
+    //    toward the min-coordinate corner and could cap out before ever reaching a
+    //    nearby anchor, spuriously collapsing a supported structure. Each ring is
+    //    drained in sorted-coord order so the truncated set stays reproducible, and
+    //    when the whole connected region fits under the cap the discovered set is
+    //    identical to the old order — only the truncation behaviour changes.
     const int kMaxNodes = engineConfig().physicsMaxSupportFloodNodes;
     std::set<VoxelCoord, VoxelCoordLess> region;
-    std::set<VoxelCoord, VoxelCoordLess> open(cand.begin(), cand.end());
-    while (!open.empty() && static_cast<int>(region.size()) < kMaxNodes) {
-        const VoxelCoord m = *open.begin();
-        open.erase(open.begin());
-        if (!region.insert(m).second) continue;
-        for (const VoxelCoord& n : neighbors6(m))
-            if (!region.count(n) && macroSolid(level, n, memo)) open.insert(n);
+    std::set<VoxelCoord, VoxelCoordLess> frontier(cand.begin(), cand.end());
+    while (!frontier.empty() && static_cast<int>(region.size()) < kMaxNodes) {
+        std::set<VoxelCoord, VoxelCoordLess> next;
+        for (const VoxelCoord& m : frontier) {  // this ring, sorted-coord order
+            if (static_cast<int>(region.size()) >= kMaxNodes) break;
+            if (!region.insert(m).second) continue;
+            for (const VoxelCoord& n : neighbors6(m))
+                if (!region.count(n) && macroSolid(level, n, memo)) next.insert(n);
+        }
+        frontier.swap(next);
     }
 
     // ── Multi-source Dijkstra over the region. Sources are anchor-adjacent solid

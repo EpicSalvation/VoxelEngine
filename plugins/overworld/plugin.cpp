@@ -140,10 +140,16 @@ float overworld_height_noise(WorldCoord pos, uint64_t /*seed*/,
 // dirt voxels of subsoil, and a grass (or sand, near sea level) cap. Air above.
 void terrain_generator(WorldCoord chunk_origin, int grid_size, Voxel* out, void* user_data) {
     const uint64_t seed = seedFrom(user_data);
-    const MaterialProperties grass   = material(kGrassIdx,   1500.0f, 0.35f, 0.30f);
-    const MaterialProperties dirt    = material(kDirtIdx,    1300.0f, 0.30f, 0.25f);
+    // structural_strength here is a GAMEPLAY knob for the M13 support model, not a
+    // realism value: the surface soil must be strong enough that a flat hillside is
+    // self-supporting from the bedrock anchor a few macros below (otherwise the weak
+    // cap is sub-threshold and any edit avalanches the whole surface). Deliberate
+    // wide overhangs still exceed the support span and cave in. Keep these in sync
+    // with the register_material strengths below (placed blocks use those).
+    const MaterialProperties grass   = material(kGrassIdx,   1500.0f, 0.70f, 0.30f);
+    const MaterialProperties dirt    = material(kDirtIdx,    1300.0f, 0.65f, 0.25f);
     const MaterialProperties stone   = material(kStoneIdx,   2700.0f, 0.85f, 0.70f);
-    const MaterialProperties sand    = material(kSandIdx,    1600.0f, 0.15f, 0.20f, 0.30f);
+    const MaterialProperties sand    = material(kSandIdx,    1600.0f, 0.55f, 0.20f, 0.30f);
     const MaterialProperties bedrock = material(kBedrockIdx, 4000.0f, 1.00f, 1.00f);
 
     const int64_t baseX = static_cast<int64_t>(std::llround(chunk_origin.value.x));
@@ -237,10 +243,10 @@ uint64_t* g_seedPtr = nullptr;
 
 VOXEL_PLUGIN_EXPORT int overworld_plugin_init(PluginContext* ctx) {
     // Materials (M8).
-    ctx->register_material(ctx, "grass",    material(kGrassIdx,   1500.0f, 0.35f, 0.30f));
-    ctx->register_material(ctx, "dirt",     material(kDirtIdx,    1300.0f, 0.30f, 0.25f));
+    ctx->register_material(ctx, "grass",    material(kGrassIdx,   1500.0f, 0.70f, 0.30f));
+    ctx->register_material(ctx, "dirt",     material(kDirtIdx,    1300.0f, 0.65f, 0.25f));
     ctx->register_material(ctx, "stone",    material(kStoneIdx,   2700.0f, 0.85f, 0.70f));
-    ctx->register_material(ctx, "sand",     material(kSandIdx,    1600.0f, 0.15f, 0.20f, 0.30f));
+    ctx->register_material(ctx, "sand",     material(kSandIdx,    1600.0f, 0.55f, 0.20f, 0.30f));
     ctx->register_material(ctx, "log",      material(kLogIdx,      600.0f, 0.60f, 0.35f));
     ctx->register_material(ctx, "leaves",   material(kLeavesIdx,   200.0f, 0.05f, 0.10f, 0.40f));
     ctx->register_material(ctx, "iron-ore", material(kIronIdx,    5200.0f, 0.90f, 0.85f));
