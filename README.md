@@ -1,4 +1,8 @@
-# Voxel Game Engine
+<p align="center">
+  <img src=".github/LatticeLogo.png" alt="Lattice logo" width="200">
+</p>
+
+# Lattice
 
 ## Table of Contents
 
@@ -28,7 +32,7 @@
 
 ## Overview
 
-The Voxel Game Engine is a plugin-based C++ game engine designed for creating voxel-based games that go well beyond the conventional single-scale Minecraft model. Its defining architectural features are:
+Lattice is a plugin-based C++ game engine designed for creating voxel-based games that go well beyond the conventional single-scale Minecraft model. Its defining architectural features are:
 
 - **Hierarchical multi-layer scale system** — game makers define any number of voxel layers, each with its own base unit size, from centimeters to kilometers
 - **Three voxel modes** — Composite (lazily decomposes on demand), Immutable (collision/rendering only, no decomposition), and Terminal (player-buildable leaf layer)

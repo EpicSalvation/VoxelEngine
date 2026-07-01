@@ -20,7 +20,7 @@ networking model.
 
 ## 1. The host-as-authority P2P model
 
-VoxelEngine uses a host-as-authority peer-to-peer model. One instance acts
+Lattice uses a host-as-authority peer-to-peer model. One instance acts
 as both the authoritative server and a local client (the "host peer").
 Other instances connect as pure clients. There is no dedicated server
 binary -- the host is a regular game instance that also validates edits.
