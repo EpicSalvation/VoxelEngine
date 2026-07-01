@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in the voxel engine. This guide covers how to build,
+Thanks for your interest in Lattice. This guide covers how to build,
 test, and submit changes. It is deliberately short; the load-bearing document is
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 

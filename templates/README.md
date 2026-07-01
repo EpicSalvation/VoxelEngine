@@ -1,6 +1,6 @@
 # Template Series
 
-Well-commented boilerplate to jumpstart a new game on the voxel engine. Each
+Well-commented boilerplate to jumpstart a new game on Lattice. Each
 file is a complete, copy-paste starting point with the rationale inline — copy
 it into place, rename, and start editing. They are grounded in the real engine
 APIs (`include/plugin_api.h` and the engine headers) and mirror the patterns the

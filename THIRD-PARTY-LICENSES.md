@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-The voxel engine is licensed under the MIT License (see [`LICENSE`](LICENSE)).
+Lattice is licensed under the MIT License (see [`LICENSE`](LICENSE)).
 It builds on a number of third-party libraries that are **fetched at configure
 time** by CMake (`FetchContent` / a single-header download) rather than vendored
 in this repository. Each retains its own license, reproduced or linked below.

@@ -1,6 +1,6 @@
 # Architecture Guide
 
-This document explains the internal design of the Voxel Game Engine at the subsystem level. It covers *why* decisions were made, not just *what* they are. It is intended for contributors extending the engine and for AI coding agents working within the codebase.
+This document explains the internal design of Lattice at the subsystem level. It covers *why* decisions were made, not just *what* they are. It is intended for contributors extending the engine and for AI coding agents working within the codebase.
 
 If you are an AI agent: read this document before modifying any subsystem. The constraints listed here are not stylistic preferences — they are load-bearing. Violating them silently produces incorrect behavior that is difficult to diagnose.
 

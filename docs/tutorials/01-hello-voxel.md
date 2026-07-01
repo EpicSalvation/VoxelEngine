@@ -17,8 +17,8 @@ code that puts a single voxel on screen.
 ## 1. Clone and build
 
 ```bash
-git clone <repo-url> VoxelEngine
-cd VoxelEngine
+git clone <repo-url> Lattice
+cd Lattice
 cmake -B build
 cmake --build build
 ```
@@ -38,7 +38,7 @@ The build produces:
 ./build/01-single-voxel
 ```
 
-You should see a window titled *VoxelEngine* showing a single green cube
+You should see a window titled *Lattice* showing a single green cube
 orbiting in front of the camera. The cube is one voxel at the world origin
 rendered with per-face brightness shading (top brightest, bottom darkest).
 
@@ -98,7 +98,7 @@ lifecycle.
 ### Step 3: Create a window and renderer
 
 ```cpp
-platform::Window window(800, 600, "VoxelEngine — Hello Voxel");
+platform::Window window(800, 600, "Lattice — Hello Voxel");
 
 BgfxRenderer renderer;
 int fbW, fbH;
