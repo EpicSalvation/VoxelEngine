@@ -545,11 +545,11 @@ int main() {
 
         for (const auto& kv : bedrockMeshes) {
             const Chunk* ch = bedrock_l->getChunk(kv.first);
-            if (ch) renderer.renderChunk(kv.second, ch->origin(), bvs, bedrock_l->chunkSizeVoxels());
+            if (ch) renderer.renderChunk(kv.second, ch->origin(), bvs);
         }
         for (const auto& kv : gridMeshes) {
             const Chunk* ch = grid->getChunk(kv.first);
-            if (ch) renderer.renderChunk(kv.second, ch->origin(), gvs, grid->chunkSizeVoxels());
+            if (ch) renderer.renderChunk(kv.second, ch->origin(), gvs);
         }
         renderer.render();
     }

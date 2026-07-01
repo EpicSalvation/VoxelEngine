@@ -296,7 +296,7 @@ layers:
         for (const auto& [coord, mesh] : meshes) {
             WorldCoord origin = chunkmath::chunkOrigin(coord, editor->voxelSizeM(),
                                                        editor->chunkSizeVoxels());
-            renderer.renderChunk(mesh, origin, editor->voxelSizeM(), editor->chunkSizeVoxels());
+            renderer.renderChunk(mesh, origin, editor->voxelSizeM());
         }
 
         renderer.render();

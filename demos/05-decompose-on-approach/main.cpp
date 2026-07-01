@@ -376,8 +376,7 @@ layers:
             for (const auto& kv : ms) {
                 const Chunk* chunk = lyr->getChunk(kv.first);
                 if (!chunk || kv.second.empty()) continue;
-                renderer.renderChunk(kv.second, chunk->origin(),
-                                     lyr->voxelSizeM(), lyr->chunkSizeVoxels());
+                renderer.renderChunk(kv.second, chunk->origin(), lyr->voxelSizeM());
             }
         }
         renderer.render();

@@ -358,7 +358,7 @@ layers:
             WorldCoord origin =
                 chunkmath::chunkOrigin(coord, editorLayer->voxelSizeM(),
                                       editorLayer->chunkSizeVoxels());
-            renderer.renderChunk(mesh, origin, editorLayer->voxelSizeM(), editorLayer->chunkSizeVoxels());
+            renderer.renderChunk(mesh, origin, editorLayer->voxelSizeM());
         }
 
         if (rayHit.hit) {

@@ -1,11 +1,11 @@
 // overworld plugin — the worldgen heart of the M18 mega-demo.
 //
-// M18.5 revision: the demo now uses a hybrid composite heightmap. A coarse
-// "blocks" layer (4 m macro voxels, loaded EMPTY) sits above the terminal
-// "terrain" layer so PropagationSystem can aggregate children and fire M13
-// structural-collapse events. The terminal generator + feature overlays still
-// fill the actual voxel content (grass/dirt/stone strata, caves, ore); the
-// blocks layer exists purely for the physics/collapse pipeline.
+// The demo streams a single terminal "terrain" layer: this generator fills the
+// heightmap strata (grass/dirt/stone over a bedrock floor) and the feature
+// overlays carve caves and scatter ore. Materials still carry structural_strength
+// values, but M13 structural collapse is no longer wired into the mega-demo (the
+// support-flood is still experimental), so there is no composite "blocks" layer
+// here — the strengths are simply inert gameplay metadata in this demo.
 //
 // Determinism (§4): every height, cave, and ore lookup is a pure function of
 // world position and the run's world seed. No rand/time/global mutable state.
@@ -140,12 +140,12 @@ float overworld_height_noise(WorldCoord pos, uint64_t /*seed*/,
 // dirt voxels of subsoil, and a grass (or sand, near sea level) cap. Air above.
 void terrain_generator(WorldCoord chunk_origin, int grid_size, Voxel* out, void* user_data) {
     const uint64_t seed = seedFrom(user_data);
-    // structural_strength here is a GAMEPLAY knob for the M13 support model, not a
-    // realism value: the surface soil must be strong enough that a flat hillside is
-    // self-supporting from the bedrock anchor a few macros below (otherwise the weak
-    // cap is sub-threshold and any edit avalanches the whole surface). Deliberate
-    // wide overhangs still exceed the support span and cave in. Keep these in sync
-    // with the register_material strengths below (placed blocks use those).
+    // structural_strength values are carried for potential M13 support-model use,
+    // but the mega-demo no longer wires in structural collapse, so they are inert
+    // here. They stay tuned (surface soil strong enough to be self-supporting from
+    // a bedrock anchor) so the overworld plugin still behaves sensibly if a future
+    // demo re-enables the collapse pipeline. Keep these in sync with the
+    // register_material strengths below (placed blocks use those).
     const MaterialProperties grass   = material(kGrassIdx,   1500.0f, 0.70f, 0.30f);
     const MaterialProperties dirt    = material(kDirtIdx,    1300.0f, 0.65f, 0.25f);
     const MaterialProperties stone   = material(kStoneIdx,   2700.0f, 0.85f, 0.70f);

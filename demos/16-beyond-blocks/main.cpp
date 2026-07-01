@@ -161,8 +161,7 @@ void renderLayer(const StreamedLayer& s, BgfxRenderer& renderer) {
     for (const auto& kv : s.meshes) {
         const Chunk* chunk = layer.getChunk(kv.first);
         if (!chunk || kv.second.empty()) continue;
-        renderer.renderChunk(kv.second, chunk->origin(),
-                             layer.voxelSizeM(), layer.chunkSizeVoxels());
+        renderer.renderChunk(kv.second, chunk->origin(), layer.voxelSizeM());
     }
 }
 

@@ -304,7 +304,7 @@ void BgfxRenderer::render() {
     pendingChunks.erase(
         std::remove_if(pendingChunks.begin(), pendingChunks.end(),
                        [&frustum](const PendingChunk& pc) {
-                           const double chunkWorld = pc.voxelSizeM * pc.chunkSizeVoxels;
+                           const double chunkWorld = pc.voxelSizeM * pc.sizeVoxels;
                            const double radius = chunkWorld * 0.8660254; // √3/2
                            const glm::dvec3 center =
                                pc.origin.value + glm::dvec3(chunkWorld * 0.5);
@@ -502,9 +502,10 @@ void BgfxRenderer::renderWorld(const World& world) {
 }
 
 void BgfxRenderer::renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin,
-                               double voxelSizeM, int chunkSizeVoxels) {
+                               double voxelSizeM) {
     if (mesh.empty()) return;
-    pendingChunks.push_back({chunkOrigin, voxelSizeM, chunkSizeVoxels, mesh.vbh(), mesh.opaqueIbh(), mesh.translucentIbh()});
+    pendingChunks.push_back({chunkOrigin, voxelSizeM, mesh.sizeVoxels(),
+                             mesh.vbh(), mesh.opaqueIbh(), mesh.translucentIbh()});
 }
 
 void BgfxRenderer::drawVoxelHighlight(const WorldCoord& center, float size, uint32_t abgr,

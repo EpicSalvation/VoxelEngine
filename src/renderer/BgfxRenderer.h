@@ -68,8 +68,12 @@ public:
     // of the chunk's world-space origin. Reuses the voxel shader program. The mesh
     // is in chunk-local units (1 voxel == 1 unit); voxelSizeM scales it to the
     // layer's world scale, so composite/immutable layers render at their own size.
+    //
+    // The frustum-culling bounding sphere is derived from the mesh's own captured
+    // chunk extent (ChunkMesh::sizeVoxels) times voxelSizeM — the caller cannot
+    // supply a mismatched extent, so culling can never shrink below the geometry.
     void renderChunk(const ChunkMesh& mesh, const WorldCoord& chunkOrigin,
-                     double voxelSizeM = 1.0, int chunkSizeVoxels = 32);
+                     double voxelSizeM = 1.0);
 
     // Submit a wireframe box centered at a world-space position, drawn as lines
     // over the scene (depth-tested, no depth write) — used to outline the voxel
@@ -140,7 +144,7 @@ private:
     struct PendingChunk {
         WorldCoord               origin;
         double                   voxelSizeM;
-        int                      chunkSizeVoxels;
+        int                      sizeVoxels;  // chunk edge in voxels, from the mesh
         bgfx::VertexBufferHandle vbh;
         bgfx::IndexBufferHandle  opaqueIbh;
         bgfx::IndexBufferHandle  translucentIbh;

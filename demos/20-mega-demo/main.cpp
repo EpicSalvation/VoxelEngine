@@ -1,17 +1,19 @@
 // M18.5 demo — the Mega-Demo ("Overworld"): a Minecraft-lite survival slice
 // that exercises as much of the engine as one coherent world can.
 //
-// M18.5 revision: the world is now a COMPOSITE heightmap — a coarse "blocks"
-// layer (4 m macros) sits above the 1 m "terrain" terminal layer. The blocks
-// layer has no block voxels (every macro is "decomposed"); the engine's
-// PropagationSystem aggregates the terrain children's structural_strength into
-// each macro, and the support-potential flood detects unsupported spans.
-// Mining under an overhang triggers a real cave-in via the `crumble` response
-// plugin (the M13 headline the M18 demo previously disclaimed). An immutable
-// "bedrock" layer anchors the bottom so the cascade stops at the world floor.
+// The world is a single terminal heightmap "terrain" layer: rolling grass/dirt/
+// stone strata over a bedrock floor, carved by 3D cave and ore feature overlays.
+// Mine, place, fight mobs, and explore the caves.
 //
-// New in M18.5: the player can ATTACK mobs (Q or LMB-in-air), dealing 20
-// damage per hit. Dead mobs stop chasing. Fight back instead of just running.
+// NOTE: M13 structural collapse (mining-triggered cave-INS) is intentionally NOT
+// wired into this demo. The support-flood is still experimental — on a large
+// streamed surface it mis-fires on ordinary surface mining — so polishing it is a
+// post-1.0 goal. See demos/13-structural-collapse and demos/19-multilevel-collapse
+// for the collapse feature in isolation. This removal keeps the mega-demo's
+// performance and stability predictable while the feature matures.
+//
+// The player can ATTACK mobs (Q or LMB-in-air), dealing 20 damage per hit. Dead
+// mobs stop chasing. Fight back instead of just running.
 //
 // Controls: WASD/stick move, mouse/stick look, Space/A jump, LMB/RT mine,
 // RMB/LT place, Q/X attack mob, 1-8 select material, F toggles cursor, ESC quits.
@@ -37,7 +39,6 @@
 
 #include "net/NetworkManager.h"
 #include "simulation/FluidSystem.h"
-#include "simulation/PhysicsSystem.h"
 
 #include "kinematic_body.h"
 #include "keyboard_mouse.h"
@@ -76,9 +77,6 @@
 #ifndef VOXEL_FLOW_PLUGIN_PATH
 #  define VOXEL_FLOW_PLUGIN_PATH ""
 #endif
-#ifndef VOXEL_CRUMBLE_PLUGIN_PATH
-#  define VOXEL_CRUMBLE_PLUGIN_PATH ""
-#endif
 
 extern "C" int kinematic_body_plugin_init(PluginContext* ctx);
 extern "C" int keyboard_mouse_plugin_init(PluginContext* ctx);
@@ -100,16 +98,6 @@ constexpr float  kAttackDamage   = 20.0f;
 constexpr double kAttackCooldown = 0.4;
 const glm::dvec3 kPlayerHalf(0.3, 0.9, 0.3);
 constexpr uint64_t kDefaultSeed  = 0xA11CE5EEDull;
-
-// Composite layer geometry.
-constexpr double kBlocksVoxelSizeM = 4.0;  // macro voxel edge length
-constexpr double kTerrainVoxelSizeM = 1.0;
-constexpr int    kRatio = 4;  // terrain voxels per blocks macro edge (4 m / 1 m)
-// Coarse immutable anchor. A single 16 m voxel layer at the world floor is the
-// cheapest way to give the PropagationSystem a real immutable boundary: a few
-// large voxels blanket the whole streamed area, versus a dense fine grid. 16 m
-// keeps the ratio over the 4 m blocks layer a whole integer (4:1).
-constexpr double kBedrockVoxelSizeM = 16.0;
 
 // ───────────────────────── Asset synthesis ──────────────────────────────────
 
@@ -330,33 +318,16 @@ int main(int argc, char** argv) {
     ensureTextures("assets/textures/overworld");
     ensureSounds("assets/audio/nature");
 
-    // ── Layer config: immutable "bedrock" → composite "blocks" → terminal "terrain"
-    // The layer stack is coarsest-first (LayerConfig requires strictly descending
-    // voxel sizes with whole-integer ratios ≥ 2). The "bedrock" immutable layer
-    // (16 m macros) is the coarse root: a single voxel layer at the world floor
-    // that the PropagationSystem treats as an infinite-effective anchor, so a
-    // cave-in cascade stops dead at the floor. Coarse on purpose — a handful of
-    // 16 m voxels blanket the streamed area for almost no memory, versus a dense
-    // fine grid (a fine immutable floor would allocate a near-empty chunk per
-    // terrain chunk). The "blocks" composite layer (4 m macros, ratio 4:1 over
-    // 1 m terrain) gives the PropagationSystem a structural level to aggregate and
-    // flood. The terrain layer is marked interactive so the single-layer World API
-    // (getVoxel/setVoxel) targets it.
+    // ── Layer config: a single terminal "terrain" layer.
+    // The mega-demo is a rolling heightmap world with its own bedrock floor baked
+    // into the terrain generator (see plugins/overworld). M13 structural collapse
+    // is not wired in here (see the file header), so there is no composite "blocks"
+    // layer to aggregate/flood and no immutable "bedrock" anchor layer — just the
+    // one interactive terminal layer the World getVoxel/setVoxel API targets.
     LayerConfig layerConfig = [] {
         try {
             return LayerConfig::loadFromString(R"(
 layers:
-  - name: bedrock
-    voxel_size_m: 16.0
-    mode: immutable
-    chunk_size_voxels: 8
-    view_distance_chunks: 3
-  - name: blocks
-    voxel_size_m: 4.0
-    mode: composite
-    decompose_to: terrain
-    chunk_size_voxels: 12
-    view_distance_chunks: 3
   - name: terrain
     voxel_size_m: 1.0
     mode: terminal
@@ -404,12 +375,6 @@ layers:
     if (!materialAudio)
         Log::warn(kLogCat, "material-audio plugin not loaded — break/place/footstep cues silent.");
 
-    // M13 structural-response plugin.
-    const bool crumbleLoaded = !std::string(VOXEL_CRUMBLE_PLUGIN_PATH).empty() &&
-        pm.loadPlugin(VOXEL_CRUMBLE_PLUGIN_PATH) != kInvalidPluginId;
-    if (!crumbleLoaded)
-        Log::warn(kLogCat, "crumble plugin not loaded — mining will not trigger cave-ins.");
-
     pm.wireInPlugin(kinematic_body_plugin_init);
     pm.wireInPlugin(keyboard_mouse_plugin_init);
     pm.wireInPlugin(gamepad_plugin_init);
@@ -428,11 +393,9 @@ layers:
     if (!generator) { Log::error(kLogCat, "Fatal: no 'terrain' generator."); return 1; }
 
     World world(layerConfig);
-    Layer* blocksLayer  = world.layer("blocks");
     Layer* terrainLayer = world.layer("terrain");
-    Layer* bedrockLayer = world.layer("bedrock");
-    if (!blocksLayer || !terrainLayer || !bedrockLayer) {
-        Log::error(kLogCat, "Fatal: expected blocks/terrain/bedrock layers."); return 1;
+    if (!terrainLayer) {
+        Log::error(kLogCat, "Fatal: expected a terrain layer."); return 1;
     }
 
     engine.init(pm, world);
@@ -447,10 +410,9 @@ layers:
     if (!flowLoaded)
         Log::warn(kLogCat, "flow plugin not loaded — the fluid spring will not realize water.");
 
-    // ── M13 structural collapse ─────────────────────────────────────────────────
-    // Constructed after init so its on_voxel_modified hook catches every edit.
-    sim::PhysicsSystem physics(world, pm);
-
+    // Track chunks touched by any committed edit (player mine/place, fluid) so we
+    // can remesh exactly those at end of frame. Rides the engine on_voxel_modified
+    // hook so it observes every edit at the single choke point.
     struct EditTracker {
         std::unordered_set<ChunkCoord, ChunkCoordHash> touched;
         int    chunkSize;
@@ -475,89 +437,13 @@ layers:
                      chunk.data(), nullptr, 0, worldSeed, f.user_data);
     };
 
-    // Bedrock generator: fill the single bottom voxel layer (the slab whose world
-    // Y spans [0, 16 m)) with indestructible bedrock; everything above is empty.
-    // One 16 m voxel layer is enough — the PropagationSystem only needs a
-    // non-empty immutable voxel under a structure to anchor it.
-    auto bedrockGenerator = [](WorldCoord origin, int n, Voxel* out, void*) {
-        MaterialProperties bed;
-        bed.density = 4000.0f; bed.structural_strength = 1.0f;
-        bed.hardness = -1.0f; bed.palette_index = 14;
-        for (int z = 0; z < n; ++z)
-            for (int y = 0; y < n; ++y)
-                for (int x = 0; x < n; ++x) {
-                    const double wy = origin.value.y + (y + 0.5) * kBedrockVoxelSizeM;
-                    Voxel& v = out[x + n * (y + n * z)];
-                    v = (wy >= 0.0 && wy < kBedrockVoxelSizeM) ? Voxel{bed} : Voxel::empty();
-                }
-    };
-
     std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash> meshes;
-
-    // Ensure the blocks-layer and bedrock-layer chunks overlapping a terrain chunk
-    // are loaded. The blocks chunks are loaded EMPTY (no block voxels — every macro
-    // is "decomposed", so the PropagationSystem aggregates the terrain children
-    // directly). The bedrock chunks carry one 16 m slab at the world floor so they
-    // serve as structural anchors (the cascade stops at immutable voxels).
-    std::unordered_set<ChunkCoord, ChunkCoordHash> loadedBlocksChunks;
-    std::unordered_set<ChunkCoord, ChunkCoordHash> loadedBedrockChunks;
-    auto ensureCompositeChunks = [&](const ChunkCoord& terrainCC) {
-        // Compute which blocks-layer chunk(s) overlap this terrain chunk.
-        const double tvs = terrainLayer->voxelSizeM();
-        const int tcs = terrainLayer->chunkSizeVoxels();
-        const double bvs = blocksLayer->voxelSizeM();
-        const int bcs = blocksLayer->chunkSizeVoxels();
-
-        // Terrain chunk covers world X in [terrainCC.x * tcs * tvs, (terrainCC.x+1) * tcs * tvs).
-        // A blocks chunk covers [blocksCC.x * bcs * bvs, (blocksCC.x+1) * bcs * bvs).
-        const double tx0 = terrainCC.x * tcs * tvs;
-        const double ty0 = terrainCC.y * tcs * tvs;
-        const double tz0 = terrainCC.z * tcs * tvs;
-        const double tx1 = tx0 + tcs * tvs;
-        const double ty1 = ty0 + tcs * tvs;
-        const double tz1 = tz0 + tcs * tvs;
-        const double bChunkSpan = bcs * bvs;
-
-        const int bx0 = static_cast<int>(std::floor(tx0 / bChunkSpan));
-        const int by0 = static_cast<int>(std::floor(ty0 / bChunkSpan));
-        const int bz0 = static_cast<int>(std::floor(tz0 / bChunkSpan));
-        const int bx1 = static_cast<int>(std::floor((tx1 - 0.001) / bChunkSpan));
-        const int by1 = static_cast<int>(std::floor((ty1 - 0.001) / bChunkSpan));
-        const int bz1 = static_cast<int>(std::floor((tz1 - 0.001) / bChunkSpan));
-
-        for (int bz = bz0; bz <= bz1; ++bz)
-            for (int by = by0; by <= by1; ++by)
-                for (int bx = bx0; bx <= bx1; ++bx) {
-                    ChunkCoord bcc{bx, by, bz};
-                    if (loadedBlocksChunks.insert(bcc).second)
-                        blocksLayer->loadChunk(bcc, nullptr);
-                }
-
-        // Bedrock chunk(s) overlapping this terrain chunk's XZ footprint at the
-        // floor. Bedrock is coarse (16 m) on its own chunk grid, so one bedrock
-        // chunk usually blankets many terrain chunks; the floor slab lives in the
-        // y=0 bedrock chunk (worldY [0, 16) ⊂ chunk [0, rcs·rvs)).
-        const double rvs = bedrockLayer->voxelSizeM();
-        const int    rcs = bedrockLayer->chunkSizeVoxels();
-        const double rChunkSpan = rcs * rvs;
-        const int rx0 = static_cast<int>(std::floor(tx0 / rChunkSpan));
-        const int rz0 = static_cast<int>(std::floor(tz0 / rChunkSpan));
-        const int rx1 = static_cast<int>(std::floor((tx1 - 0.001) / rChunkSpan));
-        const int rz1 = static_cast<int>(std::floor((tz1 - 0.001) / rChunkSpan));
-        for (int rz = rz0; rz <= rz1; ++rz)
-            for (int rx = rx0; rx <= rx1; ++rx) {
-                ChunkCoord rcc{rx, 0, rz};
-                if (loadedBedrockChunks.insert(rcc).second)
-                    bedrockLayer->loadChunk(rcc, bedrockGenerator, nullptr);
-            }
-    };
 
     auto loadChunk = [&](const ChunkCoord& c) -> bool {
         if (meshes.count(c)) return false;
         Chunk* chunk = terrainLayer->loadChunk(c, generator, &worldSeed);
         if (!chunk) return false;
         applyFeatures(*chunk);
-        ensureCompositeChunks(c);
         meshes.emplace(c, ChunkMesh::build(*chunk, terrainLayer->voxelSizeM()));
         return true;
     };
@@ -676,8 +562,8 @@ layers:
     }
 
     // ── Edit helpers ────────────────────────────────────────────────────────────
-    // Route edits through NetworkManager so PhysicsSystem's on_voxel_modified
-    // hook observes them and fires structural events.
+    // Route edits through NetworkManager so the engine on_voxel_modified hook (the
+    // remesh tracker, and any listening plugins) observes them at the choke point.
     auto editVoxel = [&](const chunkmath::VoxelCoord& vc, const Voxel& newVox) {
         const WorldCoord center = chunkmath::voxelCenter(vc, terrainLayer->voxelSizeM());
         nm.applyEdit(kLocalPlayer, center, newVox);
@@ -888,10 +774,7 @@ layers:
         // ── M14 fluid pass ──────────────────────────────────────────────────────
         fluid.tick(dt);
 
-        // ── M13 structural pass ─────────────────────────────────────────────────
-        physics.tick();
-
-        // Remesh touched chunks (from player edits, crumble, fluid).
+        // Remesh touched chunks (from player edits, fluid).
         for (const ChunkCoord& cc : tracker.touched) {
             const Chunk* ch = terrainLayer->getChunk(cc);
             if (!ch) continue;
@@ -909,7 +792,7 @@ layers:
         renderer.setCameraRotation(pitch, yaw, 0.0f);
         for (const auto& kv : meshes) {
             const Chunk* ch = terrainLayer->getChunk(kv.first);
-            if (ch) renderer.renderChunk(kv.second, ch->origin());
+            if (ch) renderer.renderChunk(kv.second, ch->origin(), terrainLayer->voxelSizeM());
         }
 
         // Mobs.
@@ -947,13 +830,12 @@ layers:
         }
         char status[160];
         std::snprintf(status, sizeof(status),
-                      "Seed %llu | %s | XYZ %.0f %.0f %.0f | mobs %d/%u (%d hostile) kills %d | %s%s",
+                      "Seed %llu | %s | XYZ %.0f %.0f %.0f | mobs %d/%u (%d hostile) kills %d | %s",
                       static_cast<unsigned long long>(worldSeed),
                       slots[selectedSlot].id.c_str(),
                       camPos.value.x, camPos.value.y, camPos.value.z,
                       aliveCount, mobN, chasing, kills,
-                      activeDevice == 1 ? "gamepad" : "kbd/mouse",
-                      crumbleLoaded ? " | M13" : "");
+                      activeDevice == 1 ? "gamepad" : "kbd/mouse");
         renderer.hudText(1, 5, hud::attr(hud::Yellow), status);
 
         renderer.render();

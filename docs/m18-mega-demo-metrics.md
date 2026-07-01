@@ -89,15 +89,23 @@ practical effect of a codebase whose conventions are discoverable once (the sing
 tests + docs) rather than an exploration-heavy one, which is the desired shape — the agent
 spent its budget producing code, not hunting for how the engine works.
 
-## A note on scope honesty (updated M18.5)
+## A note on scope honesty (updated post-M18.5)
 
-The original M18 mega-demo was built on a single **terminal heightmap layer**, which was
-incompatible with M13 structural collapse (the M13 support-flood fires only for composite
-macro voxels). M18.5 resolved this by adding a **hybrid composite stack**: a coarse "blocks"
-layer (4 m macro voxels, loaded empty) sits above the terminal "terrain" layer so
-`PropagationSystem` can aggregate children and detect unsupported structures. Mining under
-an overhang now triggers a real cave-in via the `crumble` plugin — the M13 headline the demo
-previously disclaimed. The player can also fight back against mobs (melee combat via
-`mob::api().attack_nearest`), turning the demo from a flee-only survival slice into an
-actual combat loop. The rolling heightmap surface, M14 fluid, and M15 textures are all
-preserved.
+The original M18 mega-demo was built on a single **terminal heightmap layer**. M18.5 briefly
+added a **hybrid composite stack** (a coarse "blocks" layer over the "terrain" layer, plus an
+immutable "bedrock" anchor) so `PropagationSystem` could aggregate children and drive M13
+structural collapse — mining under an overhang triggered a real cave-in via the `crumble`
+plugin.
+
+**That collapse feature has since been removed from the mega-demo and is marked
+experimental.** On a large streamed surface the support-flood mis-fires: ordinary surface
+mining is misread as an unsupported span and triggers premature cave-ins, and running the
+detection flood every frame hurt performance. Rather than ship a headline feature that
+degrades the core mine/build/explore loop, the mega-demo is back to a single terminal
+"terrain" layer, and collapse polish is a **post-1.0 goal**. The feature still lives in the
+engine and is demonstrated in isolation by `demos/13-structural-collapse` and
+`demos/19-multilevel-collapse`.
+
+What the mega-demo keeps: the rolling heightmap surface, 3D-carved **caves** and ore, M14
+fluid, M15 textures, and melee **combat** against mobs (`mob::api().attack_nearest`) — a real
+mine/build/fight/explore survival slice.

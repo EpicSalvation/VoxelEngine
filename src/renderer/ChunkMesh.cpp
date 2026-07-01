@@ -18,6 +18,7 @@ ChunkMesh ChunkMesh::build(const Chunk& chunk, double voxelSizeM) {
     buildChunkMeshData(chunk, verts, opaqueIdx, translucentIdx, voxelSizeM);
 
     ChunkMesh mesh;
+    mesh.sizeVoxels_ = chunk.size();  // authoritative culling extent (see header)
     if (verts.empty())
         return mesh;  // empty mesh; no buffers created
 

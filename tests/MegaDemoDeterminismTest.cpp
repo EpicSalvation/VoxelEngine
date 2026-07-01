@@ -2,11 +2,11 @@
 // deterministically drives generation, so the SAME seed regenerates the SAME
 // world and a DIFFERENT seed produces a different one (ARCHITECTURE §4).
 //
-// M18.5: the demo now uses a composite heightmap — a "blocks" composite layer
-// decomposes to a "terrain" terminal layer via a recipe with occupancy carving.
-// This test exercises the real overworld + trees worldgen plugins through the
-// terminal terrain generator + feature overlays (the same path the demo uses
-// for pre-streaming the spawn neighbourhood).
+// The demo uses a single terminal "terrain" layer (M13 structural collapse and
+// its composite "blocks"/"bedrock" scaffolding were removed — the support-flood
+// is still experimental). This test exercises the real overworld + trees worldgen
+// plugins through the terminal terrain generator + feature overlays (the same
+// path the demo uses for pre-streaming the spawn neighbourhood).
 
 #include "core/PluginManager.h"
 #include "world/Voxel.h"

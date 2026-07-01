@@ -36,10 +36,17 @@ public:
     uint32_t                 opaqueCount()      const { return opaqueCount_; }
     uint32_t                 translucentCount() const { return translucentCount_; }
 
+    // Chunk edge length in voxels (chunk.size()), captured at build time. The mesh
+    // geometry spans [0, sizeVoxels] in chunk-local units, so the renderer derives
+    // its frustum-culling bounding sphere from this authoritative value rather than
+    // a caller-supplied extent that can be forgotten or mismatched.
+    int sizeVoxels() const { return sizeVoxels_; }
+
 private:
     bgfx::VertexBufferHandle vbh_            = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle  opaqueIbh_      = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle  translucentIbh_ = BGFX_INVALID_HANDLE;
     uint32_t                 opaqueCount_      = 0;
     uint32_t                 translucentCount_ = 0;
+    int                      sizeVoxels_       = 0;
 };
