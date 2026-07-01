@@ -14,7 +14,7 @@ If you are an AI agent: read this document before modifying any subsystem. The c
 4. [Cascading Decomposition](#4-cascading-decomposition)
 5. [Material Property System](#5-material-property-system)
 6. [Composition Recipes and Feature Generators](#6-composition-recipes-and-feature-generators)
-7. [Upward Damage Propagation](#7-upward-damage-propagation)
+7. [Upward Damage Propagation](#7-upward-damage-propagation) (**experimental**)
 8. [Plugin System](#8-plugin-system)
 9. [Renderer and LOD](#9-renderer-and-lod)
 10. [Import/Export and Editor Interoperability](#10-importexport-and-editor-interoperability)
@@ -296,6 +296,8 @@ This is what lets a 10km "mountain range" recipe constrain its constituent 1km "
 ## 7. Upward Damage Propagation
 
 **Files:** `src/simulation/PropagationSystem.cpp/.h` (detection), `src/simulation/PhysicsSystem.cpp/.h` (per-frame driver + event firing), `src/core/Tuning.h` (`tuning::physics` knobs). Consumers landed in M13; the design below is the M13 contract.
+
+**Status: experimental.** The support-flood model below is proven on fixed, hand-built dioramas (`demos/13-structural-collapse`, `demos/19-multilevel-collapse`) but has a known failure mode on large streamed heightmap surfaces: the "unknown ⇒ supported" boundary rule can misread ordinary surface mining as an unsupported span, and running the detection flood every frame costs performance at that scale (it was pulled from `demos/20-mega-demo` for exactly this reason — see `docs/m18-mega-demo-metrics.md`). Treat the algorithm, its tuning knobs, and the `StructuralEvent` payload shape as **likely to change** before this is recommended for open/streamed worlds; do not build load-bearing gameplay on it without expecting to revisit it.
 
 ### Purpose
 

@@ -3,9 +3,10 @@
 // The demo streams a single terminal "terrain" layer: this generator fills the
 // heightmap strata (grass/dirt/stone over a bedrock floor) and the feature
 // overlays carve caves and scatter ore. Materials still carry structural_strength
-// values, but M13 structural collapse is no longer wired into the mega-demo (the
-// support-flood is still experimental), so there is no composite "blocks" layer
-// here — the strengths are simply inert gameplay metadata in this demo.
+// values, but M13 structural collapse is no longer wired into the mega-demo (see
+// demos/20-mega-demo/main.cpp and docs/architecture.md §7), so there is no
+// composite "blocks" layer here — the strengths are simply inert gameplay
+// metadata in this demo.
 //
 // Determinism (§4): every height, cave, and ore lookup is a pure function of
 // world position and the run's world seed. No rand/time/global mutable state.

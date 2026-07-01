@@ -314,8 +314,8 @@ voxel-game-engine
 │   ├── server-authority/                  # M11: authoritative-server / host-as-authority P2P
 │   ├── chat/                              # M11: in-engine chat over the network message channel
 │   ├── material-audio/                    # M12: material-driven break/place sounds
-│   ├── crumble/                           # M13: structural-collapse response (clear unstable voxels)
-│   ├── falling-debris/                    # M13: visual falling-voxel effect on collapse
+│   ├── crumble/                           # M13: structural-collapse response (clear unstable voxels) [experimental]
+│   ├── falling-debris/                    # M13: visual falling-voxel effect on collapse [experimental]
 │   ├── flow/                              # M14: fluid field → translucent water voxel responder
 │   ├── field-sources/                     # M14: fluid/heat source emitters
 │   ├── blockbench/                        # M15: .bbmodel importer (per-face textured blocks)
@@ -1239,7 +1239,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] **Cascade feedback loop closes through the public edit path**: confirm the loop is engine-fires → plugin edits via `World::setVoxel` → edit returns through `on_voxel_modified` → next end-of-frame pass re-dirties and re-evaluates → next ring of unstable macros, terminating when the structure is stable. The engine stays policy-free; there is no recursive in-engine collapse routine
 
 *Mandatory structural-response plugins (the engine ships no default collapse)*
-- [x] **`crumble` example plugin** (`plugins/crumble/plugin.cpp`): registers `on_structural_event` and **clears** each unstable macro's voxels via `World::setVoxel` (the cave-in / crumble-away response). The reference for the simplest actuator; dropping it means mining never triggers a cave-in — the legitimate Minecraft-style configuration, not a degenerate case (ARCHITECTURE §7)
+- [x] **`crumble` example plugin** (`plugins/crumble/plugin.cpp`): registers `on_structural_event` and **clears** each unstable macro's voxels via `World::setVoxel` (the cave-in / crumble-away response). The reference for the simplest actuator; dropping it means mining never triggers a cave-in — the legitimate Minecraft-style configuration, not a degenerate case (ARCHITECTURE §7). **Note:** the underlying structural-collapse feature is experimental and likely to change — see ARCHITECTURE §7
 - [x] **`falling-debris` example plugin** (`plugins/falling-debris/plugin.cpp`): the alternative response — **relocates** the unstable macro's material toward its local support direction (clear here, place one macro over) instead of deleting it, demonstrating that the same engine event drives a completely different game feel with zero engine change
 
 *Tests*
@@ -1446,7 +1446,7 @@ Development is organized into two phases. Phase 1 targets a minimum viable engin
 - [x] **Revise the Mega-Demo onto a composite heightmap (and restore the M13 headline):** rebuild the `overworld` plugin so the surface lives on a **composite** "blocks" layer that decomposes to a 1 m terminal layer via a recipe with occupancy carving + a surface cap (grass/dirt/stone/sand strata, caves, ore — the current terminal-generator content, re-expressed declaratively), with the immutable bedrock floor retained. Wire `PhysicsSystem` + a structural-response plugin (`crumble`) into `demos/20-mega-demo` so mining under an overhang now triggers a real cave-in — the M13 headline the demo currently disclaims. Keep the seed-determinism guarantee (same seed ⇒ same world) and update `tests/MegaDemoDeterminismTest.cpp` for the composite stack. Rewrite the metrics doc's "A note on scope honesty" (`docs/m18-mega-demo-metrics.md`) and the README Mega-Demo note (which currently says M13 is intentionally excluded) to reflect that composite heightmap worlds — and their collapse — are now supported. — *shipped: hybrid composite stack (blocks 4 m composite loaded empty + terrain 1 m terminal + bedrock 1 m immutable) with `PhysicsSystem` + `crumble` plugin wired in for M13 structural collapse. Player-attacks-mob melee combat added (Q/X/LMB-in-air via `mob::api().attack_nearest`). Determinism test updated for the composite seed path. Docs updated.*
 
 **M19 — Release**
-- [ ] Verify docs are all correct
+- [x] Verify docs are all correct — *shipped: full pass over README, ARCHITECTURE, and the tutorial series correcting stale references (project structure, plugin API surface, textured-block interop); the M13 structural-collapse feature's docs (ARCHITECTURE §7, Tutorial 13, `crumble`/`falling-debris` plugin headers) were additionally marked experimental and likely to change, per its known streamed-surface failure mode.*
 - [ ] Make sure the engine has a name.
 - [ ] 1.0 tag
 
@@ -1459,7 +1459,7 @@ Items below were evaluated during the M17 pre-release sanity check (`docs/m17-re
 - [ ] **Auth / encryption / anti-tamper (F1):** M11 networking is explicitly unauthenticated UDP by design. A production multiplayer game will need at minimum session auth and transport encryption
 
 *Simulation & gameplay*
-- [ ] **Structural-collapse polish for streamed surfaces (S1):** M13 structural collapse works cleanly on the fixed dioramas (`demos/13-structural-collapse`, `demos/19-multilevel-collapse`) but was **removed from the Mega-Demo** and marked **experimental** — on a large streamed heightmap surface the support-flood misreads ordinary surface mining as an unsupported span and triggers premature cave-ins, and running the detection flood every frame hurt performance. Polishing it for open, streamed worlds (surface-aware support seeding, per-edit rather than every-frame flooding, and re-integration into the Mega-Demo) is deferred here. See `docs/m18-mega-demo-metrics.md` ("A note on scope honesty").
+- [ ] **Structural-collapse polish for streamed surfaces (S1):** M13 structural collapse works cleanly on the fixed dioramas (`demos/13-structural-collapse`, `demos/19-multilevel-collapse`) but was **removed from the Mega-Demo** and marked **experimental** — on a large streamed heightmap surface the support-flood misreads ordinary surface mining as an unsupported span and triggers premature cave-ins, and running the detection flood every frame hurt performance. Polishing it for open, streamed worlds (surface-aware support seeding, per-edit rather than every-frame flooding, and re-integration into the Mega-Demo) is deferred here. See `docs/m18-mega-demo-metrics.md` ("A note on scope honesty") and `docs/architecture.md` §7 for the feature's experimental status.
 
 *Rendering*
 - [ ] **Time-of-day / directional sun (A3):** sun direction + ambient color as a renderer policy, mirroring the fog policy and §18 gravity policy. Couples to the voxel lighting model (A1) landing in M17

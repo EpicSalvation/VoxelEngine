@@ -1,5 +1,9 @@
 // falling-debris plugin (M13, docs/ARCHITECTURE.md §7).
 //
+// NOTE: the structural-collapse feature this plugin responds to is experimental
+// and likely to change (docs/ARCHITECTURE.md §7) -- proven on fixed dioramas but
+// known to misbehave on large streamed surfaces.
+//
 // The alternative mandatory structural-response plugin. Where `crumble` deletes
 // an unstable macro, this one RELOCATES its mass: it clears the unstable macro's
 // terminal voxels and places a block of "debris" material one macro step down,

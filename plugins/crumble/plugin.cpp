@@ -1,5 +1,9 @@
 // crumble plugin (M13, docs/ARCHITECTURE.md §7).
 //
+// NOTE: the structural-collapse feature this plugin responds to is experimental
+// and likely to change (docs/ARCHITECTURE.md §7) -- proven on fixed dioramas but
+// known to misbehave on large streamed surfaces.
+//
 // The simplest mandatory structural-response plugin: the cave-in / crumble-away
 // actuator. It registers on_structural_event and, for each macro the engine
 // reports as unstable, CLEARS that macro's terminal child voxels via the public

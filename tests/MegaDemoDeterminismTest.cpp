@@ -3,10 +3,10 @@
 // world and a DIFFERENT seed produces a different one (ARCHITECTURE §4).
 //
 // The demo uses a single terminal "terrain" layer (M13 structural collapse and
-// its composite "blocks"/"bedrock" scaffolding were removed — the support-flood
-// is still experimental). This test exercises the real overworld + trees worldgen
-// plugins through the terminal terrain generator + feature overlays (the same
-// path the demo uses for pre-streaming the spawn neighbourhood).
+// its composite "blocks"/"bedrock" scaffolding were removed — see
+// demos/20-mega-demo/main.cpp). This test exercises the real overworld + trees
+// worldgen plugins through the terminal terrain generator + feature overlays
+// (the same path the demo uses for pre-streaming the spawn neighbourhood).
 
 #include "core/PluginManager.h"
 #include "world/Voxel.h"

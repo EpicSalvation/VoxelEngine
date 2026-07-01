@@ -6,11 +6,12 @@
 // Mine, place, fight mobs, and explore the caves.
 //
 // NOTE: M13 structural collapse (mining-triggered cave-INS) is intentionally NOT
-// wired into this demo. The support-flood is still experimental — on a large
-// streamed surface it mis-fires on ordinary surface mining — so polishing it is a
-// post-1.0 goal. See demos/13-structural-collapse and demos/19-multilevel-collapse
-// for the collapse feature in isolation. This removal keeps the mega-demo's
-// performance and stability predictable while the feature matures.
+// wired into this demo — on a large streamed surface the support-flood mis-fires
+// on ordinary surface mining, so polishing it is a post-1.0 goal. See
+// demos/13-structural-collapse and demos/19-multilevel-collapse for the collapse
+// feature in isolation, and docs/architecture.md §7 for the feature's
+// (experimental) status. This removal keeps the mega-demo's performance and
+// stability predictable while the feature matures.
 //
 // The player can ATTACK mobs (Q or LMB-in-air), dealing 20 damage per hit. Dead
 // mobs stop chasing. Fight back instead of just running.
