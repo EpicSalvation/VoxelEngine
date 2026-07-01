@@ -2,6 +2,7 @@
 
 #include "WorldCoord.h"
 #include "renderer/Fog.h"
+#include "renderer/Sky.h"
 #include "platform/NativeWindowHandles.h"
 
 #include <cstdint>
@@ -53,6 +54,16 @@ public:
     // default (0x303030 dark gray) reproduces the historical clear byte-for-byte;
     // an implementation may leave this a no-op.
     virtual void setClearColor(const glm::vec3& rgb) { (void)rgb; }
+
+    // Set the procedural-sky (background) parameters — a view-direction gradient
+    // the renderer paints behind the scene, distinct from the flat clear color
+    // above (M17; docs/architecture.md §9). This is groundwork for the M19
+    // "No Man's Voxel" demo, where flying out of a world's bounds needs a
+    // convincing sky/space backdrop rather than a flat fill. Like fog, this is a
+    // POLICY the game drives (typically from the procedural-sky content plugin) —
+    // see SkyParams. The default (enabled == false) draws no sky so every existing
+    // scene renders byte-identically; an implementation may leave this a no-op.
+    virtual void setSky(const SkyParams& sky) { (void)sky; }
 
     virtual void cleanup() = 0;
     virtual void shutdown() = 0;

@@ -574,13 +574,17 @@ if(TEST_SOURCES)
   # their mist::api() / rangefog::api() inline statics resolve in one address space.
   set(_mist_plugin_src ${CMAKE_CURRENT_SOURCE_DIR}/plugins/atmospheric-mist/plugin.cpp)
   set(_ra_plugin_src   ${CMAKE_CURRENT_SOURCE_DIR}/plugins/range-attenuation/plugin.cpp)
+  # SkyTest.cpp wires in the procedural-sky supplier plugin (M17) so its psky::api()
+  # inline static resolves in one address space.
+  set(_sky_plugin_src  ${CMAKE_CURRENT_SOURCE_DIR}/plugins/procedural-sky/plugin.cpp)
   # MegaDemoDeterminismTest.cpp wires in the M18 overworld + trees worldgen plugins
   # to verify the seed → world determinism guarantee on the real generators.
   set(_ow_plugin_src    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/overworld/plugin.cpp)
   set(_tr_plugin_src    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/trees/plugin.cpp)
   add_executable(voxel-engine-tests ${TEST_SOURCES}
     ${_kb_plugin_src} ${_km_plugin_src} ${_gp_plugin_src} ${_eh_plugin_src}
-    ${_mist_plugin_src} ${_ra_plugin_src} ${_ow_plugin_src} ${_tr_plugin_src})
+    ${_mist_plugin_src} ${_ra_plugin_src} ${_sky_plugin_src}
+    ${_ow_plugin_src} ${_tr_plugin_src})
   # The compiled-in plugins are wired in (wireInPlugin) and never ABI-checked, so
   # drop their stamps target-wide — several stamps of the one exported symbol would
   # collide at link. The disk-loaded fixture plugins (test-plugin-*) are separate
@@ -601,6 +605,8 @@ if(TEST_SOURCES)
     COMPILE_DEFINITIONS MIST_COMPILED_IN)
   set_source_files_properties(${_ra_plugin_src} PROPERTIES
     COMPILE_DEFINITIONS RANGEFOG_COMPILED_IN)
+  set_source_files_properties(${_sky_plugin_src} PROPERTIES
+    COMPILE_DEFINITIONS PSKY_COMPILED_IN)
   # overworld/trees are ALSO built as disk MODULE plugins that the mega-demo loads
   # at runtime; scope their COMPILED_IN guard to THIS target (not the shared source
   # file) so it does not leak onto the MODULE and suppress its voxel_plugin_init
@@ -621,7 +627,8 @@ if(TEST_SOURCES)
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/gamepad
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/example-hooks
     ${CMAKE_CURRENT_SOURCE_DIR}/plugins/atmospheric-mist
-    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/range-attenuation)
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/range-attenuation
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/procedural-sky)
   voxel_set_warnings(voxel-engine-tests)
   if(VOXEL_TEST_PLUGINS)
     add_dependencies(voxel-engine-tests ${VOXEL_TEST_PLUGINS})
