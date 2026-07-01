@@ -240,6 +240,7 @@ listener; `playSound(id, pos, overrides)` for one-shots; `createEmitter` /
 | `setFarClip(metres)` | Once (or when view distance changes); default 1000 m. Raise for multi-layer worlds whose coarsest layer spans kilometres. |
 | `setFog(FogParams)` | Each frame to drive distance-obscurance fog — color + near/far band + density — hiding the LOD pop and chunk-load edge (M17). Default `density 0` disables fog (byte-identical). Typically fed from a supplier plugin (`atmospheric-mist`, `range-attenuation`); see `include/renderer/Fog.h`. |
 | `setClearColor(vec3)` | Once (or when the fog color changes) to set the background color. Pair it with the fog color so far geometry dissolves into the background with no far-plane halo (M17). Default `0x303030` is byte-identical. |
+| `setSky(SkyParams)` | Each frame to paint a procedural sky behind the scene — a zenith/horizon/ground gradient measured against the camera up — instead of the flat clear color (M17; groundwork for the M19 space demo). Default `enabled == false` draws no sky (byte-identical). Typically fed from the `procedural-sky` supplier plugin (day / dusk / space presets + day/night cycle); see `include/renderer/Sky.h` and `docs/m17-skybox-evaluation.md`. |
 
 ### Networking (`src/net/NetworkManager.h`)
 

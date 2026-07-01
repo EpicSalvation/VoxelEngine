@@ -5,6 +5,7 @@
 #include <bgfx/platform.h>
 #include <iostream>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 // Restrict the embedded-shader backend matrix to the profiles actually compiled
@@ -78,6 +79,48 @@ static const uint16_t kCubeLineIndices[24] = {
     0,4, 1,5, 2,6, 3,7,   // verticals
 };
 
+// Procedural-sky sphere tessellation (M17). A UV (latitude/longitude) sphere of
+// unit directions the renderer recolors per frame via skyColor() and draws
+// camera-centered as the background. This resolution is a smooth-enough gradient
+// while staying trivially cheap (~325 verts / ~576 tris). Winding is irrelevant:
+// the sphere is centered on the eye, so every forward ray hits exactly one point
+// and the far hemisphere is behind the near plane — the sky is drawn with no
+// backface cull and depth-tested only (see render()).
+static constexpr int kSkyLon = 24;   // longitude segments (around the up axis)
+static constexpr int kSkyLat = 12;   // latitude segments (pole to pole)
+
+// Fill `pos` with the unit-sphere vertex directions and `idx` with the triangle
+// list. Positions are normalized so skyColor() can dot them against the camera up
+// directly. The +Y pole is arbitrary — the gradient is measured against the
+// camera up vector at draw time, not this tessellation axis.
+static void buildSkySphere(std::vector<glm::vec3>& pos, std::vector<uint16_t>& idx) {
+    constexpr float kPi = 3.14159265358979323846f;
+    pos.clear();
+    idx.clear();
+    for (int y = 0; y <= kSkyLat; ++y) {
+        const float theta = (static_cast<float>(y) / kSkyLat) * kPi;   // 0..π
+        const float cy = std::cos(theta);
+        const float sy = std::sin(theta);
+        for (int x = 0; x <= kSkyLon; ++x) {
+            const float phi = (static_cast<float>(x) / kSkyLon) * 2.0f * kPi;
+            const glm::vec3 dir(sy * std::cos(phi), cy, sy * std::sin(phi));
+            const float len = glm::length(dir);
+            pos.push_back(len > 1e-6f ? dir / len : glm::vec3(0.0f, 1.0f, 0.0f));
+        }
+    }
+    const int stride = kSkyLon + 1;
+    for (int y = 0; y < kSkyLat; ++y) {
+        for (int x = 0; x < kSkyLon; ++x) {
+            const uint16_t i0 = static_cast<uint16_t>(y * stride + x);
+            const uint16_t i1 = static_cast<uint16_t>(i0 + 1);
+            const uint16_t i2 = static_cast<uint16_t>(i0 + stride);
+            const uint16_t i3 = static_cast<uint16_t>(i2 + 1);
+            idx.push_back(i0); idx.push_back(i2); idx.push_back(i1);
+            idx.push_back(i1); idx.push_back(i2); idx.push_back(i3);
+        }
+    }
+}
+
 bgfx::VertexLayout VoxelVertex::layout;
 
 void VoxelVertex::initLayout() {
@@ -93,6 +136,7 @@ BgfxRenderer::BgfxRenderer()
     : program(BGFX_INVALID_HANDLE),
       ibo(BGFX_INVALID_HANDLE),
       lineIbo(BGFX_INVALID_HANDLE),
+      skyIbo(BGFX_INVALID_HANDLE),
       atlasSampler(BGFX_INVALID_HANDLE),
       fogColorU(BGFX_INVALID_HANDLE),
       fogParamsU(BGFX_INVALID_HANDLE),
@@ -146,6 +190,16 @@ void BgfxRenderer::initialize(const platform::NativeWindowHandles& handles,
     VoxelVertex::initLayout();
     ibo     = bgfx::createIndexBuffer(bgfx::makeRef(kCubeIndices, sizeof(kCubeIndices)));
     lineIbo = bgfx::createIndexBuffer(bgfx::makeRef(kCubeLineIndices, sizeof(kCubeLineIndices)));
+
+    // Procedural-sky sphere (M17): the unit-direction vertices are kept CPU-side
+    // and recolored into a transient buffer each frame (the color depends on the
+    // current SkyParams and camera up), but the index list is static, so it lives
+    // in a GPU buffer built once here. bgfx::copy so the transient generator
+    // vector need not outlive this call.
+    std::vector<uint16_t> skyIdx;
+    buildSkySphere(skyDirs, skyIdx);
+    skyIbo = bgfx::createIndexBuffer(bgfx::copy(skyIdx.data(),
+                                     static_cast<uint32_t>(skyIdx.size() * sizeof(uint16_t))));
 
     // Texture atlas sampler (s_atlas, stage 0) plus a built-in 1×1 opaque-white
     // tile used as the default atlas. Sampling white and modulating by the vertex
@@ -264,6 +318,56 @@ void BgfxRenderer::render() {
         if (bgfx::isValid(fogColorU))  bgfx::setUniform(fogColorU,  fogColorVec);
         if (bgfx::isValid(fogParamsU)) bgfx::setUniform(fogParamsU, fogParamsVec);
     };
+
+    // Procedural sky (M17). When enabled, paint the background from a
+    // view-direction gradient instead of the flat clear color. The unit sphere is
+    // recolored each frame via skyColor() (the color depends on SkyParams and the
+    // camera up) and drawn CAMERA-CENTERED at a radius just inside the far plane.
+    //
+    // Correctness is by depth TEST alone, independent of draw order and culling:
+    // the sphere is centered on the eye, so every forward ray hits exactly one
+    // surface point (the far hemisphere is behind the near plane) — no self-overlap
+    // to cull. Drawn with DEPTH_TEST_LEQUAL and NO depth write, at radius
+    // 0.999·farClip: it passes on empty pixels (cleared depth 1.0) and is rejected
+    // wherever nearer geometry sits, whether the sky is submitted before or after
+    // that geometry. Fog is forced off for this submit (density 0) so the
+    // background itself is never fogged. When disabled the whole block is skipped,
+    // so the flat clear color shows through byte-identically.
+    if (sky.enabled && !skyDirs.empty() && bgfx::isValid(program) &&
+        bgfx::isValid(skyIbo)) {
+        const glm::vec3 up(cameraUp.x, cameraUp.y, cameraUp.z);
+        auto packAbgr = [](const glm::vec3& c) -> uint32_t {
+            auto u8 = [](float v) -> uint32_t {
+                const float cl = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+                return static_cast<uint32_t>(cl * 255.0f + 0.5f);
+            };
+            return 0xff000000u | (u8(c.b) << 16) | (u8(c.g) << 8) | u8(c.r);
+        };
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::allocTransientVertexBuffer(&tvb, static_cast<uint32_t>(skyDirs.size()),
+                                         VoxelVertex::layout);
+        VoxelVertex* verts = reinterpret_cast<VoxelVertex*>(tvb.data);
+        for (size_t i = 0; i < skyDirs.size(); ++i) {
+            const glm::vec3 d = skyDirs[i];
+            const uint32_t abgr = packAbgr(skyColor(sky, d, up));
+            verts[i] = {d.x, d.y, d.z, abgr, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
+        }
+        const float r = farClip * 0.999f;
+        float mtx[16];
+        bx::mtxScale(mtx, r, r, r);
+        constexpr uint64_t kSkyState =
+            BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LEQUAL;
+        const float noFog[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // density 0 → sky is never fogged
+        bgfx::setState(kSkyState);
+        bgfx::setTransform(mtx);
+        bgfx::setVertexBuffer(0, &tvb);
+        bgfx::setIndexBuffer(skyIbo);
+        if (bgfx::isValid(atlasSampler))
+            bgfx::setTexture(0, atlasSampler, atlas);
+        if (bgfx::isValid(fogColorU))  bgfx::setUniform(fogColorU,  noFog);
+        if (bgfx::isValid(fogParamsU)) bgfx::setUniform(fogParamsU, noFog);
+        bgfx::submit(0, program);
+    }
 
     bgfx::touch(0);
 
@@ -539,6 +643,10 @@ void BgfxRenderer::setFog(const FogParams& f) {
     fog = f;
 }
 
+void BgfxRenderer::setSky(const SkyParams& s) {
+    sky = s;
+}
+
 void BgfxRenderer::setClearColor(const glm::vec3& rgb) {
     // Pack to bgfx's 0xRRGGBBAA clear format (R in the high byte), opaque alpha.
     auto u8 = [](float c) -> uint32_t {
@@ -551,6 +659,7 @@ void BgfxRenderer::setClearColor(const glm::vec3& rgb) {
 void BgfxRenderer::cleanup() {
     if (bgfx::isValid(ibo))     { bgfx::destroy(ibo);     ibo     = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(lineIbo)) { bgfx::destroy(lineIbo); lineIbo = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(skyIbo))  { bgfx::destroy(skyIbo);  skyIbo  = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(program)) { bgfx::destroy(program); program = BGFX_INVALID_HANDLE; }
     // The engine owns only the sampler uniform and the 1×1 white tile; a content
     // atlas installed via setAtlas() is owned and freed by the texture pipeline.
