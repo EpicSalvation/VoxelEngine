@@ -5,6 +5,12 @@ custom plugins that decide how the collapse looks -- crumbling in place,
 falling debris, or scale-filtered cascades through a multi-level composite
 hierarchy.
 
+> **Experimental.** The support-flood model this tutorial teaches works well on
+> the fixed, hand-built scenes below, but it is known to misbehave on large
+> streamed/open worlds (see [`docs/architecture.md` §7](../architecture.md#7-upward-damage-propagation)).
+> Expect the algorithm and tuning knobs to change before it's recommended for
+> that case.
+
 ---
 
 ## Prerequisites
