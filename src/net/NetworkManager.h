@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -93,6 +94,8 @@ public:
     uint64_t packetsReceived() const { return packetsReceived_; }
     // Committed edits suppressed by interest management (authority side).
     uint64_t suppressedEditCount() const { return suppressedEdits_; }
+    // Resync requests dropped by the per-peer cooldown (authority side).
+    uint64_t suppressedResyncCount() const { return suppressedResyncs_; }
     // Smoothed round-trip time to a connected player in milliseconds (0 if
     // unknown or not measured by the transport backend).
     uint32_t rttMs(PlayerId player_id) const;
@@ -173,6 +176,7 @@ private:
     bool                        joinComplete_   = false;
     uint64_t                    packetsReceived_ = 0;
     uint64_t                    suppressedEdits_ = 0;
+    uint64_t                    suppressedResyncs_ = 0;
 
     InterestMode interestMode_ = InterestMode::BroadcastAll;
 
@@ -182,6 +186,9 @@ private:
     std::unordered_map<PlayerId, PeerId> playerToPeer_;
     // last known WorldCoord per player (updated by player_position messages)
     std::unordered_map<PlayerId, WorldCoord> peerPositions_;
+    // last time a full resync was served per peer (rate limit; entries are
+    // erased on disconnect)
+    std::unordered_map<PeerId, std::chrono::steady_clock::time_point> lastResyncTime_;
 
     // Received LayerConfig bytes during join handshake (client-side).
     std::vector<uint8_t> receivedConfigBytes_;

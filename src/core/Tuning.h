@@ -96,6 +96,18 @@ inline constexpr int kMaxSupportFloodNodes            = EngineConfig{}.physicsMa
 
 }  // namespace tuning::physics
 
+namespace tuning::net {
+
+// Minimum seconds between full dirty-chunk resyncs served to a single peer
+// (M11). A resync re-reads every dirty chunk from disk and re-sends it on the
+// reliable channel, so without a floor a client spamming ResyncRequest packets
+// turns a few bytes of input into unbounded server disk reads and traffic.
+// Legitimate resyncs are rare (sequence-gap recovery), so a request arriving
+// inside the window is dropped, not queued.
+inline constexpr double kResyncCooldownSeconds = 5.0;
+
+}  // namespace tuning::net
+
 namespace tuning::thermal {
 
 // Heat diffusion model (M14, docs/architecture.md §17).

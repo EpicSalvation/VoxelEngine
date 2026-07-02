@@ -10,6 +10,7 @@
 #include "world/Voxel.h"
 #include "world/LODManager.h"
 #include "io/ChunkPersistence.h"
+#include "core/Tuning.h"
 
 #include <chrono>
 #include <cmath>
@@ -598,6 +599,7 @@ void NetworkManager::onPeerDisconnected(PeerId peer_id)
         playerToPeer_.erase(player_id);
         peerToPlayer_.erase(it);
     }
+    lastResyncTime_.erase(peer_id);
 }
 
 // ── World-state setters for handshake ─────────────────────────────────────────
@@ -779,6 +781,23 @@ void NetworkManager::handleJoinComplete(const InboundPacket& /*pkt*/)
 void NetworkManager::handleResyncRequest(PeerId sender_peer, const InboundPacket& /*pkt*/)
 {
     if (role_ != SessionRole::Server && role_ != SessionRole::HostPeer) return;
+
+    // Rate limit: a full resync re-reads every dirty chunk from disk and
+    // re-sends it on the reliable channel, so a peer spamming ResyncRequest
+    // packets could otherwise amplify a few bytes of input into unbounded
+    // server work. Requests inside the cooldown are dropped, not queued — a
+    // legitimate client only re-requests after another sequence gap.
+    const auto now = std::chrono::steady_clock::now();
+    auto last = lastResyncTime_.find(sender_peer);
+    if (last != lastResyncTime_.end() &&
+        now - last->second <
+            std::chrono::duration<double>(tuning::net::kResyncCooldownSeconds)) {
+        ++suppressedResyncs_;
+        Log::debug("Net", "resync request dropped (per-peer cooldown)");
+        return;
+    }
+    lastResyncTime_[sender_peer] = now;
+
     std::cout << "[NetworkManager] resync requested by peer " << sender_peer << '\n';
     sendDirtyChunksToPeer(sender_peer);
     // Re-send JoinComplete so the client knows the stream ended.

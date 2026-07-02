@@ -8,6 +8,7 @@
 #include "core/LayerConfig.h"
 #include "core/PluginManager.h"
 #include "io/ChunkPersistence.h"
+#include "net/ENetTransport.h"
 #include "net/NetJoinHandshake.h"
 #include "net/NetworkManager.h"
 #include "world/World.h"
@@ -127,4 +128,73 @@ TEST_F(JoinHandshakeTest, ClientReceivesSeedConfigAndOnlyDirtyChunks) {
     PluginManager       clientPmB;
     net::NetworkManager clientNmB;
     joinClient(clientWorldB, clientPmB, clientNmB);
+}
+
+TEST_F(JoinHandshakeTest, ResyncRequestsAreRateLimitedPerPeer) {
+    LayerConfig config = LayerConfig::loadFromString(kLayerYaml);
+
+    World         serverWorld(config);
+    PluginManager serverPm;
+    serverWorld.loadChunk(ChunkCoord{0, 0, 0}, nullptr);
+    serverWorld.setVoxel(WorldCoord(1.5, 1.5, 1.5), mat(2, 1500.0f));
+
+    persistence::WorldSave save(dir.string(), persistence::WorldIdentity{1.0, 8});
+    ASSERT_EQ(save.saveDirtyChunks(serverWorld), 1);
+
+    net::NetworkManager serverNm;
+    serverNm.init(serverWorld, serverPm);
+    serverNm.setWorldSave(&save);
+    serverNm.setWorldSeed(kSeed);
+    serverNm.setLayerConfig(&config);
+    ASSERT_TRUE(serverNm.startServer(28032, 8));
+
+    // Raw transport peer: lets the test send crafted ResyncRequest packets and
+    // count the JoinComplete markers that end each dirty-chunk stream.
+    net::ENetTransport raw;
+    ASSERT_TRUE(raw.connect("127.0.0.1", 28032));
+
+    net::PeerId serverPeer   = net::kInvalidPeer;
+    int         joinCompletes = 0;
+    auto pump = [&](const std::function<bool()>& pred, int timeout_ms = 5000) {
+        auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(timeout_ms);
+        while (std::chrono::steady_clock::now() < deadline) {
+            serverNm.update(0.016);
+            net::InboundPacket pkt;
+            while (raw.poll(&pkt)) {
+                if (pkt.type == net::PacketType::PeerConnected) {
+                    serverPeer = pkt.peer_id;
+                } else if (pkt.type == net::PacketType::Data && !pkt.data.empty() &&
+                           pkt.data[0] ==
+                               static_cast<uint8_t>(net::NetPacketKind::JoinComplete)) {
+                    ++joinCompletes;
+                }
+            }
+            raw.flush();
+            if (pred()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    };
+
+    // Initial join handshake ends with the first JoinComplete.
+    ASSERT_TRUE(pump([&] { return joinCompletes == 1; }));
+    ASSERT_NE(serverPeer, net::kInvalidPeer);
+
+    // Two back-to-back resync requests: the first is served (a second
+    // JoinComplete arrives), the second lands inside the cooldown and is
+    // dropped, not queued.
+    std::vector<uint8_t> req;
+    net::write_u8(req, static_cast<uint8_t>(net::NetPacketKind::ResyncRequest));
+    ASSERT_TRUE(raw.send(serverPeer, 0, req.data(), req.size(),
+                         net::Reliability::Reliable));
+    ASSERT_TRUE(raw.send(serverPeer, 0, req.data(), req.size(),
+                         net::Reliability::Reliable));
+    raw.flush();
+
+    ASSERT_TRUE(pump([&] {
+        return joinCompletes >= 2 && serverNm.suppressedResyncCount() >= 1;
+    }));
+    EXPECT_EQ(joinCompletes, 2);
+    EXPECT_EQ(serverNm.suppressedResyncCount(), 1u);
 }
