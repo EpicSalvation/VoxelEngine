@@ -10,7 +10,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <filesystem>
+#include <limits>
 
 using persistence::WorldIdentity;
 using persistence::encodeChunkFile;
@@ -102,6 +104,73 @@ TEST(ChunkCodec, RejectsGarbageAndTruncation) {
     auto bytes = encodeChunkFile(c, id1());
     // Truncate to half — decode must fail cleanly, not crash or over-read.
     EXPECT_EQ(decodeChunkFile(bytes.data(), bytes.size() / 2, id1()), nullptr);
+}
+
+// ── Hostile-input allocation caps (2026-07 security review) ──────────────────
+// A crafted file/packet must be rejected BEFORE the decoder allocates
+// attacker-sized buffers; without the caps these headers drove multi-GB
+// allocations from a few dozen bytes.
+
+namespace {
+
+void hPutU32(std::vector<uint8_t>& b, uint32_t v) {
+    for (int i = 0; i < 4; ++i) b.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xff));
+}
+void hPutF64(std::vector<uint8_t>& b, double v) {
+    uint64_t u; std::memcpy(&u, &v, 8);
+    for (int i = 0; i < 8; ++i) b.push_back(static_cast<uint8_t>((u >> (8 * i)) & 0xff));
+}
+
+// Valid VXCK header up to and including the palette count.
+std::vector<uint8_t> hostileHeader(double voxelSize, uint32_t chunkSize,
+                                   uint32_t paletteCount) {
+    std::vector<uint8_t> b{'V', 'X', 'C', 'K'};
+    hPutU32(b, 2);          // version
+    hPutF64(b, voxelSize);
+    hPutU32(b, chunkSize);
+    hPutU32(b, 0); hPutU32(b, 0); hPutU32(b, 0);  // coord
+    hPutU32(b, paletteCount);
+    return b;
+}
+
+}  // namespace
+
+TEST(ChunkCodec, RejectsOversizedChunkSizeBeforeAllocating) {
+    // Otherwise-valid stream (one palette entry, one run) whose declared chunk
+    // size is far past the decode cap: pre-cap this reached the Chunk
+    // constructor and attempted a ~3.5 TB voxel-grid allocation.
+    auto b = hostileHeader(1.0, 5000u, 1);
+    for (int i = 0; i < 25; ++i) b.push_back(0);  // palette entry
+    hPutU32(b, 1);           // runCount
+    hPutU32(b, 0xFFFFFFFFu); // run length
+    hPutU32(b, 0);           // palette index
+    EXPECT_EQ(persistence::decodeChunkFilePermissive(b.data(), b.size()), nullptr);
+    EXPECT_EQ(decodeChunkFile(b.data(), b.size(), WorldIdentity{1.0, 5000}), nullptr);
+}
+
+TEST(ChunkCodec, RejectsPaletteCountBeyondPresentBytes) {
+    // A ~35-byte packet declaring a 4-billion-entry palette: pre-cap the
+    // decoder allocated the palette vector (~100 GB) before reading a single
+    // entry.
+    auto b = hostileHeader(1.0, 8u, 0xFFFFFFFFu);
+    EXPECT_EQ(persistence::decodeChunkFilePermissive(b.data(), b.size()), nullptr);
+    EXPECT_EQ(decodeChunkFile(b.data(), b.size(), id1()), nullptr);
+}
+
+TEST(ChunkCodec, PermissiveRejectsNonFiniteOrNonPositiveVoxelSize) {
+    // The permissive (network) decode skips the identity comparison, so it must
+    // reject sizes that would poison chunkOrigin on its own.
+    Chunk c = makeMixedChunk(ChunkCoord{0, 0, 0}, 8, 1.0);
+    const double bad[] = {std::numeric_limits<double>::quiet_NaN(),
+                          std::numeric_limits<double>::infinity(), 0.0, -1.0};
+    for (double vs : bad) {
+        auto bytes = encodeChunkFile(c, WorldIdentity{vs, 8});
+        EXPECT_EQ(persistence::decodeChunkFilePermissive(bytes.data(), bytes.size()),
+                  nullptr);
+    }
+    // Positive control: the same chunk under a sane identity decodes.
+    auto good = encodeChunkFile(c, id1());
+    EXPECT_NE(persistence::decodeChunkFilePermissive(good.data(), good.size()), nullptr);
 }
 
 // ── On-disk WorldSave ────────────────────────────────────────────────────────

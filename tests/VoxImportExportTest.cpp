@@ -516,6 +516,39 @@ TEST(VoxImportExport, AutoChunkingSplitsAt256) {
     std::filesystem::remove(tmpOut);
 }
 
+// ── Hostile-input allocation clamp (2026-07 security review) ─────────────────
+
+TEST(VoxParser, ToleratesOverclaimedVoxelCount) {
+    // XYZI declaring 4 billion voxels while carrying only two: the parser must
+    // clamp its up-front reserve to the bytes actually present (pre-clamp this
+    // was a 16 GB reserve from a ~60-byte file) and still yield the real
+    // voxels.
+    std::vector<uint8_t> sizeContent;
+    appendU32(sizeContent, 4); appendU32(sizeContent, 4); appendU32(sizeContent, 4);
+
+    std::vector<uint8_t> xyziContent;
+    appendU32(xyziContent, 0xFFFFFFFFu);  // hostile count
+    xyziContent.insert(xyziContent.end(), {1, 1, 1, 7});
+    xyziContent.insert(xyziContent.end(), {2, 2, 2, 9});
+
+    std::vector<uint8_t> children;
+    appendChunk(children, "SIZE", sizeContent);
+    appendChunk(children, "XYZI", xyziContent);
+
+    std::vector<uint8_t> file;
+    file.push_back('V'); file.push_back('O');
+    file.push_back('X'); file.push_back(' ');
+    appendU32(file, 150);
+    appendChunk(file, "MAIN", {}, children);
+
+    vox::VoxFile parsed;
+    ASSERT_TRUE(vox::parse(file.data(), file.size(), parsed));
+    ASSERT_EQ(parsed.models.size(), 1u);
+    ASSERT_EQ(parsed.models[0].voxels.size(), 2u);
+    EXPECT_EQ(parsed.models[0].voxels[0].colorIndex, 7);
+    EXPECT_EQ(parsed.models[0].voxels[1].colorIndex, 9);
+}
+
 // ── Lossy-property warning ─────────────────────────────────────────────────────
 //
 // Engine::exportVox must emit a LOG_WARN when:

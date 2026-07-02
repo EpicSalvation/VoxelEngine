@@ -459,6 +459,60 @@ TEST(QbParser, EmptyMatrixParsesSuccessfully) {
         EXPECT_EQ(v.a, 0);
 }
 
+// ── Hostile-input dimension caps (2026-07 security review) ───────────────────
+
+// Header bytes for a single-matrix file with the given dimensions and
+// compression flag, ending right after the matrix position — i.e. where the
+// voxel payload would start. Used to test that hostile dimensions are rejected
+// BEFORE the dense grid is allocated.
+static std::vector<uint8_t> hostileQbHeader(uint32_t sizeX, uint32_t sizeY,
+                                            uint32_t sizeZ, uint32_t compressed) {
+    std::vector<uint8_t> buf;
+    appendU32(buf, 0x00000101);  // version
+    appendU32(buf, 0);           // RGBA
+    appendU32(buf, 0);           // orientation
+    appendU32(buf, compressed);
+    appendU32(buf, 0);           // no visibility mask
+    appendU32(buf, 1);           // numMatrices
+    appendU8(buf, 1); appendU8(buf, 'm');
+    appendU32(buf, sizeX);
+    appendU32(buf, sizeY);
+    appendU32(buf, sizeZ);
+    appendI32(buf, 0); appendI32(buf, 0); appendI32(buf, 0);
+    return buf;
+}
+
+TEST(QbParser, RejectsOversizedMatrixDimensions) {
+    // RLE-compressed, so no file-size bound applies — only the voxel-count cap
+    // stands between a ~40-byte file and a 4096³ (275 GB) grid allocation.
+    auto data = hostileQbHeader(4096, 4096, 4096, /*compressed=*/1);
+    qb::QbFile file;
+    EXPECT_FALSE(qb::parse(data.data(), data.size(), file));
+
+    // Dimensions whose size_t product wraps must also be rejected, not
+    // allocated at the wrapped (small) size.
+    auto wrap = hostileQbHeader(0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 1);
+    EXPECT_FALSE(qb::parse(wrap.data(), wrap.size(), file));
+}
+
+TEST(QbParser, ZeroSizedMatrixStillParses) {
+    // A degenerate 0×0×0 matrix is odd but harmless; the dimension validation
+    // must not reject it (regression guard for the cap logic's zero branch).
+    auto data = hostileQbHeader(0, 0, 0, /*compressed=*/0);
+    qb::QbFile file;
+    ASSERT_TRUE(qb::parse(data.data(), data.size(), file));
+    ASSERT_EQ(file.matrices.size(), 1u);
+    EXPECT_TRUE(file.matrices[0].voxels.empty());
+}
+
+TEST(QbParser, RejectsUncompressedGridLargerThanFile) {
+    // Uncompressed needs 4 bytes per declared voxel; a 256³ declaration with no
+    // payload must fail before resizing the 67 MB grid.
+    auto data = hostileQbHeader(256, 256, 256, /*compressed=*/0);
+    qb::QbFile file;
+    EXPECT_FALSE(qb::parse(data.data(), data.size(), file));
+}
+
 // ── Lossy-property warning ───────────────────────────────────────────────────
 
 TEST(QbLossyWarning, EmitsWarnWhenExtendedPropertiesPresent) {

@@ -14,9 +14,12 @@
 #include "world/World.h"
 #include "world/Voxel.h"
 
+#include "world/ChunkCoordMath.h"
+
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -197,4 +200,120 @@ TEST_F(JoinHandshakeTest, ResyncRequestsAreRateLimitedPerPeer) {
     }));
     EXPECT_EQ(joinCompletes, 2);
     EXPECT_EQ(serverNm.suppressedResyncCount(), 1u);
+}
+
+// ── Authority hardening (2026-07 security review) ─────────────────────────────
+// Client-only handshake packets and malformed edits arriving AT the authority
+// must be ignored: accepting them would let any connected peer overwrite the
+// server's world seed, inject chunks past the authority policies, flip its join
+// state, or feed NaN coordinates into the chunk-coord math.
+
+TEST_F(JoinHandshakeTest, AuthorityIgnoresClientOnlyAndMalformedPackets) {
+    LayerConfig config = LayerConfig::loadFromString(kLayerYaml);
+
+    World         serverWorld(config);
+    PluginManager serverPm;
+
+    persistence::WorldSave save(dir.string(), persistence::WorldIdentity{1.0, 8});
+
+    net::NetworkManager serverNm;
+    serverNm.init(serverWorld, serverPm);
+    serverNm.setWorldSave(&save);
+    serverNm.setWorldSeed(kSeed);
+    serverNm.setLayerConfig(&config);
+    ASSERT_TRUE(serverNm.startServer(28033, 8));
+
+    net::ENetTransport raw;
+    ASSERT_TRUE(raw.connect("127.0.0.1", 28033));
+
+    net::PeerId serverPeer = net::kInvalidPeer;
+    auto pump = [&](const std::function<bool()>& pred, int timeout_ms = 5000) {
+        auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(timeout_ms);
+        while (std::chrono::steady_clock::now() < deadline) {
+            serverNm.update(0.016);
+            net::InboundPacket pkt;
+            while (raw.poll(&pkt)) {
+                if (pkt.type == net::PacketType::PeerConnected)
+                    serverPeer = pkt.peer_id;
+            }
+            raw.flush();
+            if (pred()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    };
+    ASSERT_TRUE(pump([&] { return serverPeer != net::kInvalidPeer &&
+                                  serverNm.connectedPeerCount() == 1; }));
+
+    const uint64_t packetsBefore = serverNm.packetsReceived();
+
+    // 1) JoinResponse claiming a different seed.
+    net::JoinResponsePayload jr;
+    jr.world_seed = 0xDEADBEEFULL;
+    auto jrBuf = net::encode_join_response(jr);
+    ASSERT_TRUE(raw.send(serverPeer, 0, jrBuf.data(), jrBuf.size(),
+                         net::Reliability::Reliable));
+
+    // 2) DirtyChunkData carrying a validly encoded chunk the server never made.
+    Chunk evil(ChunkCoord{7, 0, 0}, 8, chunkmath::chunkOrigin({7, 0, 0}, 1.0, 8));
+    net::DirtyChunkDataPayload dcd;
+    dcd.chunk_bytes = persistence::encodeChunkFile(
+        evil, persistence::WorldIdentity{1.0, 8});
+    auto dcdBuf = net::encode_dirty_chunk_data(dcd);
+    ASSERT_TRUE(raw.send(serverPeer, 0, dcdBuf.data(), dcdBuf.size(),
+                         net::Reliability::Reliable));
+
+    // 3) JoinComplete aimed at the authority.
+    std::vector<uint8_t> jc;
+    net::write_u8(jc, static_cast<uint8_t>(net::NetPacketKind::JoinComplete));
+    ASSERT_TRUE(raw.send(serverPeer, 0, jc.data(), jc.size(),
+                         net::Reliability::Reliable));
+
+    // 4) EditIntent with non-finite coordinates.
+    net::EditIntentPayload ei{};
+    ei.x = std::numeric_limits<double>::quiet_NaN();
+    ei.y = std::numeric_limits<double>::infinity();
+    ei.z = 0.0;
+    ei.palette_index = 3;
+    auto eiBuf = net::encode_edit_intent(ei);
+    ASSERT_TRUE(raw.send(serverPeer, 0, eiBuf.data(), eiBuf.size(),
+                         net::Reliability::Reliable));
+    raw.flush();
+
+    // All four packets dispatched (reliable channel, so none can be lost).
+    ASSERT_TRUE(pump([&] {
+        return serverNm.packetsReceived() >= packetsBefore + 4;
+    }));
+
+    EXPECT_EQ(serverNm.worldSeed(), kSeed);                      // (1) ignored
+    EXPECT_EQ(serverWorld.getChunk(ChunkCoord{7, 0, 0}), nullptr);  // (2) ignored
+    EXPECT_FALSE(serverNm.joinComplete());                       // (3) ignored
+    // (4): reaching here without UB/crash and with no chunk created is the
+    // observable contract; the edit was dropped before the coord math ran.
+    EXPECT_EQ(serverWorld.getChunk(ChunkCoord{7, 0, 0}), nullptr);
+}
+
+// A layer name carrying YAML metacharacters must round-trip through the binary
+// handshake as a literal string — not break out of the quoted scalar and inject
+// config keys (pre-escaping, the newline+quote below rewrote chunk_size_voxels).
+TEST(NetJoinHandshakeCodec, LayerNameWithYamlMetacharactersRoundTrips) {
+    const std::string evil =
+        "x\"\n    chunk_size_voxels: 999\n    name: \"y";
+
+    std::vector<uint8_t> buf;
+    net::write_u32(buf, 1);  // num_layers
+    net::write_u32(buf, static_cast<uint32_t>(evil.size()));
+    for (char c : evil) buf.push_back(static_cast<uint8_t>(c));
+    net::write_f64(buf, 1.0);   // voxel_size_m
+    net::write_u8(buf, 2);      // mode = terminal
+    net::write_u8(buf, 0);      // no decompose_to
+    net::write_u32(buf, 8);     // chunk_size_voxels
+    net::write_u32(buf, 4);     // view_distance_chunks
+    net::write_u32(buf, 0);     // resident_chunk_budget
+
+    LayerConfig config = net::deserializeLayerConfig(buf);
+    ASSERT_EQ(config.layers().size(), 1u);
+    EXPECT_EQ(config.layers()[0].name, evil);          // literal round-trip
+    EXPECT_EQ(config.layers()[0].chunk_size_voxels, 8);  // injection had no effect
 }

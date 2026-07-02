@@ -26,6 +26,16 @@ static bool pumpUntil(std::function<bool()> pred, int timeout_ms = 3000)
 
 // ── Loopback connect / disconnect ─────────────────────────────────────────────
 
+TEST(NetworkTransport, ConnectFailsOnUnresolvableHost)
+{
+    // Pre-fix, the enet_address_set_host result was ignored and connect()
+    // "succeeded" against an uninitialised address. ".invalid" is reserved
+    // (RFC 2606) and can never resolve.
+    ENetTransport t;
+    EXPECT_FALSE(t.connect("no-such-host.invalid", 27999));
+    EXPECT_FALSE(t.isConnected());
+}
+
 TEST(NetworkTransport, LoopbackConnectAndDisconnect)
 {
     ENetTransport server;
