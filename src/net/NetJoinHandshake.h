@@ -19,12 +19,34 @@
 #include "net/NetPackets.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace net {
+
+// Escape a network-supplied string for embedding in a YAML double-quoted
+// scalar. Without this, a name containing `"` or a newline breaks out of the
+// quoted scalar and injects arbitrary YAML into the reconstructed config.
+inline std::string yamlEscape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (unsigned char c : s) {
+        if (c == '\\')      out += "\\\\";
+        else if (c == '"')  out += "\\\"";
+        else if (c < 0x20 || c == 0x7f) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "\\x%02X", c);
+            out += buf;
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
 
 inline std::vector<uint8_t> serializeLayerConfig(const LayerConfig& config)
 {
@@ -116,11 +138,11 @@ inline LayerConfig deserializeLayerConfig(const std::vector<uint8_t>& data)
         uint32_t view_distance_chunks = read_u32(data, off);
         uint32_t resident_chunk_budget = read_u32(data, off);
 
-        yaml << "  - name: \"" << name << "\"\n";
+        yaml << "  - name: \"" << yamlEscape(name) << "\"\n";
         yaml << "    voxel_size_m: " << voxel_size_m << "\n";
         yaml << "    mode: " << mode_str << "\n";
         if (!decompose_to.empty()) {
-            yaml << "    decompose_to: \"" << decompose_to << "\"\n";
+            yaml << "    decompose_to: \"" << yamlEscape(decompose_to) << "\"\n";
         }
         yaml << "    chunk_size_voxels: " << chunk_size_voxels << "\n";
         yaml << "    view_distance_chunks: " << view_distance_chunks << "\n";

@@ -406,6 +406,13 @@ void NetworkManager::handleEditIntent(PeerId sender_peer, const InboundPacket& p
     auto it = peerToPlayer_.find(sender_peer);
     PlayerId source = (it != peerToPlayer_.end()) ? it->second : kInvalidPlayer;
 
+    // Reject non-finite coordinates: casting NaN/Inf to int in the chunk-coord
+    // math is undefined behavior, and no legitimate client produces them.
+    if (!std::isfinite(intent.x) || !std::isfinite(intent.y) || !std::isfinite(intent.z)) {
+        Log::warn("Net", "EditIntent with non-finite coordinates rejected");
+        return;
+    }
+
     WorldCoord pos(intent.x, intent.y, intent.z);
     Voxel v;
     v.material.density              = intent.density;
@@ -451,6 +458,11 @@ void NetworkManager::handleCommittedEdit(const InboundPacket& pkt)
         lastAppliedSeq_ = p.seq;
     }
 
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
+        Log::warn("Net", "CommittedEdit with non-finite coordinates rejected");
+        return;
+    }
+
     WorldCoord pos(p.x, p.y, p.z);
     Voxel v;
     v.material.density              = p.density;
@@ -483,9 +495,11 @@ void NetworkManager::handleNetMessage(const InboundPacket& pkt)
     if (role_ == SessionRole::Server || role_ == SessionRole::HostPeer) {
         // Authority: trust the connection, not the payload — stamp the sender id
         // from the peer the packet physically arrived on, so a peer cannot spoof
-        // another player and every node downstream sees a consistent id.
+        // another player and every node downstream sees a consistent id. An
+        // unmapped peer gets kInvalidPlayer rather than its self-claimed id.
         auto sender_it = peerToPlayer_.find(pkt.peer_id);
-        if (sender_it != peerToPlayer_.end()) p.sender_id = sender_it->second;
+        p.sender_id = (sender_it != peerToPlayer_.end()) ? sender_it->second
+                                                         : kInvalidPlayer;
 
         const auto rel = (static_cast<MessageReliability>(p.reliability) ==
                           MessageReliability::Unreliable)
@@ -700,6 +714,11 @@ void NetworkManager::sendDirtyChunksToPeer(PeerId peer_id)
 
 void NetworkManager::handleJoinResponse(const InboundPacket& pkt)
 {
+    // Client-only: on the authority a JoinResponse can only come from a
+    // malicious or confused peer — accepting it would overwrite the server's
+    // world seed and config with peer-supplied values.
+    if (role_ != SessionRole::Client) return;
+
     JoinResponsePayload p;
     if (!decode_join_response(pkt.data, p)) {
         Log::warn("Net", "malformed JoinResponse");
@@ -715,6 +734,11 @@ void NetworkManager::handleJoinResponse(const InboundPacket& pkt)
 
 void NetworkManager::handleDirtyChunkData(const InboundPacket& pkt)
 {
+    // Client-only: a peer must never be able to insert chunks into the
+    // authority's world — that would bypass every authority policy and
+    // on_edit_received hook.
+    if (role_ != SessionRole::Client) return;
+
     DirtyChunkDataPayload p;
     if (!decode_dirty_chunk_data(pkt.data, p)) {
         Log::warn("Net", "malformed DirtyChunkData");
@@ -736,6 +760,9 @@ void NetworkManager::handleDirtyChunkData(const InboundPacket& pkt)
 
 void NetworkManager::handleJoinComplete(const InboundPacket& /*pkt*/)
 {
+    // Client-only: the authority's join state is not driven by its peers.
+    if (role_ != SessionRole::Client) return;
+
     joinComplete_ = true;
     std::cout << "[NetworkManager] join handshake complete\n";
     // Fire on_player_joined for the local player now that we have the world state.

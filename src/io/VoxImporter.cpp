@@ -1,5 +1,6 @@
 #include "VoxImporter.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -85,7 +86,9 @@ struct Reader {
     size_t         pos = 0;
 
     bool eof() const { return pos >= size; }
-    bool canRead(size_t n) const { return pos + n <= size; }
+    // Overflow-proof form of pos + n <= size (pos <= size is an invariant:
+    // pos only advances through checked reads/skips).
+    bool canRead(size_t n) const { return n <= size - pos; }
 
     bool readU8(uint8_t& v) {
         if (!canRead(1)) return false;
@@ -211,8 +214,9 @@ bool parse(const uint8_t* data, size_t size, VoxFile& out) {
             ChunkHeader h;
             if (!readChunkHeader(scan, h)) break;
             chunks.push_back({std::string(h.id), scan.pos, h.contentSize});
-            // skip content + children
-            if (!scan.skip(h.contentSize + h.childrenSize)) break;
+            // skip content + children (sum in size_t so two large u32 sizes
+            // cannot wrap around and desynchronise the scan)
+            if (!scan.skip(static_cast<size_t>(h.contentSize) + h.childrenSize)) break;
         }
     }
 
@@ -234,7 +238,11 @@ bool parse(const uint8_t* data, size_t size, VoxFile& out) {
             } else if (c.id == "XYZI" && pendingModel) {
                 Reader cr{data, size}; cr.pos = c.contentStart;
                 uint32_t n; if (!cr.readU32(n)) continue;
-                pendingModel->voxels.reserve(n);
+                // Each voxel is 4 bytes on disk; clamp the reserve to what the
+                // buffer can actually hold so a hostile count can't force a
+                // multi-GB allocation up front.
+                pendingModel->voxels.reserve(
+                    std::min<size_t>(n, (size - cr.pos) / 4));
                 for (uint32_t i = 0; i < n; ++i) {
                     uint8_t x, y, z, idx;
                     if (!cr.readU8(x) || !cr.readU8(y) || !cr.readU8(z) || !cr.readU8(idx))
@@ -333,6 +341,10 @@ bool VoxImporter::load(const std::string& path, Layer& layer,
         return false;
     }
     const std::streamsize sz = f.tellg();
+    if (sz <= 0) {
+        std::fprintf(stderr, "VoxImporter: empty or unreadable '%s'\n", path.c_str());
+        return false;
+    }
     f.seekg(0);
     std::vector<uint8_t> buf(static_cast<size_t>(sz));
     if (!f.read(reinterpret_cast<char*>(buf.data()), sz)) {

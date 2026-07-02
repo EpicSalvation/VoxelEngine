@@ -3,6 +3,7 @@
 #include "world/World.h"
 #include "world/ChunkCoordMath.h"
 
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -16,6 +17,14 @@ namespace {
 // portable interchange format — that role belongs to the M7 .vox/.vxe path.
 constexpr char     kMagic[4] = {'V', 'X', 'C', 'K'};
 constexpr uint32_t kVersion  = 2;
+
+// Decode-side validation limits. These bound what a hostile or corrupt file /
+// network packet can make the decoder allocate before any content is verified;
+// they are far above anything the engine produces (configs use chunk sizes of
+// 2–64 voxels) and do not constrain the LayerConfig API itself.
+constexpr uint32_t kMaxDecodeChunkSizeVoxels = 256;
+// Serialized size of one palette entry: 6 × f32 + 1 × u8.
+constexpr size_t   kPaletteEntryBytes = 25;
 
 // ── Byte writer ────────────────────────────────────────────────────────────
 void putU8 (std::vector<uint8_t>& b, uint8_t v)  { b.push_back(v); }
@@ -131,13 +140,16 @@ std::unique_ptr<Chunk> decodeChunkFile(const uint8_t* data, size_t size,
     const int    chunkSize  = static_cast<int>(r.u32());
     if (!r.ok) return nullptr;
     if (voxelSize != id.voxel_size_m || chunkSize != id.chunk_size_voxels) return nullptr;
-    if (chunkSize <= 0) return nullptr;
+    if (chunkSize <= 0 || chunkSize > static_cast<int>(kMaxDecodeChunkSizeVoxels)) return nullptr;
 
     ChunkCoord coord{r.i32(), r.i32(), r.i32()};
     if (!r.ok) return nullptr;
 
     const uint32_t paletteCount = r.u32();
     if (!r.ok || paletteCount == 0) return nullptr;
+    // The declared count must fit in the bytes actually present, or the vector
+    // allocation below becomes attacker-sized.
+    if (paletteCount > r.remaining / kPaletteEntryBytes) return nullptr;
     std::vector<MaterialProperties> palette(paletteCount);
     for (uint32_t i = 0; i < paletteCount; ++i) {
         MaterialProperties& m = palette[i];
@@ -186,14 +198,18 @@ std::unique_ptr<Chunk> decodeChunkFilePermissive(const uint8_t* data, size_t siz
 
     const double voxelSize  = r.f64();
     const int    chunkSize  = static_cast<int>(r.u32());
-    if (!r.ok || chunkSize <= 0) return nullptr;
-    (void)voxelSize;  // not validated here
+    if (!r.ok || chunkSize <= 0 || chunkSize > static_cast<int>(kMaxDecodeChunkSizeVoxels))
+        return nullptr;
+    // No identity to compare against here, but the value still feeds chunkOrigin:
+    // reject non-finite / non-positive sizes a hostile packet could carry.
+    if (!std::isfinite(voxelSize) || voxelSize <= 0.0) return nullptr;
 
     ChunkCoord coord{r.i32(), r.i32(), r.i32()};
     if (!r.ok) return nullptr;
 
     const uint32_t paletteCount = r.u32();
     if (!r.ok || paletteCount == 0) return nullptr;
+    if (paletteCount > r.remaining / kPaletteEntryBytes) return nullptr;
     std::vector<MaterialProperties> palette(paletteCount);
     for (uint32_t i = 0; i < paletteCount; ++i) {
         MaterialProperties& m = palette[i];

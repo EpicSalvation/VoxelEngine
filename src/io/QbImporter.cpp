@@ -1,5 +1,6 @@
 #include "QbImporter.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -21,7 +22,8 @@ struct Reader {
     size_t         size;
     size_t         pos = 0;
 
-    bool canRead(size_t n) const { return pos + n <= size; }
+    // Overflow-proof form of pos + n <= size (pos <= size is an invariant).
+    bool canRead(size_t n) const { return n <= size - pos; }
 
     bool readU8(uint8_t& v) {
         if (!canRead(1)) return false;
@@ -47,6 +49,12 @@ struct Reader {
 constexpr uint32_t kCodeFlag      = 2;
 constexpr uint32_t kNextSliceFlag = 6;
 
+// Decode-side validation limit: total voxels one matrix may declare. Bounds
+// the up-front allocation a hostile/corrupt file can force (the RLE-compressed
+// form cannot be validated against the file size before decoding). 2^26 voxels
+// (= 256 MB of RgbaColor) is far beyond any real Qubicle model.
+constexpr size_t kMaxMatrixVoxels = size_t(1) << 26;
+
 }  // anonymous namespace
 
 // ── qb::parse ────────────────────────────────────────────────────────────────
@@ -65,7 +73,9 @@ bool parse(const uint8_t* data, size_t size, QbFile& out) {
     uint32_t numMatrices = 0;
     if (!r.readU32(numMatrices)) return false;
 
-    out.matrices.reserve(numMatrices);
+    // A matrix needs at least its 25-byte header on disk; clamp the reserve so
+    // a hostile count can't force a huge allocation before any parsing.
+    out.matrices.reserve(std::min<size_t>(numMatrices, (r.size - r.pos) / 25));
 
     for (uint32_t m = 0; m < numMatrices; ++m) {
         QbMatrix mat;
@@ -84,8 +94,17 @@ bool parse(const uint8_t* data, size_t size, QbFile& out) {
         if (!r.readI32(mat.posY))  return false;
         if (!r.readI32(mat.posZ))  return false;
 
+        // Validate dimensions before allocating: the product is computed fully
+        // in size_t (no u32 wrap), capped so a hostile header can't demand a
+        // huge grid, and for the uncompressed form additionally bounded by the
+        // bytes actually present (4 per voxel).
         const size_t totalVoxels =
             static_cast<size_t>(mat.sizeX) * mat.sizeY * mat.sizeZ;
+        if (totalVoxels != 0) {  // zero-sized matrices stay valid (empty grid)
+            if (totalVoxels / mat.sizeX / mat.sizeY != mat.sizeZ) return false;  // size_t overflow
+            if (totalVoxels > kMaxMatrixVoxels) return false;
+            if (out.compressed == 0 && totalVoxels > (r.size - r.pos) / 4) return false;
+        }
         mat.voxels.resize(totalVoxels, {0, 0, 0, 0});
 
         auto decodeColor = [&](uint32_t raw) -> RgbaColor {
@@ -182,6 +201,10 @@ bool QbImporter::load(const std::string& path, Layer& layer,
         return false;
     }
     const std::streamsize sz = f.tellg();
+    if (sz <= 0) {
+        std::fprintf(stderr, "QbImporter: empty or unreadable '%s'\n", path.c_str());
+        return false;
+    }
     f.seekg(0);
     std::vector<uint8_t> buf(static_cast<size_t>(sz));
     if (!f.read(reinterpret_cast<char*>(buf.data()), sz)) {

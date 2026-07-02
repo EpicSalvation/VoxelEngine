@@ -26,6 +26,7 @@ struct ENetTransport::Impl {
 
     bool listening  = false;
     bool hasClient  = false; // true once a client-mode connection attempt is made
+    bool enetReady  = false; // enet_initialize() succeeded
 
     PeerId assignPeer(ENetPeer* peer) {
         PeerId id = nextPeerId++;
@@ -100,6 +101,8 @@ ENetTransport::ENetTransport()
 {
     if (enet_initialize() != 0) {
         std::cerr << "[ENetTransport] enet_initialize() failed\n";
+    } else {
+        impl_->enetReady = true;
     }
 }
 
@@ -109,13 +112,17 @@ ENetTransport::~ENetTransport()
         enet_host_destroy(impl_->host);
         impl_->host = nullptr;
     }
-    enet_deinitialize();
+    if (impl_->enetReady) enet_deinitialize();
 }
 
 // ── ITransport implementation ──────────────────────────────────────────────────
 
 bool ENetTransport::listen(uint16_t port, int max_peers)
 {
+    if (!impl_->enetReady) {
+        std::cerr << "[ENetTransport] ENet library not initialised\n";
+        return false;
+    }
     if (impl_->host) {
         std::cerr << "[ENetTransport] already initialised\n";
         return false;
@@ -135,6 +142,10 @@ bool ENetTransport::listen(uint16_t port, int max_peers)
 
 bool ENetTransport::connect(const std::string& host, uint16_t port)
 {
+    if (!impl_->enetReady) {
+        std::cerr << "[ENetTransport] ENet library not initialised\n";
+        return false;
+    }
     if (impl_->host) {
         std::cerr << "[ENetTransport] already initialised\n";
         return false;
@@ -147,7 +158,14 @@ bool ENetTransport::connect(const std::string& host, uint16_t port)
     }
 
     ENetAddress addr;
-    enet_address_set_host(&addr, host.c_str());
+    if (enet_address_set_host(&addr, host.c_str()) != 0) {
+        // Unresolvable hostname: without this check addr.host is left
+        // uninitialised and the connect attempt targets a garbage address.
+        std::cerr << "[ENetTransport] cannot resolve host '" << host << "'\n";
+        enet_host_destroy(impl_->host);
+        impl_->host = nullptr;
+        return false;
+    }
     addr.port = port;
 
     ENetPeer* peer = enet_host_connect(impl_->host, &addr, 2, 0);
@@ -183,7 +201,13 @@ bool ENetTransport::send(PeerId peer_id, int channel,
 
     // ENet channels: 0 = reliable, 1 = unreliable.
     enet_uint8 ch = static_cast<enet_uint8>(channel & 0xFF);
-    return enet_peer_send(it->second, ch, pkt) == 0;
+    if (enet_peer_send(it->second, ch, pkt) != 0) {
+        // ENet only takes ownership of the packet on success; destroy it here
+        // or every failed send leaks the allocation.
+        enet_packet_destroy(pkt);
+        return false;
+    }
+    return true;
 }
 
 bool ENetTransport::poll(InboundPacket* out)
